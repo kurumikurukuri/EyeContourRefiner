@@ -34,7 +34,7 @@ def export_manifest(samples_path: Path, output_path: Path) -> int:
         for s in annotated:
             writer.writerow({
                 "idx": s["idx"],
-                "image_path": s["image_path"],
+                "image_path": s["image_path"].replace("\\", "/"),
                 "part_name": s["part_name"],
                 "sub_key": s.get("sub_key", ""),
                 "point_index": s.get("point_index", 0),
