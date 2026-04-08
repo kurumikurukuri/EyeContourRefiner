@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <title>Eyeliner Annotator</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', sans-serif;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    #header {
+      background: #16213e;
+      padding: 10px 20px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      border-bottom: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+
+    #progress {
+      font-size: 1rem;
+      color: #a8dadc;
+      margin-right: auto;
+    }
+
+    button {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a78c2;
+      border-radius: 6px;
+      padding: 6px 16px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: background 0.15s;
+    }
+    button:hover { background: #1a78c2; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-save { background: #155724; border-color: #28a745; }
+    #btn-save:hover { background: #28a745; }
+    #btn-apply-pred { background: #7a4500; border-color: #ff9800; }
+    #btn-apply-pred:hover { background: #ff9800; color: #000; }
+    #btn-apply-pred:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-apply-pred-eye { background: #4a2000; border-color: #ff6d00; }
+    #btn-apply-pred-eye:hover { background: #ff6d00; color: #000; }
+    #btn-apply-pred-eye:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-next-unannotated { background: #1a3a5c; border-color: #4fc3f7; }
+    #btn-next-unannotated:hover { background: #4fc3f7; color: #000; }
+    
+    #btn-model { background: #3a1a5c; border-color: #b39ddb; }
+    #btn-model:hover { background: #7e57c2; }
+
+    /* ── Model Panel ── */
+    #model-panel {
+      display: none;
+      position: fixed;
+      top: 52px;
+      right: 16px;
+      z-index: 100;
+      background: #1a1a3e;
+      border: 1px solid #7e57c2;
+      border-radius: 8px;
+      padding: 14px 16px;
+      min-width: 300px;
+      max-width: 420px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    }
+    #model-panel.open { display: block; }
+    #model-panel-title {
+      font-size: 0.85rem;
+      color: #b39ddb;
+      margin-bottom: 10px;
+      font-weight: bold;
+    }
+    #model-list {
+      max-height: 200px;
+      overflow-y: auto;
+      margin-bottom: 10px;
+    }
+    .folder-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      margin-bottom: 4px;
+      font-size: 0.8rem;
+      color: #ccc;
+      cursor: pointer;
+      border: 1px solid #2a2a4a;
+      border-radius: 6px;
+      background: #0d0d1a;
+      transition: border-color 0.12s, background 0.12s;
+    }
+    .folder-item:hover { border-color: #7e57c2; background: #16103a; }
+    .folder-item.selected {
+      border-color: #b39ddb;
+      background: #1e1040;
+      color: #e0e0e0;
+    }
+    .folder-item .folder-icon { font-size: 1rem; flex-shrink: 0; }
+    .folder-item .folder-name {
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .folder-item .folder-path {
+      font-size: 0.68rem;
+      color: #666;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 180px;
+    }
+    .folder-badge {
+      font-size: 0.68rem;
+      padding: 1px 6px;
+      border-radius: 8px;
+      background: #2a2a4a;
+      color: #888;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .folder-badge.active { background: #3a1a5c; color: #b39ddb; }
+    #model-none-msg { font-size: 0.8rem; color: #888; }
+    #model-status {
+      font-size: 0.75rem;
+      color: #a8dadc;
+      margin-bottom: 8px;
+    }
+    #btn-model-apply {
+      background: #3a1a5c;
+      border-color: #b39ddb;
+      width: 100%;
+      margin-top: 4px;
+    }
+    #btn-model-apply:hover { background: #7e57c2; }
+
+    #input-jump {
+      background: #0d0d1a;
+      color: #e0e0e0;
+      border: 1px solid #1a78c2;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 0.9rem;
+      width: 70px;
+      text-align: center;
+    }
+    #input-jump:focus { outline: 1px solid #4fc3f7; }
+
+    /* ── Main ── */
+    #main {
+      display: flex;
+      flex: 1;
+      gap: 16px;
+      padding: 16px;
+      overflow: hidden;
+    }
+
+    /* Left: full image + face crop (stacked vertically) */
+    #left-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-width: 0;
+      min-height: 0;
+    }
+
+    .image-block {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+    }
+
+    .canvas-label {
+      color: #888;
+      font-size: 0.75rem;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .image-cell {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #full-img,
+    #face-img {
+      border: 1px solid #0f3460;
+      border-radius: 4px;
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      background: #0d0d1a;
+      display: block;
+    }
+
+    /* Right: patch + info (half screen) */
+    #right-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    #patch-wrap {
+      position: relative;
+      height: 160px;
+      flex-shrink: 0;
+    }
+
+    #patch-canvas {
+      border: 2px solid #1a78c2;
+      border-radius: 4px;
+      cursor: crosshair;
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #patch-hint {
+      font-size: 0.75rem;
+      color: #888;
+      margin-top: 4px;
+    }
+
+    #info-box {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      padding: 12px;
+      font-size: 0.85rem;
+      line-height: 1.8;
+    }
+
+    #info-box .val { color: #a8dadc; font-weight: bold; }
+    #info-box .key { color: #888; }
+
+    #t-display {
+      font-size: 1.5rem;
+      font-weight: bold;
+      color: #00e676;
+      text-align: center;
+      padding: 8px;
+    }
+
+    /* ── Eyeliner Preview Section ── */
+    #eyeliner-section {
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      padding: 6px 10px 8px;
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-height: 0;
+    }
+
+    #eyeliner-section-title {
+      font-size: 0.75rem;
+      color: #a8dadc;
+      font-weight: bold;
+      flex-shrink: 0;
+    }
+
+    #eyeliner-loading {
+      font-size: 0.72rem;
+      color: #555;
+    }
+
+    #eyeliner-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: auto 1fr;
+      gap: 6px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .eyeliner-label {
+      font-size: 0.72rem;
+      text-align: center;
+      font-weight: bold;
+    }
+
+    .eyeliner-cell {
+      background: #0d0d1a;
+      border: 1px solid #1a3060;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+      min-height: 0;
+    }
+
+    .eyeliner-cell img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+
+    .eyeliner-cell .eyeliner-placeholder {
+      font-size: 0.72rem;
+      color: #444;
+    }
+
+    /* ── Footer ── */
+    #footer {
+      background: #16213e;
+      padding: 10px 20px;
+      display: flex;
+      justify-content: space-between;
+      border-top: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+
+    #status-msg {
+      align-self: center;
+      font-size: 0.85rem;
+      color: #a8dadc;
+    }
+
+    #complete-banner {
+      display: none;
+      background: #155724;
+      color: #d4edda;
+      text-align: center;
+      padding: 12px;
+      font-size: 1rem;
+    }
+
+    /* ── Gallery Modal ── */
+    #btn-gallery { background: #1a3a2a; border-color: #4caf50; }
+    #btn-gallery:hover { background: #388e3c; }
+
+    #gallery-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: rgba(0, 0, 0, 0.80);
+      align-items: center;
+      justify-content: center;
+    }
+    #gallery-overlay.open { display: flex; }
+
+    #gallery-modal {
+      background: #1a1a3e;
+      border: 1px solid #1a78c2;
+      border-radius: 10px;
+      padding: 16px;
+      width: 90vw;
+      max-width: 960px;
+      max-height: 85vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.8);
+    }
+
+    #gallery-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 12px;
+      flex-shrink: 0;
+    }
+    #gallery-title { font-size: 1rem; color: #a8dadc; font-weight: bold; }
+    #btn-gallery-close {
+      background: transparent;
+      border: none;
+      color: #aaa;
+      font-size: 1.3rem;
+      cursor: pointer;
+      padding: 2px 8px;
+      line-height: 1;
+    }
+    #btn-gallery-close:hover { color: #f44336; background: transparent; }
+
+    #gallery-grid {
+      overflow-y: auto;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+      gap: 8px;
+      padding: 20px;
+    }
+
+    .gallery-card {
+      background: #0d0d1a;
+      border: 2px solid #333;
+      border-radius: 8px;
+      cursor: pointer;
+      overflow: hidden;
+      position: relative;
+      transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+    }
+    .gallery-card:hover {
+      border-color: #1a78c2;
+      box-shadow: 0 0 0 1px #1a78c2;
+      transform: scale(1.02);
+    }
+    .gallery-card.done    { border-color: #28a745; }
+    .gallery-card.partial { border-color: #ff9800; }
+    .gallery-card.none    { border-color: #444; }
+    /* 現在表示中の画像 */
+    .gallery-card.current {
+      border-color: #4fc3f7 !important;
+      box-shadow: 0 0 0 2px #4fc3f7, 0 0 12px rgba(79,195,247,0.4) !important;
+    }
+
+    .gallery-card img {
+      width: 100%;
+      height: 150px;
+      object-fit: contain;
+      display: block;
+      background: #060610;
+    }
+
+    /* 進捗バッジ: 画像右上に重ねて表示 */
+    .gallery-badge {
+      position: absolute;
+      top: 6px;
+      right: 6px;
+      background: rgba(0, 0, 0, 0.72);
+      border-radius: 10px;
+      font-size: 0.72rem;
+      font-weight: bold;
+      padding: 2px 8px;
+      backdrop-filter: blur(2px);
+    }
+    .gallery-card.done    .gallery-badge { color: #4caf50; }
+    .gallery-card.partial .gallery-badge { color: #ff9800; }
+    .gallery-card.none    .gallery-badge { color: #aaa; }
+
+    /* ラベルソースバッジ */
+    .label-source-badge {
+      display: inline-block;
+      font-size: 0.72rem;
+      font-weight: bold;
+      padding: 2px 7px;
+      border-radius: 10px;
+      letter-spacing: 0.03em;
+    }
+    .ls-manual   { background: #1b5e20; color: #a5d6a7; }
+    .ls-auto     { background: #e65100; color: #ffe0b2; }
+    .ls-reviewed { background: #0d47a1; color: #90caf9; }
+    .ls-none     { background: #333; color: #888; }
+
+    /* 完了ラベル: 左上に小さく */
+    .gallery-done-mark {
+      display: none;
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      background: rgba(40,167,69,0.85);
+      color: #fff;
+      border-radius: 4px;
+      font-size: 0.65rem;
+      font-weight: bold;
+      padding: 1px 5px;
+    }
+    .gallery-card.done .gallery-done-mark { display: block; }
+
+    .gallery-label {
+      font-size: 0.72rem;
+      color: #aaa;
+      padding: 5px 6px 6px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      background: #12122a;
+      border-top: 1px solid #222;
+    }
+  </style>
+</head>
+<body>
+
+<div id="complete-banner">
+  ✅ 全アノテーション完了！
+  <a href="/api/export" style="color:#81e6d9; margin-left:16px;">
+    📥 manifest.csv をダウンロード
+  </a>
+</div>
+
+<div id="header">
+  <span id="progress">読み込み中...</span>
+  <button id="btn-prev-eyes">← 前の目へ</button>
+  <button id="btn-prev">← 前へ</button>
+  <button id="btn-skip">スキップ</button>
+  <button id="btn-next">次へ →</button>
+  <button id="btn-next-eyes">次の目へ →</button>
+  <button id="btn-next-unannotated" title="次の未アノテーション画像へ (N)">未完へ ⏭</button>
+  <input id="input-jump" type="number" min="0" placeholder="idx" title="インデックスを入力してEnter" />
+  <button id="btn-jump">移動</button>
+  <button id="btn-model" title="推論モデルを選択">🤖 モデル</button>
+  <button id="btn-gallery" title="画像サムネイル一覧 (G)">🖼 ギャラリー</button>
+  <button id="btn-dashboard" onclick="location.href='/dashboard'" title="データ分析ダッシュボード">📊 ダッシュボード</button>
+  <button onclick="location.href='/train'" title="学習パイプライン">🧠 学習</button>
+</div>
+
+<div id="gallery-overlay">
+  <div id="gallery-modal">
+    <div id="gallery-header">
+      <span id="gallery-title">🖼 画像ギャラリー</span>
+      <button id="btn-gallery-close">✕</button>
+    </div>
+    <div id="gallery-grid"></div>
+  </div>
+</div>
+
+<div id="model-panel">
+  <div id="model-panel-title">推論モデル選択</div>
+  <div id="model-status">読み込み中...</div>
+  <div id="model-list"><span id="model-none-msg">モデルなし</span></div>
+  <button id="btn-model-apply">適用</button>
+</div>
+
+<div id="main">
+  <div id="left-panel">
+    <div class="image-block">
+      <div class="canvas-label">元画像</div>
+      <div class="image-cell"><img id="full-img" src="" alt="元画像" /></div>
+    </div>
+    <div class="image-block">
+      <div class="canvas-label">顔クロップ</div>
+      <div class="image-cell"><img id="face-img" src="" alt="顔クロップ" /></div>
+    </div>
+  </div>
+
+  <div id="right-panel">
+    <div id="patch-wrap">
+      <canvas id="patch-canvas"></canvas>
+      <div id="patch-hint">← クリックしてアイライン境界 R を指定 →</div>
+    </div>
+
+    <div id="t-display">t = --</div>
+
+    <div id="info-box">
+      <div><span class="key">Part: </span><span class="val" id="info-part">--</span></div>
+      <div><span class="key">Sub:  </span><span class="val" id="info-sub">--</span></div>
+      <div><span class="key">P:    </span><span class="val" id="info-p">--</span></div>
+      <div><span class="key">Q:    </span><span class="val" id="info-q">--</span></div>
+      <div><span class="key">R:    </span><span class="val" id="info-r">--</span></div>
+      <div><span class="key" style="color:#ff9800;">予測 t: </span><span class="val" style="color:#ff9800;" id="info-pred">--</span></div>
+      <div style="margin-top:6px;">
+        <span id="label-source-badge" class="label-source-badge ls-none">未ラベル</span>
+        <span id="label-confidence" style="display:none; margin-left:6px; color:#888; font-size:0.75rem;"></span>
+      </div>
+    </div>
+
+    <div id="eyeliner-section">
+      <div style="display:flex; align-items:center; gap:10px;">
+        <span id="eyeliner-section-title">アイライン可視化</span>
+        <span id="eyeliner-loading"></span>
+      </div>
+      <div id="eyeliner-grid">
+        <div class="eyeliner-label" id="eye-true-label" style="color:#00e676;">t_true</div>
+        <div class="eyeliner-label" id="eye-pred-label" style="color:#ff9800;">t_pred</div>
+        <div class="eyeliner-cell" id="eye-true-cell">
+          <span class="eyeliner-placeholder" id="eye-true-ph">--</span>
+          <img id="eye-true-img" alt="" style="display:none;" />
+        </div>
+        <div class="eyeliner-cell" id="eye-pred-cell">
+          <span class="eyeliner-placeholder" id="eye-pred-ph">--</span>
+          <img id="eye-pred-img" alt="" style="display:none;" />
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="footer">
+  <div style="display:flex; gap:8px;">
+    <button id="btn-undo">やり直し</button>
+    <button id="btn-apply-pred" disabled>予測を適用</button>
+    <button id="btn-apply-pred-eye" disabled title="同じ目の未ラベル点すべてに予測を一括適用">目全体に予測を適用</button>
+  </div>
+  <div id="status-msg"></div>
+  <div>
+    <button id="btn-save">保存して次へ</button>
+  </div>
+</div>
+
+<script src="/static/annotator.js?v=14"></script>
+</body>
+</html>
