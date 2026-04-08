@@ -1,0 +1,36 @@
+/data/*
+!/data/samples.json
+!/data/manifest.csv
+!/data/open_images_attribution.csv
+models/
+
+# Experiment artifacts（モデルとTBログは除外、設定とmanifestは追跡）
+experiments/*/outputs/
+experiments/*/runs/
+
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Claude Code internal
+.claude/
+tasks/
+CLAUDE.md
+
+# Experiment logs (旧ルート)
+runs/
+logs/
+
+# Test coverage
+.coverage
+htmlcov/
+
+# Skip directories (Japanese-named)
+スキップ/
+誤差分析スキップ/

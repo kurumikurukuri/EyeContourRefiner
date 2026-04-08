@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>データ分析ダッシュボード</title>
+  <link rel="stylesheet" href="/static/dashboard.css" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div id="header">
+  <a href="/" class="back-link">← アノテーターへ</a>
+  <h1>データ分析ダッシュボード</h1>
+  <a href="/train" style="color:#a8dadc; font-size:0.85rem; text-decoration:none; padding:5px 12px; border:1px solid #1a78c2; border-radius:6px;">🧠 学習</a>
+  <button id="btn-refresh">↺ 更新</button>
+</div>
+
+<nav id="tab-nav">
+  <button class="tab-btn active" data-tab="overview">Overview</button>
+  <button class="tab-btn" data-tab="tdist">t値分布</button>
+  <button class="tab-btn" data-tab="quality">品質分析</button>
+  <button class="tab-btn" data-tab="experiments">実験比較</button>
+  <button class="tab-btn" data-tab="errors">エラー分析</button>
+</nav>
+
+<div id="content">
+
+  <!-- ── Overview ── -->
+  <div id="tab-overview" class="tab-panel active">
+    <div id="overview-content"><div class="spinner"></div></div>
+  </div>
+
+  <!-- ── t値分布 ── -->
+  <div id="tab-tdist" class="tab-panel">
+    <div id="tdist-content"><p class="hint">タブを開くと読み込みます</p></div>
+  </div>
+
+  <!-- ── 品質分析 ── -->
+  <div id="tab-quality" class="tab-panel">
+    <div id="quality-content"><p class="hint">タブを開くと読み込みます</p></div>
+  </div>
+
+  <!-- ── 実験比較 ── -->
+  <div id="tab-experiments" class="tab-panel">
+    <div id="experiments-content"><p class="hint">タブを開くと読み込みます</p></div>
+  </div>
+
+  <!-- ── エラー分析 ── -->
+  <div id="tab-errors" class="tab-panel">
+    <div id="errors-content"><p class="hint">タブを開くと読み込みます</p></div>
+  </div>
+
+</div>
+
+<script src="/static/dashboard.js"></script>
+</body>
+</html>
