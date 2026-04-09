@@ -127,6 +127,10 @@ def run_manifest(
     if not records:
         raise ValueError("manifest に有効なサンプルが見つかりません。")
 
+    import gc
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     out_fieldnames = [
         "idx", "image_path", "part_name", "sub_key", "point_index",
         "px", "py", "qx", "qy", "t_true", "t_pred", "rx_pred", "ry_pred",
@@ -153,6 +157,7 @@ def run_manifest(
                 continue
 
             image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            del bgr
             is_upper = 1.0 if rec.get("sub_key", "") == "upper" else 0.0
             t_pred = predict(
                 model, device, image, px, py, qx, qy, is_upper,
@@ -187,6 +192,7 @@ def run_manifest(
                 "rx_pred":  f"{rx_pred:.2f}",
                 "ry_pred":  f"{ry_pred:.2f}",
             })
+            del image
 
     n = len(records) - errors
     logger.info("推論完了: %d 件成功, %d 件スキップ -> %s", n, errors, output_path)

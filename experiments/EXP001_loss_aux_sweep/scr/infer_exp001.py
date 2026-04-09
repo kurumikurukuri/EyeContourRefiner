@@ -1,7 +1,7 @@
 """EXP001: 損失関数・補助入力 sweep - 推論スクリプト
 
-全条件（config/*.yaml）のモデルに対して manifest_test.csv を推論し、
-prediction.csv を outputs/{config_name}/{config_name}/ に保存する。
+全条件（config/*.yaml）のモデルに対して manifest_train.csv / manifest_test.csv を推論し、
+train_predictions.csv / test_predictions.csv を outputs/{config_name}/{config_name}/ に保存する。
 
 使い方:
     # 全条件を推論
@@ -20,7 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).parent.parent.parent.parent  # eyelinerCNN/
 EXP_DIR = Path(__file__).parent.parent             # EXP001_loss_aux_sweep/
 CONFIG_DIR = EXP_DIR / "config"
-MANIFEST_TEST = EXP_DIR / "manifests" / "manifest_test.csv"
+MANIFEST_TRAIN = EXP_DIR / "manifests" / "manifest_train.csv"
+MANIFEST_TEST  = EXP_DIR / "manifests" / "manifest_test.csv"
 OUTPUT_DIR = EXP_DIR / "outputs"
 LOG_PATH = EXP_DIR / "log.txt"
 
@@ -41,16 +42,15 @@ def load_experiment_params(config_name: str) -> dict:
     return data.get("hyperparameters", {})
 
 
-def build_infer_cmd(config_name: str, params: dict) -> list[str]:
+def build_infer_cmd(config_name: str, params: dict, manifest: Path, output_csv: Path) -> list[str]:
     """hyperparameters dict から infer.py 呼び出しコマンドを構築する。"""
     models_dir = OUTPUT_DIR / config_name / config_name
-    output_csv = models_dir / "prediction.csv"
 
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "infer.py"),
         "--models-dir", str(models_dir),
-        "--manifest",   str(MANIFEST_TEST),
+        "--manifest",   str(manifest),
         "--output",     str(output_csv),
         "--patch_t_min", str(params.get("patch_t_min", -0.5)),
         "--patch_t_max", str(params.get("patch_t_max",  1.5)),
@@ -80,9 +80,19 @@ def run_infer(config_name: str) -> int:
         print(f"\n[ERROR] {e}")
         return 1
 
-    cmd = build_infer_cmd(config_name, params)
-    print(f"  コマンド: {' '.join(cmd)}")
-    return run_with_log(cmd, LOG_PATH, cwd=ROOT)
+    models_dir = OUTPUT_DIR / config_name / config_name
+
+    # train 推論
+    train_cmd = build_infer_cmd(config_name, params, MANIFEST_TRAIN, models_dir / "train_predictions.csv")
+    print(f"  [train] コマンド: {' '.join(train_cmd)}")
+    rc = run_with_log(train_cmd, LOG_PATH, cwd=ROOT)
+    if rc != 0:
+        return rc
+
+    # test 推論
+    test_cmd = build_infer_cmd(config_name, params, MANIFEST_TEST, models_dir / "test_predictions.csv")
+    print(f"  [test]  コマンド: {' '.join(test_cmd)}")
+    return run_with_log(test_cmd, LOG_PATH, cwd=ROOT)
 
 
 def main() -> None:
@@ -99,11 +109,12 @@ def main() -> None:
     print(f"  manifest_test: {MANIFEST_TEST}")
     print(f"  output_dir:    {OUTPUT_DIR}")
 
-    if not MANIFEST_TEST.exists():
-        print(f"\n[ERROR] manifest_test.csv が見つかりません: {MANIFEST_TEST}")
-        print("先に以下を実行してください:")
-        print("  python scripts/split_holdout.py --method random --ratio 0.2 --seed 42 --exp 001")
-        sys.exit(1)
+    for manifest, label in [(MANIFEST_TRAIN, "manifest_train.csv"), (MANIFEST_TEST, "manifest_test.csv")]:
+        if not manifest.exists():
+            print(f"\n[ERROR] {label} が見つかりません: {manifest}")
+            print("先に以下を実行してください:")
+            print("  python scripts/split_holdout.py --method random --ratio 0.2 --seed 42 --exp 001")
+            sys.exit(1)
 
     failed = []
     for config_name in args.configs:

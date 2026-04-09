@@ -63,9 +63,11 @@ class EyelinerCNN(nn.Module):
     ) -> torch.Tensor:
         feat = self.features(x).view(x.size(0), -1)   # (B, 4096)
         scalars = [feat, is_upper]
-        if self.use_pq_ratio and pq_ratio is not None:
-            scalars.append(pq_ratio)
-        if self.use_distance_from_center and dist_from_center is not None:
-            scalars.append(dist_from_center)
+        if self.use_pq_ratio:
+            val = pq_ratio if pq_ratio is not None else torch.zeros(x.size(0), 1, device=x.device)
+            scalars.append(val)
+        if self.use_distance_from_center:
+            val = dist_from_center if dist_from_center is not None else torch.zeros(x.size(0), 1, device=x.device)
+            scalars.append(val)
         feat = torch.cat(scalars, dim=1)
         return self.regressor(feat)                     # (B, 1)
