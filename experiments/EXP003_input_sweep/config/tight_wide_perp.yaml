@@ -1,0 +1,25 @@
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 32
+k: 5
+patience: 50
+seed: 42
+use_batchnorm: true
+aug_flags: 79
+# --- EXP003 input params ---
+# 複合: t 範囲を絞りつつ垂直方向を広げる。
+# 実データ範囲に集中しながら瞼の形状を周辺情報として取り込む仮説を検証。
+patch_t_min: -0.25
+patch_t_max: 1.25
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 128
+label_t_min: null
+label_t_max: null
