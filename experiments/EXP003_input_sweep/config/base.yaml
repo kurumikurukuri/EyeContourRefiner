@@ -1,0 +1,25 @@
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 32
+k: 5
+patience: 50
+seed: 42
+use_batchnorm: true
+aug_flags: 79
+# --- EXP003 input params ---
+# EXP002 sig_tloss のデフォルト設定をそのまま再現（ベースライン）
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 128
+# label_t は patch_t と同一（None = patch_t に揃える）
+label_t_min: null
+label_t_max: null
