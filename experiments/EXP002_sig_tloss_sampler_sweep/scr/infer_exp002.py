@@ -1,7 +1,8 @@
 """EXP002: 全条件の推論スクリプト
 
 各条件の outputs/{config_name}/{config_name}/ にある fold モデルを
-アンサンブルして manifest_test に対して推論し、prediction.csv を出力する。
+アンサンブルして manifest_train / manifest_test に対して推論し、
+train_predictions.csv / test_predictions.csv を出力する。
 
 使い方:
     # 全条件を実行
@@ -19,9 +20,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).parent.parent.parent.parent  # EyelinerDetecter/
 EXP_DIR = Path(__file__).parent.parent             # EXP002_sig_tloss_sampler_sweep/
-MANIFEST_TEST = EXP_DIR / "manifests" / "manifest_test.csv"
-OUTPUT_DIR    = EXP_DIR / "outputs"
-LOG_PATH      = EXP_DIR / "log.txt"
+MANIFEST_TRAIN = EXP_DIR / "manifests" / "manifest_train.csv"
+MANIFEST_TEST  = EXP_DIR / "manifests" / "manifest_test.csv"
+OUTPUT_DIR     = EXP_DIR / "outputs"
+LOG_PATH       = EXP_DIR / "log.txt"
 
 sys.path.insert(0, str(ROOT))
 from scripts.exp_utils import run_with_log  # noqa: E402
@@ -43,16 +45,15 @@ def load_patch_params(config_name: str) -> dict:
     }
 
 
-def build_infer_cmd(config_name: str) -> list[str]:
-    models_dir  = OUTPUT_DIR / config_name / config_name
-    output_path = models_dir / "prediction.csv"
-    params      = load_patch_params(config_name)
+def build_infer_cmd(config_name: str, manifest: Path, output_path: Path) -> list[str]:
+    models_dir = OUTPUT_DIR / config_name / config_name
+    params     = load_patch_params(config_name)
 
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "infer.py"),
         "--models-dir", str(models_dir),
-        "--manifest",   str(MANIFEST_TEST),
+        "--manifest",   str(manifest),
         "--output",     str(output_path),
         "--patch_t_min", str(params["patch_t_min"]),
         "--patch_t_max", str(params["patch_t_max"]),
@@ -68,9 +69,20 @@ def run_infer(config_name: str) -> int:
     print(f"\n{'='*60}")
     print(f"  推論: {config_name}")
     print(f"{'='*60}")
-    cmd = build_infer_cmd(config_name)
-    print(f"  コマンド: {' '.join(cmd)}")
-    return run_with_log(cmd, LOG_PATH, cwd=ROOT)
+
+    models_dir = OUTPUT_DIR / config_name / config_name
+
+    # train 推論
+    train_cmd = build_infer_cmd(config_name, MANIFEST_TRAIN, models_dir / "train_predictions.csv")
+    print(f"  [train] コマンド: {' '.join(train_cmd)}")
+    rc = run_with_log(train_cmd, LOG_PATH, cwd=ROOT)
+    if rc != 0:
+        return rc
+
+    # test 推論
+    test_cmd = build_infer_cmd(config_name, MANIFEST_TEST, models_dir / "test_predictions.csv")
+    print(f"  [test]  コマンド: {' '.join(test_cmd)}")
+    return run_with_log(test_cmd, LOG_PATH, cwd=ROOT)
 
 
 def main() -> None:
@@ -86,9 +98,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not MANIFEST_TEST.exists():
-        print(f"\n[ERROR] manifest_test.csv が見つかりません: {MANIFEST_TEST}")
-        sys.exit(1)
+    for manifest, label in [(MANIFEST_TRAIN, "manifest_train.csv"), (MANIFEST_TEST, "manifest_test.csv")]:
+        if not manifest.exists():
+            print(f"\n[ERROR] {label} が見つかりません: {manifest}")
+            sys.exit(1)
 
     print(f"EXP002 infer開始: {len(args.configs)} 条件")
     print(f"  manifest_test: {MANIFEST_TEST}")
