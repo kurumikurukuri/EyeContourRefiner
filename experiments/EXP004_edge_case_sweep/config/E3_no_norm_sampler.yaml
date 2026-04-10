@@ -1,0 +1,26 @@
+# E3: t正規化なし + t_weighted_sampler (alpha=1.0, 軽め)
+# EXP002でalpha=5が最悪だったため、軽いサンプリングで試す
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: false
+use_t_norm: false
+use_distance_from_center: false
+use_t_weighted_sampler: true
+t_weight_alpha: 1.0
+t_loss_alpha: 1.0
+num_conv_layers: 3
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 32
+k: 5
+patience: 50
+seed: 42
+use_batchnorm: true
+aug_flags: 79
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 128
