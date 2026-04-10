@@ -90,8 +90,13 @@ def predict(
     patch_t_max: float = T_MAX,
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
+    use_t_norm: bool = True,
 ) -> float:
-    """パッチを抽出して ImageNet 正規化を適用しモデルに通し、t_norm ∈ [0,1] を返す。"""
+    """パッチを抽出して ImageNet 正規化を適用しモデルに通し、予測 t を返す。
+
+    use_t_norm=True  : 出力を [0,1] にクランプして返す（呼び出し元でデノーマライズ）
+    use_t_norm=False : モデル出力（生の物理 t 値）をそのまま返す
+    """
     patch = extract_patch(
         image, px, py, qx, qy,
         patch_size=patch_size,
@@ -103,8 +108,12 @@ def predict(
     x = (x - mean) / std
     is_upper_t = torch.tensor([[is_upper]], dtype=torch.float32, device=device)
     with torch.no_grad():
-        t_norm = torch.clamp(model(x, is_upper_t), 0.0, 1.0).item()
-    return float(t_norm)
+        raw = model(x, is_upper_t)
+        if use_t_norm:
+            result = torch.clamp(raw, 0.0, 1.0).item()
+        else:
+            result = raw.item()
+    return float(result)
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +131,7 @@ def run_manifest(
     label_t_max: float | None = None,
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
+    use_t_norm: bool = True,
 ) -> None:
     records = _load_manifest(manifest_path)
     if not records:
@@ -164,12 +174,17 @@ def run_manifest(
                 patch_t_min=patch_t_min, patch_t_max=patch_t_max,
                 patch_perp_scale=patch_perp_scale,
                 patch_size=patch_size,
+                use_t_norm=use_t_norm,
             )
-            # label 範囲（None のときは crop 範囲にフォールバック）
-            eff_label_min = label_t_min if label_t_min is not None else patch_t_min
-            eff_label_max = label_t_max if label_t_max is not None else patch_t_max
-            # t_pred (t_norm [0,1]) → 物理 t → 座標復元
-            t_actual_pred = t_pred * (eff_label_max - eff_label_min) + eff_label_min
+            if use_t_norm:
+                # label 範囲（None のときは crop 範囲にフォールバック）
+                eff_label_min = label_t_min if label_t_min is not None else patch_t_min
+                eff_label_max = label_t_max if label_t_max is not None else patch_t_max
+                # t_pred (t_norm [0,1]) → 物理 t → 座標復元
+                t_actual_pred = t_pred * (eff_label_max - eff_label_min) + eff_label_min
+            else:
+                # no_t_norm: モデル出力が既に生の物理 t 値
+                t_actual_pred = t_pred
             rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, t_actual_pred)
 
             # t_true: manifest の t は生の物理 t 値をそのまま使用
@@ -252,6 +267,7 @@ def run_single(
     label_t_max: float | None = None,
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
+    use_t_norm: bool = True,
 ) -> None:
     bgr = cv2.imread(str(image_path))
     if bgr is None:
@@ -263,10 +279,14 @@ def run_single(
         patch_t_min=patch_t_min, patch_t_max=patch_t_max,
         patch_perp_scale=patch_perp_scale,
         patch_size=patch_size,
+        use_t_norm=use_t_norm,
     )
-    eff_label_min = label_t_min if label_t_min is not None else patch_t_min
-    eff_label_max = label_t_max if label_t_max is not None else patch_t_max
-    t_actual_pred = t_pred * (eff_label_max - eff_label_min) + eff_label_min
+    if use_t_norm:
+        eff_label_min = label_t_min if label_t_min is not None else patch_t_min
+        eff_label_max = label_t_max if label_t_max is not None else patch_t_max
+        t_actual_pred = t_pred * (eff_label_max - eff_label_min) + eff_label_min
+    else:
+        t_actual_pred = t_pred
     rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, t_actual_pred)
 
     logger.info("t_pred  : %.6f", t_actual_pred)
@@ -330,6 +350,10 @@ def main() -> None:
         "--patch_w", type=int, default=128,
         help="入力パッチ幅（default: 128）",
     )
+    parser.add_argument(
+        "--no_t_norm", action="store_true",
+        help="t正規化なしで学習したモデルの推論時に指定。モデル出力を生の物理 t 値として扱う。",
+    )
     args = parser.parse_args()
 
     if args.image and any(v is None for v in [args.px, args.py, args.qx, args.qy]):
@@ -345,6 +369,7 @@ def main() -> None:
     )
 
     patch_size = (args.patch_h, args.patch_w)
+    use_t_norm = not args.no_t_norm
     if args.manifest:
         run_manifest(
             model, device, args.manifest, args.output,
@@ -354,6 +379,7 @@ def main() -> None:
             label_t_max=args.label_t_max,
             patch_perp_scale=args.patch_perp_scale,
             patch_size=patch_size,
+            use_t_norm=use_t_norm,
         )
     else:
         run_single(
@@ -365,6 +391,7 @@ def main() -> None:
             label_t_max=args.label_t_max,
             patch_perp_scale=args.patch_perp_scale,
             patch_size=patch_size,
+            use_t_norm=use_t_norm,
         )
 
 
