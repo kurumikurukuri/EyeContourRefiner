@@ -1,0 +1,19 @@
+# F3: mid領域を700サンプルにダウンサンプル（edge_highとほぼ同数）
+# edge_low=6.2%, mid=44.1%, edge_high=49.6% (total ~1586)
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+num_conv_layers: 3
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 32
+k: 5
+patience: 50
+seed: 42
+use_batchnorm: true
+aug_flags: 79
+mid_max: 700
+mid_t_low: 0.2
+mid_t_high: 0.8
