@@ -596,6 +596,35 @@ def get_sample(idx: int):
             (crop_w * 3, crop_h * 3),
             interpolation=cv2.INTER_LINEAR,
         )
+
+        # パッチROI矩形を顔クロップに描画
+        try:
+            if pq_dist > 0:
+                ux = (qx - px) / pq_dist
+                uy = (qy - py) / pq_dist
+                perp_x, perp_y = -uy, ux
+                half_perp = pq_dist / 2
+                tmax_x = T_MAX * px + (1 - T_MAX) * qx
+                tmax_y = T_MAX * py + (1 - T_MAX) * qy
+                tmin_x = T_MIN * px + (1 - T_MIN) * qx
+                tmin_y = T_MIN * py + (1 - T_MIN) * qy
+                corners_img = [
+                    (tmax_x + half_perp * perp_x, tmax_y + half_perp * perp_y),
+                    (tmin_x + half_perp * perp_x, tmin_y + half_perp * perp_y),
+                    (tmin_x - half_perp * perp_x, tmin_y - half_perp * perp_y),
+                    (tmax_x - half_perp * perp_x, tmax_y - half_perp * perp_y),
+                ]
+                corners_crop = np.array(
+                    [[int((cx - x1) * 3), int((cy - y1) * 3)] for cx, cy in corners_img],
+                    dtype=np.int32,
+                )
+                cv2.polylines(
+                    face_crop_rgb, [corners_crop], isClosed=True,
+                    color=(26, 120, 194), thickness=2, lineType=cv2.LINE_AA,
+                )
+        except Exception:
+            pass  # パッチ矩形描画は非致命的
+
         face_b64 = _to_base64_jpeg(face_crop_rgb, max_side=1200)
     except Exception as exc:
         logger.warning("顔クロップ生成に失敗しました: %s", exc)
