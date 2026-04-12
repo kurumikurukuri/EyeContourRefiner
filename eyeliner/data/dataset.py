@@ -32,15 +32,11 @@ def get_manifest_version(manifest_path: str | Path) -> str:
 
 def load_manifest(
     path: str | Path,
-    min_confidence: float = 0.0,
 ) -> list[dict]:
     """manifest.csv を読み込み、有効な t 値を持つレコードのリストを返す。
 
     Args:
-        path:           manifest.csv のパス
-        min_confidence: この値未満の confidence を持つサンプルを除外する。
-                        デフォルト 0.0（全サンプル使用）。
-                        confidence=null は 1.0 として扱う（後方互換）。
+        path: manifest.csv のパス
 
     Returns:
         レコードのリスト（dict のリスト）
@@ -57,14 +53,6 @@ def load_manifest(
                 float(row["t"])
             except (ValueError, KeyError):
                 continue
-
-            # confidence フィルタ
-            conf_raw = row.get("confidence", "")
-            conf = float(conf_raw) if conf_raw not in ("", "null", None) else 1.0
-            if conf < min_confidence:
-                continue
-
-            row["confidence"] = conf
             records.append(row)
 
     return records
@@ -72,16 +60,10 @@ def load_manifest(
 
 def load_manifest_df(
     path: str | Path,
-    min_confidence: float = 0.0,
 ) -> pd.DataFrame:
-    """manifest.csv を pandas DataFrame として読み込む。
-
-    confidence=null は 1.0 として扱い、min_confidence でフィルタする。
-    """
+    """manifest.csv を pandas DataFrame として読み込む。"""
     path = Path(path)
-    df = pd.read_csv(path)
-    df["confidence"] = pd.to_numeric(df["confidence"], errors="coerce").fillna(1.0)
-    return df[df["confidence"] >= min_confidence].reset_index(drop=True)
+    return pd.read_csv(path)
 
 
 class EyelinerPatchDataset(Dataset):

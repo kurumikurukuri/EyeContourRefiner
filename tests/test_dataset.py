@@ -22,7 +22,7 @@ def _make_manifest_csv(path: Path, rows: list[dict]) -> None:
     """テスト用 manifest.csv を生成する。"""
     fieldnames = [
         "idx", "image_path", "part_name", "sub_key", "point_index",
-        "px", "py", "qx", "qy", "t", "label_source", "confidence",
+        "px", "py", "qx", "qy", "t",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -33,7 +33,6 @@ def _make_manifest_csv(path: Path, rows: list[dict]) -> None:
 def _sample_rows(
     n: int = 5,
     image_path: str = "dummy.jpg",
-    confidence: str = "",
 ) -> list[dict]:
     rows = []
     for i in range(n):
@@ -48,8 +47,6 @@ def _sample_rows(
             "qx": 200.0 + i * 10,
             "qy": 100.0,
             "t": f"{0.5 + i * 0.05:.3f}",
-            "label_source": "manual",
-            "confidence": confidence,
         })
     return rows
 
@@ -74,28 +71,6 @@ class TestLoadManifest:
         csv_path = tmp_path / "manifest.csv"
         _make_manifest_csv(csv_path, rows)
         records = load_manifest(csv_path)
-        assert len(records) == 2
-
-    def test_min_confidence_filter(self, tmp_path):
-        """min_confidence=0.9 で低信頼度サンプルが除外される。"""
-        rows = _sample_rows(4)
-        rows[0]["confidence"] = "1.0"
-        rows[1]["confidence"] = "0.9"
-        rows[2]["confidence"] = "0.5"
-        rows[3]["confidence"] = ""
-        csv_path = tmp_path / "manifest.csv"
-        _make_manifest_csv(csv_path, rows)
-        records = load_manifest(csv_path, min_confidence=0.9)
-        assert len(records) == 3  # 1.0, 0.9, null(=1.0)
-
-    def test_null_confidence_treated_as_one(self, tmp_path):
-        """confidence=null は 1.0 として扱われる（後方互換）。"""
-        rows = _sample_rows(2)
-        rows[0]["confidence"] = ""
-        rows[1]["confidence"] = ""
-        csv_path = tmp_path / "manifest.csv"
-        _make_manifest_csv(csv_path, rows)
-        records = load_manifest(csv_path, min_confidence=1.0)
         assert len(records) == 2
 
     def test_not_found_raises(self, tmp_path):

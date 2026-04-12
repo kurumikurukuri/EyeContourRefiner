@@ -26,8 +26,7 @@ const state = {
   currentT: null,       // null = not yet clicked
   existingT: null,      // value already saved on server
   tPred: null,          // model prediction (null if no model)
-  labelSource: null,    // "manual" | "auto_vN" | "auto_reviewed" | null
-  confidence: null,     // float or null (auto labels only)
+  labelSource: null,    // 後方互換用（旧フィールド）
   imageB64: null,
   faceB64: null,
   patchB64: null,
@@ -199,10 +198,8 @@ async function loadSample(idx) {
     state.qx = data.qx; state.qy = data.qy;
     state.existingT   = data.existing_t;
     state.currentT    = data.existing_t;  // start with saved value
-    state.tPred       = data.t_pred ?? null;
-    state.labelSource = data.label_source ?? null;
-    state.confidence  = data.confidence  ?? null;
-    state.skipFlag    = data.skip_flag ?? false;
+    state.tPred    = data.t_pred ?? null;
+    state.skipFlag = data.skip_flag ?? false;
     state.imageB64    = data.image_b64;
     state.faceB64     = data.face_b64;
     state.patchB64    = data.patch_b64;
@@ -325,35 +322,12 @@ function updateProgress() {
     `${state.annotated} / ${state.total}  (現在: ${state.currentIdx})`;
 }
 
-const _LABEL_SOURCE_CONFIG = {
-  "manual":        { text: "手動",           cls: "ls-manual" },
-  "auto_reviewed": { text: "自動→レビュー済", cls: "ls-reviewed" },
-};
-
-function _labelSourceConfig(src) {
-  if (!src) return { text: "未ラベル", cls: "ls-none" };
-  if (src in _LABEL_SOURCE_CONFIG) return _LABEL_SOURCE_CONFIG[src];
-  if (src.startsWith("auto_v")) return { text: `自動(${src})`, cls: "ls-auto" };
-  return { text: src, cls: "ls-none" };
-}
-
 function updateLabelSourceBadge() {
+  // label_source は削除済み — badge 要素が残っていれば非表示にする
   const el = document.getElementById("label-source-badge");
-  if (!el) return;
-  const { text, cls } = _labelSourceConfig(state.labelSource);
-  el.textContent = text;
-  el.className = `label-source-badge ${cls}`;
-
+  if (el) el.style.display = "none";
   const confEl = document.getElementById("label-confidence");
-  if (confEl) {
-    if (state.confidence !== null && state.labelSource && state.labelSource.startsWith("auto_v")) {
-      confEl.textContent = `conf: ${state.confidence.toFixed(3)}`;
-      confEl.style.display = "inline";
-    } else {
-      confEl.textContent = "";
-      confEl.style.display = "none";
-    }
-  }
+  if (confEl) confEl.style.display = "none";
 }
 
 function setStatus(msg) {

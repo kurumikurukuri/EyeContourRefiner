@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import logging
 import sys
 from pathlib import Path
@@ -29,6 +28,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from annotator import db as _db  # noqa: E402
 from utils.patch_utils import (
     IMAGENET_MEAN,
     IMAGENET_STD,
@@ -39,11 +39,11 @@ from utils.patch_utils import (
 
 logger = logging.getLogger(__name__)
 
-SAMPLES_PATH = Path("data/samples.json")
+DB_PATH = Path("data/samples.db")
 MANIFEST_PATH = Path("data/manifest.csv")
 MANIFEST_FIELDNAMES = [
     "idx", "image_path", "part_name", "sub_key", "point_index",
-    "px", "py", "qx", "qy", "t", "label_source", "confidence",
+    "px", "py", "qx", "qy", "t",
 ]
 
 
@@ -132,7 +132,6 @@ def _predict_with_confidence(
 
 def auto_label(
     threshold: float,
-    model_version: int,
     dry_run: bool,
     verbose: bool,
 ) -> dict:
@@ -154,17 +153,15 @@ def auto_label(
     mean_t = torch.tensor(IMAGENET_MEAN).view(3, 1, 1).to(device)
     std_t  = torch.tensor(IMAGENET_STD).view(3, 1, 1).to(device)
 
-    label_source_tag = f"auto_v{model_version}"
-
     # ---- サンプル読み込み ----
-    samples: list[dict] = json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
+    samples: list[dict] = _db.load_all_samples(DB_PATH)
     unannotated = [s for s in samples if s.get("t") is None]
     logger.info("未ラベルサンプル: %d / %d", len(unannotated), len(samples))
 
     # ---- 推論 ----
     stats = {"accepted": 0, "rejected": 0, "error": 0}
     image_cache: dict[str, np.ndarray] = {}
-    updated_indices: dict[int, tuple[float, float]] = {}  # idx → (t, confidence)
+    accepted: dict[int, float] = {}  # idx → t_raw
 
     for s in unannotated:
         img_path = s["image_path"]
@@ -200,7 +197,8 @@ def auto_label(
             )
 
         if confidence >= threshold:
-            updated_indices[s["idx"]] = (t_mean, confidence)
+            t_raw = round(t_mean * (T_MAX - T_MIN) + T_MIN, 6)
+            accepted[s["idx"]] = t_raw
             stats["accepted"] += 1
         else:
             stats["rejected"] += 1
@@ -211,61 +209,26 @@ def auto_label(
     )
 
     if dry_run:
-        logger.info("[DRY RUN] samples.json / manifest.csv への書き込みをスキップしました。")
+        logger.info("[DRY RUN] DB / manifest.csv への書き込みをスキップしました。")
         return stats
 
-    # ---- samples.json 更新 ----
-    updated_samples = []
-    for s in samples:
-        if s["idx"] in updated_indices:
-            t_val, conf = updated_indices[s["idx"]]
-            # t_val はモデル出力の t_norm [0,1]。samples.json には生の物理 t 値で保存する。
-            t_raw = t_val * (T_MAX - T_MIN) + T_MIN
-            updated_samples.append({
-                **s,
-                "t": round(t_raw, 6),
-                "label_source": label_source_tag,
-                "confidence": round(conf, 6),
-            })
-        else:
-            updated_samples.append(s)
+    # ---- DB 更新 ----
+    _db.batch_update_t(list(accepted.items()), DB_PATH)
+    logger.info("DB を更新しました。")
 
-    SAMPLES_PATH.write_text(
-        json.dumps(updated_samples, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    logger.info("samples.json を更新しました。")
-
-    # ---- manifest.csv 更新（自動ラベルの追記） ----
-    _update_manifest(updated_samples, label_source_tag)
+    # ---- manifest.csv 再生成 ----
+    _update_manifest()
 
     return stats
 
 
-def _update_manifest(samples: list[dict], label_source_tag: str) -> None:
-    """samples.json の内容から manifest.csv を再生成する。"""
-    annotated = [s for s in samples if s.get("t") is not None]
-
-    # 既存 manifest があれば読み込んで label_source=manual の行は保持
-    existing_manual: dict[int, dict] = {}
-    if MANIFEST_PATH.exists():
-        with MANIFEST_PATH.open(newline="", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            if reader.fieldnames and "label_source" in reader.fieldnames:
-                for row in reader:
-                    try:
-                        idx = int(row["idx"])
-                        existing_manual[idx] = row
-                    except (ValueError, KeyError):
-                        pass
-
-    rows: list[dict] = []
-    for s in annotated:
-        idx = s["idx"]
-        if idx in existing_manual:
-            # 既存行のラベルソースを上書きせず保持（manual/auto_reviewed を守る）
-            existing_row = existing_manual[idx]
-            rows.append({
-                "idx": idx,
+def _update_manifest() -> None:
+    """DB のアノテーション済みサンプルから manifest.csv を再生成する。"""
+    annotated = _db.get_annotated_samples(DB_PATH)
+    rows = sorted(
+        [
+            {
+                "idx": s["idx"],
                 "image_path": s["image_path"],
                 "part_name": s["part_name"],
                 "sub_key": s["sub_key"],
@@ -275,32 +238,15 @@ def _update_manifest(samples: list[dict], label_source_tag: str) -> None:
                 "qx": s["qx"],
                 "qy": s["qy"],
                 "t": s["t"],
-                "label_source": existing_row.get("label_source", s.get("label_source", "manual")),
-                "confidence": existing_row.get("confidence", s.get("confidence", "")),
-            })
-        else:
-            rows.append({
-                "idx": idx,
-                "image_path": s["image_path"],
-                "part_name": s["part_name"],
-                "sub_key": s["sub_key"],
-                "point_index": s["point_index"],
-                "px": s["px"],
-                "py": s["py"],
-                "qx": s["qx"],
-                "qy": s["qy"],
-                "t": s["t"],
-                "label_source": s.get("label_source", "manual"),
-                "confidence": s.get("confidence") or "",
-            })
-
-    rows.sort(key=lambda r: int(r["idx"]))
-
+            }
+            for s in annotated
+        ],
+        key=lambda r: int(r["idx"]),
+    )
     with MANIFEST_PATH.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
-
     logger.info("manifest.csv を更新しました: %d 件", len(rows))
 
 
@@ -313,10 +259,6 @@ def main() -> None:
     parser.add_argument(
         "--threshold", type=float, default=0.85,
         help="信頼度閾値 (default: 0.85)。これ以上の場合のみ自動ラベルを受理",
-    )
-    parser.add_argument(
-        "--model-version", type=int, default=1,
-        help="ラベルソースのバージョン番号 (default: 1) → label_source=auto_v1",
     )
     parser.add_argument(
         "--dry-run", action="store_true",
@@ -340,7 +282,6 @@ def main() -> None:
 
     stats = auto_label(
         threshold=args.threshold,
-        model_version=args.model_version,
         dry_run=args.dry_run,
         verbose=args.verbose,
     )
@@ -349,8 +290,6 @@ def main() -> None:
     print(f"  受理 (confidence >= {args.threshold}): {stats['accepted']} 件")
     print(f"  要レビュー (confidence < {args.threshold}):  {stats['rejected']} 件")
     print(f"  エラー:                                {stats['error']} 件")
-    if not args.dry_run:
-        print(f"  label_source: {f'auto_v{args.model_version}'}")
 
 
 if __name__ == "__main__":

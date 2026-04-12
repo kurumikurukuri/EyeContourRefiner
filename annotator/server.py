@@ -13,7 +13,6 @@ from __future__ import annotations
 import base64
 import csv
 import io
-import json
 import logging
 import os
 import sys
@@ -47,7 +46,6 @@ from utils.patch_utils import (
 
 logger = logging.getLogger(__name__)
 
-SAMPLES_PATH = Path("data/samples.json")
 DISPLAY_SCALE = 6  # ROIパッチの表示倍率
 STATIC_DIR = Path(__file__).parent / "static"
 MODEL_PATH = Path("models/eyeliner_detection.pt")
@@ -61,15 +59,9 @@ _ALLOWED_MODEL_DIRS = [
     _PROJECT_ROOT / "experiments",
 ]
 
-# インメモリサンプルキャッシュ（77MB JSONの毎回パース回避）
-_samples_cache: Optional[List[Dict[str, Any]]] = None
-
 # 画像グルーピングインデックス（ギャラリー用）
-_image_index: Optional[Dict[str, Dict[str, int]]] = None  # image_path → {first_pos, total, annotated}
+_image_index: Optional[Dict[str, Dict[str, Any]]] = None  # image_path → {first_pos, total, annotated, skipped}
 _image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
-
-# アノテーション書き込みの競合状態防止用ロック
-_samples_lock = threading.Lock()
 
 # モデル状態（_infer_models 等）の競合状態防止用ロック
 _models_lock = threading.Lock()
@@ -85,9 +77,10 @@ _MAX_THUMBNAIL_CACHE = 500
 async def lifespan(app: FastAPI):
     """アプリケーション起動時にモデルとサンプルを読み込む。"""
     _try_load_infer_model()
-    _load_samples()
+    _db.init_db()
     _build_image_index()
-    logger.info("Samples loaded: %d entries", len(_samples_cache) if _samples_cache else 0)
+    total, annotated = _db.count_samples()
+    logger.info("DB initialized: %d samples (%d annotated)", total, annotated)
     logger.info("Image index built: %d images", len(_image_order) if _image_order else 0)
     yield
 
@@ -95,6 +88,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Eyeliner Annotator", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+from annotator import db as _db  # noqa: E402
 from annotator.dashboard import router as dashboard_router  # noqa: E402
 app.include_router(dashboard_router)
 
@@ -288,73 +282,13 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 
 
 # ---------------------------------------------------------------------------
-# Samples I/O
+# Image index (in-memory gallery cache built from DB)
 # ---------------------------------------------------------------------------
 
-def _load_samples() -> List[Dict[str, Any]]:
-    """サンプル一覧を返す。初回のみディスクから読み込み、以降はメモリキャッシュを使用。"""
-    global _samples_cache
-    if _samples_cache is not None:
-        return _samples_cache
-    if not SAMPLES_PATH.exists():
-        _samples_cache = []
-        return _samples_cache
-    _samples_cache = json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
-    return _samples_cache
-
-
-def _save_samples(samples: List[Dict[str, Any]]) -> None:
-    """サンプル一覧をメモリキャッシュとディスクの両方に保存。"""
-    global _samples_cache
-    _samples_cache = samples
-    SAMPLES_PATH.write_text(
-        json.dumps(samples, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-
 def _build_image_index() -> None:
-    """全サンプルをスキャンし、画像パス単位のグループインデックスを構築する。"""
+    """DB から画像パス単位のグループインデックスを構築する。"""
     global _image_index, _image_order
-    samples = _load_samples()
-    index: Dict[str, Dict[str, int]] = {}
-    order: List[str] = []
-    for pos, s in enumerate(samples):
-        key = s["image_path"]
-        if key not in index:
-            index[key] = {"first_pos": pos, "total": 0, "annotated": 0, "skipped": False}
-            order.append(key)
-        index[key]["total"] += 1
-        if s.get("t") is not None:
-            index[key]["annotated"] += 1
-        if s.get("skip_flag", False):
-            index[key]["skipped"] = True
-    _image_index = index
-    _image_order = order
-
-
-def _update_image_index_for_sample(
-    sample: Dict[str, Any],
-    old_t: Optional[float],
-    new_t: Optional[float],
-) -> None:
-    """単一サンプルの t 変更に応じてインデックスを差分更新する。"""
-    if _image_index is None:
-        return
-    key = sample["image_path"]
-    entry = _image_index.get(key)
-    if entry is None:
-        _build_image_index()
-        return
-    if old_t is None and new_t is not None:
-        entry["annotated"] += 1
-    elif old_t is not None and new_t is None:
-        entry["annotated"] -= 1
-
-
-def _invalidate_samples_cache() -> None:
-    """外部プロセスによるJSON変更後にキャッシュを無効化する。"""
-    global _samples_cache
-    _samples_cache = None
+    _image_index, _image_order = _db.get_image_index()
 
 
 # ---------------------------------------------------------------------------
@@ -396,9 +330,6 @@ def _to_base64_png(image_rgb: np.ndarray) -> str:
 
 class AnnotateRequest(BaseModel):
     t: float
-    # label_source を省略した場合はサーバー側でルール決定:
-    #   既存が auto_vN → "auto_reviewed"、それ以外 → "manual"
-    label_source: Optional[str] = None
 
 
 class ModelSelectRequest(BaseModel):
@@ -573,19 +504,12 @@ def select_models(body: ModelSelectRequest):
 
 @app.get("/api/samples")
 def get_samples_summary():
-    samples = _load_samples()
-    annotated = sum(1 for s in samples if s.get("t") is not None)
-
-    # label_source 別集計
-    source_counts: Dict[str, int] = {}
-    for s in samples:
-        src = s.get("label_source") or ("unannotated" if s.get("t") is None else "manual")
-        source_counts[src] = source_counts.get(src, 0) + 1
+    samples = _db.load_all_samples()
+    total, annotated = _db.count_samples()
 
     return {
-        "total": len(samples),
+        "total": total,
         "annotated": annotated,
-        "label_source_counts": source_counts,
         "samples": [
             {
                 "idx": s["idx"],
@@ -594,7 +518,6 @@ def get_samples_summary():
                 "sub_key": s["sub_key"],
                 "point_index": s["point_index"],
                 "t": s.get("t"),
-                "label_source": s.get("label_source"),
                 "skip_flag": s.get("skip_flag", False),
             }
             for s in samples
@@ -605,25 +528,23 @@ def get_samples_summary():
 @app.get("/api/resolve_idx/{idx_field}")
 def resolve_idx(idx_field: int):
     """idx フィールド値から配列位置を解決する。
-    samples.json 再生成後も idx フィールドで正しいサンプルを特定できる。
+    DB では idx は PRIMARY KEY であり配列位置と一致する。
     """
-    samples = _load_samples()
-    for pos, s in enumerate(samples):
-        if s.get("idx") == idx_field:
-            return {"array_position": pos}
-    raise HTTPException(status_code=404, detail=f"idx={idx_field} のサンプルが見つかりません")
+    sample = _db.get_sample_by_idx(idx_field)
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"idx={idx_field} のサンプルが見つかりません")
+    return {"array_position": idx_field}
 
 
 @app.get("/api/sample/{idx}")
 def get_sample(idx: int):
-    samples = _load_samples()
-    if idx < 0 or idx >= len(samples):
+    sample = _db.get_sample_by_idx(idx)
+    if sample is None:
         raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
-    sample = samples[idx]
     px, py = sample["px"], sample["py"]
     qx, qy = sample["qx"], sample["qy"]
-    # samples.json の t は生の物理 t 値（PQ 座標系）
+    # DB の t は生の物理 t 値（PQ 座標系）
     existing_t_raw: Optional[float] = float(sample["t"]) if sample.get("t") is not None else None
     # フロントエンドは t_norm [0,1] で動作するため、表示用に変換する
     existing_t: Optional[float] = (
@@ -720,11 +641,11 @@ def get_sample(idx: int):
     is_upper = 1.0 if sample.get("sub_key", "") == "upper" else 0.0
     t_pred = _predict_t(image_rgb, px, py, qx, qy, is_upper)
 
-    annotated = sum(1 for s in samples if s.get("t") is not None)
+    total, annotated = _db.count_samples()
 
     return {
         "idx": idx,
-        "total": len(samples),
+        "total": total,
         "annotated": annotated,
         "image_b64": image_b64,
         "face_b64": face_b64,
@@ -739,24 +660,8 @@ def get_sample(idx: int):
         "sub_key": sample["sub_key"],
         "point_index": sample["point_index"],
         "image_path": sample["image_path"],
-        "label_source": sample.get("label_source"),
-        "confidence": sample.get("confidence"),
         "skip_flag": sample.get("skip_flag", False),
     }
-
-
-def _resolve_label_source(existing: Optional[str], requested: Optional[str]) -> str:
-    """保存時の label_source を決定する。
-
-    - クライアントが明示した場合はそれを使用（ただし "auto_vN" は上書き不可）
-    - 既存が auto_vN で人手修正 → "auto_reviewed"
-    - それ以外 → "manual"
-    """
-    if requested and not requested.startswith("auto_v"):
-        return requested
-    if existing and existing.startswith("auto_v"):
-        return "auto_reviewed"
-    return "manual"
 
 
 @app.post("/api/annotate/{idx}")
@@ -765,54 +670,29 @@ def annotate(idx: int, body: AnnotateRequest):
         raise HTTPException(status_code=422, detail="t は [0, 1] の範囲で指定してください")
 
     # フロントエンドから受け取る body.t は t_norm [0,1]。
-    # samples.json には生の物理 t 値で保存する。
-    t_raw = body.t * (T_MAX - T_MIN) + T_MIN
+    # DB には生の物理 t 値で保存する。
+    t_raw = round(body.t * (T_MAX - T_MIN) + T_MIN, 6)
 
-    with _samples_lock:
-        samples = _load_samples()
-        if idx < 0 or idx >= len(samples):
-            raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+    sample = _db.get_sample_by_idx(idx)
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
-        old_t = samples[idx].get("t")
+    _db.update_annotation(idx, t_raw)
+    _build_image_index()
 
-        def _update(i: int, s: dict) -> dict:
-            if i != idx:
-                return s
-            existing_source = s.get("label_source")
-            label_source = _resolve_label_source(existing_source, body.label_source)
-            return {**s, "t": round(t_raw, 6), "label_source": label_source}
 
-        samples = [_update(i, s) for i, s in enumerate(samples)]
-        _save_samples(samples)
-
-    _update_image_index_for_sample(samples[idx], old_t, t_raw)
-
-    saved = samples[idx]
-    return {"ok": True, "idx": idx, "t": body.t, "label_source": saved.get("label_source")}
+    return {"ok": True, "idx": idx, "t": body.t}
 
 
 @app.post("/api/skip_image/{idx}")
 def skip_image(idx: int, body: SkipImageRequest):
     """指定サンプルと同じ画像の全サンプルの skip_flag を一括更新する。"""
-    with _samples_lock:
-        samples = _load_samples()
-        if idx < 0 or idx >= len(samples):
-            raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+    sample = _db.get_sample_by_idx(idx)
+    if sample is None:
+        raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
-        image_path = samples[idx]["image_path"]
-        updated_count = 0
-
-        def _update_skip(i: int, s: dict) -> dict:
-            nonlocal updated_count
-            if s["image_path"] == image_path:
-                if s.get("skip_flag", False) != body.skip:
-                    updated_count += 1
-                return {**s, "skip_flag": body.skip}
-            return s
-
-        samples = [_update_skip(i, s) for i, s in enumerate(samples)]
-        _save_samples(samples)
-
+    image_path = sample["image_path"]
+    updated_count = _db.update_skip_flag(image_path, body.skip)
     _build_image_index()
 
     return {"ok": True, "updated": updated_count, "skip": body.skip}
@@ -826,49 +706,41 @@ def apply_pred_eye(idx: int):
     if not has_model:
         raise HTTPException(status_code=400, detail="推論モデルが読み込まれていません")
 
-    with _samples_lock:
-        samples = _load_samples()
-        if idx < 0 or idx >= len(samples):
-            raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+    current = _db.get_sample_by_idx(idx)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
-        current = samples[idx]
-        image_path = current["image_path"]
-        face_index = current.get("face_index")
-        part_name = current.get("part_name", "")
+    image_path = current["image_path"]
+    face_index = current.get("face_index")
+    part_name = current.get("part_name", "")
 
-        targets = [
-            s for s in samples
-            if s["image_path"] == image_path
-            and s.get("face_index") == face_index
-            and s.get("part_name") == part_name
-            and s.get("t") is None
-        ]
+    targets = _db.get_unannotated_samples_for_eye(image_path, face_index, part_name)
+    if not targets:
+        return {"ok": True, "updated": 0, "message": "未ラベルのサンプルはありません"}
 
-        if not targets:
-            return {"ok": True, "updated": 0, "message": "未ラベルのサンプルはありません"}
+    try:
+        image_rgb = _load_image_rgb(image_path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
 
-        try:
-            image_rgb = _load_image_rgb(image_path)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc))
+    updates: List[tuple] = []
+    for s in targets:
+        is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
+        t_norm = _predict_t(
+            image_rgb, float(s["px"]), float(s["py"]),
+            float(s["qx"]), float(s["qy"]), is_upper,
+        )
+        if t_norm is not None:
+            t_raw = t_norm * (T_MAX - T_MIN) + T_MIN
+            updates.append((s["idx"], t_raw))
 
-        predictions: Dict[int, float] = {}
-        for s in targets:
-            is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
-            t_norm = _predict_t(image_rgb, float(s["px"]), float(s["py"]), float(s["qx"]), float(s["qy"]), is_upper)
-            if t_norm is not None:
-                predictions[s["idx"]] = t_norm * (T_MAX - T_MIN) + T_MIN
+    if not updates:
+        raise HTTPException(status_code=500, detail="全サンプルの予測に失敗しました")
 
-        if not predictions:
-            raise HTTPException(status_code=500, detail="全サンプルの予測に失敗しました")
-
-        updated = [{**s, "t": predictions[s["idx"]], "label_source": "auto_v1"} if s["idx"] in predictions else s
-                   for s in samples]
-        _save_samples(updated)
-
+    _db.batch_update_t(updates)
     _build_image_index()
 
-    return {"ok": True, "updated": len(predictions)}
+    return {"ok": True, "updated": len(updates)}
 
 
 @app.get("/api/gallery")
@@ -876,6 +748,7 @@ def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_fil
     """ページネーション対応のギャラリー。メタデータのみ返す（サムネイルは別API）。"""
     if _image_index is None or _image_order is None:
         _build_image_index()
+
 
     # skip フィルタリング
     filtered_order = _image_order
@@ -927,10 +800,9 @@ def gallery_find_page(image_key: str = "", per_page: int = Query(80, ge=1, le=20
 @app.get("/api/thumbnail")
 def get_thumbnail(image_path: str, max_side: int = 200):
     """個別サムネイル画像をJPEGで返す。ブラウザキャッシュを利用。"""
-    # パストラバーサル防止: インデックスに登録されたパスのみ許可
-    if _image_index is None:
-        _build_image_index()
-    if image_path not in _image_index:
+    # パストラバーサル防止: DB に登録されたパスのみ許可
+    if not _db.image_path_exists(image_path):
+
         raise HTTPException(status_code=404, detail=f"画像が見つかりません: {image_path}")
 
     # LRUキャッシュを確認
@@ -1124,14 +996,13 @@ def get_eyeliner_preview(idx: int):
         side: "left" | "right" | "unknown"
         has_model: モデルが読み込まれているか
     """
-    samples = _load_samples()
-    if idx < 0 or idx >= len(samples):
+    current = _db.get_sample_by_idx(idx)
+    if current is None:
         raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
-    current = samples[idx]
     image_path = current["image_path"]
     part_name = current.get("part_name", "")
-    image_samples = [s for s in samples if s["image_path"] == image_path]
+    image_samples = _db.get_samples_by_image_path(image_path)
 
     try:
         image_rgb = _load_image_rgb(image_path)
@@ -1162,15 +1033,14 @@ def get_eyeliner_preview(idx: int):
 
 _EXPORT_FIELDNAMES = [
     "idx", "image_path", "part_name", "sub_key", "point_index",
-    "px", "py", "qx", "qy", "t", "label_source", "confidence",
+    "px", "py", "qx", "qy", "t",
 ]
 
 
 @app.get("/api/export")
 def export_manifest():
     """アノテーション済みサンプルを manifest.csv としてダウンロード。"""
-    samples = _load_samples()
-    annotated = [s for s in samples if s.get("t") is not None]
+    annotated = _db.get_annotated_samples()
 
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=_EXPORT_FIELDNAMES)
@@ -1187,8 +1057,6 @@ def export_manifest():
             "qx": s["qx"],
             "qy": s["qy"],
             "t": s["t"],
-            "label_source": s.get("label_source") or "manual",
-            "confidence": s.get("confidence") or "",
         })
 
     content = buf.getvalue().encode("utf-8")
@@ -1202,10 +1070,10 @@ def export_manifest():
 @app.post("/api/open_image/{idx}")
 async def open_image(idx: int) -> Dict[str, Any]:
     """Windows の写真アプリで元画像を開く。"""
-    samples = _load_samples()
-    if idx < 0 or idx >= len(samples):
+    sample = _db.get_sample_by_idx(idx)
+    if sample is None:
         raise HTTPException(status_code=404, detail="インデックスが範囲外です")
-    image_path = Path(samples[idx]["image_path"]).resolve()
+    image_path = Path(sample["image_path"]).resolve()
     if not image_path.exists():
         raise HTTPException(status_code=404, detail=f"画像ファイルが見つかりません: {image_path}")
     os.startfile(str(image_path))

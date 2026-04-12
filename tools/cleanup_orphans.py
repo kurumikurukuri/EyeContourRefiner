@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import logging
 import sys
 from pathlib import Path
@@ -26,20 +25,13 @@ sys.stderr.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from annotator import db as _db  # noqa: E402
+
 ROOT = Path(__file__).parent.parent
-SAMPLES_JSON = ROOT / "data" / "samples.json"
+DB_PATH = ROOT / "data" / "samples.db"
 IMAGES_DIR = ROOT / "data" / "images"
 ATTRIBUTION_CSV = ROOT / "data" / "open_images_attribution.csv"
-
-
-def load_samples(path: Path) -> list[dict]:
-    with path.open(encoding="utf-8") as f:
-        return json.load(f)
-
-
-def save_samples(path: Path, samples: list[dict]) -> None:
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(samples, f, ensure_ascii=False, indent=2)
 
 
 def resolve_image_path(image_path_str: str) -> Path:
@@ -51,44 +43,45 @@ def resolve_image_path(image_path_str: str) -> Path:
 
 
 def main(dry_run: bool) -> None:
-    if not SAMPLES_JSON.exists():
-        log.error("samples.json が見つかりません: %s", SAMPLES_JSON)
+    if not DB_PATH.exists():
+        log.error("samples.db が見つかりません: %s", DB_PATH)
         return
     if not IMAGES_DIR.exists():
         log.error("images ディレクトリが見つかりません: %s", IMAGES_DIR)
         return
 
-    samples = load_samples(SAMPLES_JSON)
-    log.info("samples.json エントリ数: %d", len(samples))
+    samples = _db.load_all_samples(DB_PATH)
+    log.info("DB エントリ数: %d", len(samples))
 
-    # samples.json から参照されている画像パスのセット
+    # DB から参照されている画像パスのセット
     referenced_images: set[Path] = {
         resolve_image_path(s["image_path"]).resolve() for s in samples
     }
 
-    # --- 1. 画像が存在しない samples.json エントリを除去 ---
-    valid_samples = [
-        s for s in samples
+    # --- 1. 画像が存在しない DB エントリを除去 ---
+    valid_paths: list[str] = [
+        s["image_path"]
+        for s in samples
         if resolve_image_path(s["image_path"]).resolve().exists()
     ]
-    removed_entries = len(samples) - len(valid_samples)
+    removed_entries = len(samples) - len(valid_paths)
     log.info("参照先画像が存在しないエントリ: %d 件", removed_entries)
 
     if not dry_run and removed_entries > 0:
-        save_samples(SAMPLES_JSON, valid_samples)
-        log.info("samples.json を更新しました（残り %d エントリ）", len(valid_samples))
+        _db.delete_orphan_samples(valid_paths, DB_PATH)
+        log.info("DB を更新しました（残り %d エントリ）", len(valid_paths))
 
-    # --- 2. samples.json から参照されていない画像ファイルを削除 ---
+    # --- 2. DB から参照されていない画像ファイルを削除 ---
     image_files = list(IMAGES_DIR.glob("*.jpg")) + list(IMAGES_DIR.glob("*.png"))
     orphan_images = [img for img in image_files if img.resolve() not in referenced_images]
-    log.info("samples.json に参照が無い孤立画像: %d 件", len(orphan_images))
+    log.info("DB に参照が無い孤立画像: %d 件", len(orphan_images))
 
     for img in orphan_images:
         log.info("  削除対象: %s", img.name)
         if not dry_run:
             img.unlink()
 
-    # --- 3. open_images_attribution.csv から samples.json に無い行を削除 ---
+    # --- 3. open_images_attribution.csv から DB に無い行を削除 ---
     referenced_ids: set[str] = {
         Path(s["image_path"]).stem for s in samples
     }
