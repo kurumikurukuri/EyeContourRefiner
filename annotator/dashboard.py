@@ -19,9 +19,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
+_PROJECT_ROOT    = Path(__file__).parent.parent.resolve()
 MANIFEST_PATH    = Path("data/manifest.csv")
 PREDICTIONS_PATH = Path("data/predictions.csv")
-RUNS_DIR         = Path("runs")
+EXPERIMENTS_ROOT = _PROJECT_ROOT / "experiments"
 
 # インメモリキャッシュ: key → {"mtime": float, "data": Any}
 _cache: Dict[str, Any] = {}
@@ -79,14 +80,16 @@ def _histogram(values: List[float], n_bins: int = 20) -> Dict[str, Any]:
 
 def _stats(values: List[float]) -> Dict[str, Any]:
     if not values:
-        return {"mean": 0, "median": 0, "std": 0, "min": 0, "max": 0, "count": 0}
+        return {"mean": 0, "median": 0, "std": 0, "min": 0, "q1": 0, "q3": 0, "max": 0, "count": 0}
     arr = np.array(values, dtype=float)
     return {
-        "mean":   round(float(arr.mean()),         4),
-        "median": round(float(np.median(arr)),      4),
-        "std":    round(float(arr.std()),            4),
-        "min":    round(float(arr.min()),            4),
-        "max":    round(float(arr.max()),            4),
+        "mean":   round(float(arr.mean()),                4),
+        "median": round(float(np.median(arr)),             4),
+        "std":    round(float(arr.std()),                  4),
+        "min":    round(float(arr.min()),                  4),
+        "q1":     round(float(np.percentile(arr, 25)),     4),
+        "q3":     round(float(np.percentile(arr, 75)),     4),
+        "max":    round(float(arr.max()),                  4),
         "count":  len(values),
     }
 
@@ -242,71 +245,124 @@ def get_quality() -> Dict[str, Any]:
 
 @router.get("/experiments")
 def get_experiments() -> Dict[str, Any]:
-    if not RUNS_DIR.exists():
-        return {"experiments": [], "message": "runs/ ディレクトリが見つかりません"}
+    """experiments/ 以下の全 experiment.json を読んで比較用データを返す。"""
+    if not EXPERIMENTS_ROOT.exists():
+        return {"experiments": [], "message": "experiments/ ディレクトリが見つかりません"}
 
+    import json as _json
     experiments = []
-    for run_dir in sorted(RUNS_DIR.iterdir(), reverse=True):
-        if not run_dir.is_dir():
-            continue
-        if not list(run_dir.rglob("events.out.tfevents.*")):
-            continue
-
-        exp: Dict[str, Any] = {"name": run_dir.name, "metrics": {}}
+    for json_path in sorted(EXPERIMENTS_ROOT.rglob("experiment.json")):
         try:
-            from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-            ea = EventAccumulator(str(run_dir))
-            ea.Reload()
-            scalar_tags = ea.Tags().get("scalars", [])
-
-            val_maes: List[float] = []
-            all_metrics: Dict[str, Any] = {}
-            for tag in scalar_tags:
-                events = ea.Scalars(tag)
-                if not events:
-                    continue
-                vals = [e.value for e in events]
-                all_metrics[tag] = {
-                    "final": round(float(vals[-1]), 5),
-                    "best":  round(float(min(vals)),  5),
-                }
-                if "val_mae" in tag and "fold" in tag:
-                    val_maes.append(min(vals))
-
-            exp["metrics"] = all_metrics
-            if val_maes:
-                exp["best_val_mae"] = round(float(sum(val_maes) / len(val_maes)), 5)
-                exp["folds"]        = len(val_maes)
-
+            data = _json.loads(json_path.read_text(encoding="utf-8"))
+            exp_dir = json_path.parent
+            rel = json_path.relative_to(EXPERIMENTS_ROOT)
+            group = rel.parts[0]
+            hp = data.get("hyperparameters", {})
+            results = data.get("results", {})
+            exp_dir_rel = str(exp_dir.relative_to(_PROJECT_ROOT))
+            experiments.append({
+                "group": group,
+                "exp_name": data.get("exp_name", exp_dir.name),
+                "exp_dir": exp_dir_rel,
+                "timestamp": data.get("timestamp"),
+                "backbone": hp.get("model_arch", "custom"),
+                "lr": hp.get("lr"),
+                "batch_size": hp.get("batch_size"),
+                "weight_decay": hp.get("weight_decay"),
+                "use_pq_ratio": hp.get("use_pq_ratio", False),
+                "k_folds": hp.get("k_folds"),
+                "cv_mae": results.get("cv_mae"),
+                "holdout_mae": results.get("holdout_mae"),
+                "n_train_samples": data.get("data", {}).get("n_train_samples"),
+                "has_predictions": any(
+                    (exp_dir / n).exists()
+                    for n in ("prediction.csv", "train_predictions.csv", "test_predictions.csv")
+                ),
+                "has_error_report": (exp_dir / "error_report.html").exists(),
+            })
         except Exception as e:
-            exp["error"] = str(e)
-
-        experiments.append(exp)
+            logger.warning("experiment.json 読み込み失敗: %s: %s", json_path, e)
 
     return {"experiments": experiments}
 
 
 @router.get("/errors")
-def get_errors(top: int = 50, threshold: float = 0.0) -> Dict[str, Any]:
-    if not PREDICTIONS_PATH.exists():
-        return {
-            "available": False,
-            "message": (
-                "data/predictions.csv が見つかりません。"
-                "python scripts/infer_eyeliner_detection.py を実行してください。"
-            ),
-        }
+def get_errors(
+    top: int = 50,
+    threshold: float = 0.0,
+    exp_path: Optional[str] = None,
+    split: str = "test",
+) -> Dict[str, Any]:
+    """エラー分析データを返す。
 
-    rows: List[Dict] = []
-    with open(PREDICTIONS_PATH, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            try:
-                t_true = float(row["t_true"])
-                t_pred = float(row["t_pred"])
-                rows.append({**row, "t_true": t_true, "t_pred": t_pred,
-                              "abs_error": abs(t_true - t_pred)})
-            except (KeyError, ValueError):
-                continue
+    exp_path を指定した場合（例: "experiments/EXP001.../exp_name"）、
+    そのディレクトリの predictions.csv を使用する。
+    split: "train", "test", "all" でファイルを選択。
+      - test → test_predictions.csv (なければ prediction.csv)
+      - train → train_predictions.csv
+      - all → train + test を結合
+    """
+    if split not in ("train", "test", "all"):
+        raise HTTPException(status_code=400, detail="split は train/test/all のいずれかです")
+
+    if exp_path:
+        exp_dir = (_PROJECT_ROOT / exp_path).resolve()
+        if not exp_dir.is_relative_to(EXPERIMENTS_ROOT):
+            raise HTTPException(status_code=400, detail="不正なパスです")
+
+        if split == "train":
+            predictions_file = exp_dir / "train_predictions.csv"
+        elif split == "test":
+            predictions_file = exp_dir / "test_predictions.csv"
+            if not predictions_file.exists():
+                predictions_file = exp_dir / "prediction.csv"
+        else:  # all
+            predictions_file = None  # 両方結合
+    else:
+        predictions_file = PREDICTIONS_PATH
+
+    def _read_predictions(path: Path) -> List[Dict]:
+        if not path.exists():
+            return []
+        result: List[Dict] = []
+        with open(path, newline="", encoding="utf-8") as f:
+            for row in csv.DictReader(f):
+                try:
+                    t_true = float(row["t_true"])
+                    t_pred = float(row["t_pred"])
+                    result.append({**row, "t_true": t_true, "t_pred": t_pred,
+                                   "abs_error": abs(t_true - t_pred)})
+                except (KeyError, ValueError):
+                    continue
+        return result
+
+    if predictions_file is None:
+        # split="all" — train + test を結合
+        train_path = exp_dir / "train_predictions.csv"
+        test_path = exp_dir / "test_predictions.csv"
+        if not train_path.exists() and not test_path.exists():
+            fallback = exp_dir / "prediction.csv"
+            if not fallback.exists():
+                return {
+                    "available": False,
+                    "message": (
+                        f"train_predictions.csv / test_predictions.csv / prediction.csv"
+                        f" が {exp_dir} に見つかりません。"
+                    ),
+                }
+            rows = _read_predictions(fallback)
+        else:
+            rows = _read_predictions(train_path) + _read_predictions(test_path)
+    else:
+        if not predictions_file.exists():
+            return {
+                "available": False,
+                "message": (
+                    f"{predictions_file} が見つかりません。"
+                    "python scripts/infer_eyeliner_detection.py を実行してください。"
+                ),
+            }
+        rows = _read_predictions(predictions_file)
 
     if not rows:
         return {"available": False, "message": "有効なサンプルがありません"}
@@ -341,6 +397,15 @@ def get_errors(top: int = 50, threshold: float = 0.0) -> Dict[str, Any]:
             sub: {pt: round(float(np.mean(v)), 5) for pt, v in sorted(pts.items())}
             for sub, pts in sorted(by_sub_pt_errs.items())
         },
+        "raw": {
+            "by_part_name":   {k: [round(x, 5) for x in v] for k, v in by_part.items()},
+            "by_sub_key":     {k: [round(x, 5) for x in v] for k, v in by_sub_key.items()},
+            "by_point_index": {k: [round(x, 5) for x in v] for k, v in sorted(by_point_index.items())},
+            "by_sub_pt": {
+                sub: {pt: [round(x, 5) for x in v] for pt, v in sorted(pts.items())}
+                for sub, pts in sorted(by_sub_pt_errs.items())
+            },
+        },
     }
 
     sorted_rows = sorted(rows, key=lambda r: r["abs_error"], reverse=True)
@@ -362,6 +427,7 @@ def get_errors(top: int = 50, threshold: float = 0.0) -> Dict[str, Any]:
 
     return {
         "available":       True,
+        "split":           split,
         "summary":         summary,
         "breakdown":       breakdown,
         "error_histogram": _histogram(list(errors), n_bins=20),
@@ -370,13 +436,36 @@ def get_errors(top: int = 50, threshold: float = 0.0) -> Dict[str, Any]:
 
 
 @router.get("/errors/{idx}/patch")
-def get_error_patch(idx: str) -> Response:
+def get_error_patch(idx: str, exp_path: Optional[str] = None, split: str = "test") -> Response:
     """誤差サンプルのパッチ画像 (base64 PNG) を返す。"""
-    if not PREDICTIONS_PATH.exists():
-        raise HTTPException(status_code=404, detail="predictions.csv が見つかりません")
+    if exp_path:
+        exp_dir = (_PROJECT_ROOT / exp_path).resolve()
+        if not exp_dir.is_relative_to(EXPERIMENTS_ROOT):
+            raise HTTPException(status_code=400, detail="不正なパスです")
+
+        if split == "train":
+            predictions_file = exp_dir / "train_predictions.csv"
+        elif split == "all":
+            # 両方から検索
+            for name in ("test_predictions.csv", "train_predictions.csv", "prediction.csv"):
+                candidate = exp_dir / name
+                if candidate.exists():
+                    predictions_file = candidate
+                    break
+            else:
+                predictions_file = exp_dir / "prediction.csv"
+        else:
+            predictions_file = exp_dir / "test_predictions.csv"
+            if not predictions_file.exists():
+                predictions_file = exp_dir / "prediction.csv"
+    else:
+        predictions_file = PREDICTIONS_PATH
+
+    if not predictions_file.exists():
+        raise HTTPException(status_code=404, detail="prediction.csv が見つかりません")
 
     target: Optional[Dict] = None
-    with open(PREDICTIONS_PATH, newline="", encoding="utf-8") as f:
+    with open(predictions_file, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             if str(row.get("idx")) == str(idx):
                 target = row
@@ -387,7 +476,7 @@ def get_error_patch(idx: str) -> Response:
 
     try:
         import cv2
-        from scripts.analyze_errors import _draw_patch_with_markers, _patch_to_base64
+        from tools.analyze_errors import _draw_patch_with_markers, _patch_to_base64
         bgr = cv2.imread(target["image_path"])
         if bgr is None:
             raise HTTPException(status_code=404, detail="画像を読み込めません")

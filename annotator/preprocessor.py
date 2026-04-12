@@ -44,6 +44,43 @@ from eyeliner.data.eyeliner_landmarks import EYELINER_CORRECTION_MAP  # noqa: E4
 logger = logging.getLogger(__name__)
 
 
+def _normalize_path(p: str) -> str:
+    """パス区切りを POSIX 形式（/）に正規化する。"""
+    return Path(p).as_posix()
+
+
+def _deduplicated_eyeliner_map() -> Dict[str, Dict[str, list]]:
+    """upper[0] が lower の最後 edge と重複する場合、upper から除外したマップを返す。"""
+    filtered: Dict[str, Dict[str, list]] = {}
+    for part_name, sub_map in EYELINER_CORRECTION_MAP.items():
+        upper_list = sub_map["upper"]
+        lower_list = sub_map["lower"]
+
+        # lower の最後の edge を取得
+        last_lower_edge = None
+        for entry in reversed(lower_list):
+            if isinstance(entry, tuple):
+                last_lower_edge = entry
+                break
+
+        # upper の先頭 edge が lower 末尾と重複していれば除外
+        new_upper: list = []
+        skipped_first_edge = False
+        for entry in upper_list:
+            if isinstance(entry, tuple) and not skipped_first_edge:
+                if entry == last_lower_edge:
+                    skipped_first_edge = True
+                    continue
+            new_upper.append(entry)
+
+        filtered[part_name] = {"upper": new_upper, "lower": lower_list}
+    return filtered
+
+
+# サンプル生成用（重複除外済み）
+EYELINER_SAMPLES_MAP = _deduplicated_eyeliner_map()
+
+
 def _extract_samples_from_image(
     image_path: Path,
 ) -> Optional[List[Dict[str, Any]]]:
@@ -91,7 +128,7 @@ def _extract_samples_from_image(
             [[lm.x * w, lm.y * h] for lm in face_landmarks.landmark],
             dtype=np.float32,
         )
-        for part_name, sub_map in EYELINER_CORRECTION_MAP.items():
+        for part_name, sub_map in EYELINER_SAMPLES_MAP.items():
             for sub_key, index_list in sub_map.items():
                 # index_list の各要素は int（アンカー点）か ('edge', p, q) タプル（P-Q ペア）
                 # アノテーションが必要なのは ('edge', p, q) のみ
@@ -103,7 +140,7 @@ def _extract_samples_from_image(
                     px, py = coords[p_idx]
                     qx, qy = coords[q_idx]
                     samples.append({
-                        "image_path": str(image_path),
+                        "image_path": _normalize_path(str(image_path)),
                         "face_index": face_index,
                         "part_name": part_name,
                         "sub_key": sub_key,
@@ -146,8 +183,9 @@ def generate_samples(
         try:
             existing = json.loads(output_path.read_text(encoding="utf-8"))
             for entry in existing:
+                normalized_path = _normalize_path(entry["image_path"])
                 key = (
-                    entry["image_path"],
+                    normalized_path,
                     entry.get("face_index", 0),
                     entry["part_name"],
                     entry["sub_key"],

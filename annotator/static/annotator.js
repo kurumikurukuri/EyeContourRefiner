@@ -32,6 +32,15 @@ const state = {
   faceB64: null,
   patchB64: null,
   annotationStatus: [],  // index → true/false (アノテーション済みか)
+  skipFlags: [],          // index → true/false (skip_flag)
+  skipFlag: false,        // 現在のサンプルの skip_flag
+  imageKey: null,          // 現在表示中の画像ファイル名
+  // ギャラリーページネーション
+  galleryPage: 1,
+  galleryPerPage: 80,
+  galleryTotalPages: 1,
+  galleryTotalImages: 0,
+  gallerySkipFilter: "all",  // "all" | "active" | "skipped"
 };
 
 // ---------------------------------------------------------------------------
@@ -60,6 +69,7 @@ const btnPrev            = document.getElementById("btn-prev");
 const btnSkip            = document.getElementById("btn-skip");
 const btnNext            = document.getElementById("btn-next");
 const btnNextUnannotated = document.getElementById("btn-next-unannotated");
+const btnSkipImage       = document.getElementById("btn-skip-image");
 const inputJump          = document.getElementById("input-jump");
 const btnJump            = document.getElementById("btn-jump");
 const btnUndo            = document.getElementById("btn-undo");
@@ -106,6 +116,7 @@ async function loadSamplesSummary() {
   try {
     const data = await apiFetch("/api/samples");
     state.annotationStatus = data.samples.map(s => s.t !== null);
+    state.skipFlags = data.samples.map(s => s.skip_flag === true);
     state.sampleMeta = data.samples.map(s => ({
       image_path: s.image_path,
       part_name: s.part_name,
@@ -133,6 +144,8 @@ function jumpToNextEye() {
   const { image_path, part_name } = meta[state.currentIdx];
   for (let i = state.currentIdx + 1; i < state.total; i++) {
     if (meta[i].image_path !== image_path || meta[i].part_name !== part_name) {
+      // skip_flag=True の画像はスキップ
+      if (state.skipFlags[i]) continue;
       loadSample(i);
       return;
     }
@@ -145,17 +158,28 @@ function jumpToPrevEye() {
   if (!meta.length) { advance(-14); return; }
   const groupStart = _eyeGroupStart(state.currentIdx);
   if (groupStart === 0) { setStatus("前の目はありません"); return; }
-  loadSample(_eyeGroupStart(groupStart - 1));
+  let candidate = _eyeGroupStart(groupStart - 1);
+  // skip_flag=True の画像はスキップしてさらに前へ
+  while (candidate > 0 && state.skipFlags[candidate]) {
+    const prevStart = _eyeGroupStart(candidate - 1);
+    if (prevStart === candidate) break;
+    candidate = prevStart;
+  }
+  if (state.skipFlags[candidate]) {
+    setStatus("前の目はありません");
+    return;
+  }
+  loadSample(candidate);
 }
 
 function jumpToNextUnannotated() {
   // 現在位置の次から探す
   for (let i = state.currentIdx + 1; i < state.total; i++) {
-    if (!state.annotationStatus[i]) { loadSample(i); return; }
+    if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
   }
   // 先頭から現在位置まで折り返し検索
   for (let i = 0; i < state.currentIdx; i++) {
-    if (!state.annotationStatus[i]) { loadSample(i); return; }
+    if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
   }
   setStatus("全サンプルのアノテーションが完了しています！");
 }
@@ -178,6 +202,7 @@ async function loadSample(idx) {
     state.tPred       = data.t_pred ?? null;
     state.labelSource = data.label_source ?? null;
     state.confidence  = data.confidence  ?? null;
+    state.skipFlag    = data.skip_flag ?? false;
     state.imageB64    = data.image_b64;
     state.faceB64     = data.face_b64;
     state.patchB64    = data.patch_b64;
@@ -193,6 +218,7 @@ async function loadSample(idx) {
 
     updateProgress();
     updateLabelSourceBadge();
+    updateSkipImageButton();
     if (state.imageB64) fullImg.src = "data:image/jpeg;base64," + state.imageB64;
     if (state.faceB64)  faceImg.src = "data:image/jpeg;base64," + state.faceB64;
     drawPatch();
@@ -335,6 +361,50 @@ function setStatus(msg) {
 }
 
 // ---------------------------------------------------------------------------
+// Skip image toggle
+// ---------------------------------------------------------------------------
+function updateSkipImageButton() {
+  if (state.skipFlag) {
+    btnSkipImage.textContent = "🚫 スキップ解除";
+    btnSkipImage.classList.add("skipped");
+  } else {
+    btnSkipImage.textContent = "🚫 スキップ画像";
+    btnSkipImage.classList.remove("skipped");
+  }
+}
+
+btnSkipImage.addEventListener("click", async () => {
+  btnSkipImage.disabled = true;
+  try {
+    const newSkip = !state.skipFlag;
+    const result = await apiFetch(`/api/skip_image/${state.currentIdx}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skip: newSkip }),
+    });
+    state.skipFlag = newSkip;
+    // 同画像の全サンプルの skipFlags を更新
+    const currentMeta = state.sampleMeta[state.currentIdx];
+    if (currentMeta) {
+      for (let i = 0; i < state.total; i++) {
+        if (state.sampleMeta[i] && state.sampleMeta[i].image_path === currentMeta.image_path) {
+          state.skipFlags[i] = newSkip;
+        }
+      }
+    }
+    updateSkipImageButton();
+    setStatus(newSkip
+      ? `✅ この画像をスキップ対象にしました (${result.updated} サンプル)`
+      : `✅ この画像のスキップを解除しました (${result.updated} サンプル)`
+    );
+  } catch (err) {
+    setStatus("スキップ設定エラー: " + err.message);
+  } finally {
+    btnSkipImage.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Patch canvas click → compute t
 // ---------------------------------------------------------------------------
 patchCanvas.addEventListener("click", (e) => {
@@ -431,7 +501,11 @@ inputJump.addEventListener("keydown", (e) => {
 });
 
 function advance(delta) {
-  const next = state.currentIdx + delta;
+  let next = state.currentIdx + delta;
+  // skip_flag=True のサンプルをスキップ
+  while (next >= 0 && next < state.total && state.skipFlags[next]) {
+    next += delta;
+  }
   if (next >= 0 && next < state.total) {
     loadSample(next);
   }
@@ -467,6 +541,7 @@ document.addEventListener("keydown", (e) => {
     case "s": case "S": advance(1); break;  // skip
     case "n": case "N": jumpToNextUnannotated(); break;  // next unannotated
     case "g": case "G": openGallery(); break;             // gallery
+    case "x": case "X": btnSkipImage.click(); break;     // toggle skip image
     case "Enter":
       if (state.currentT !== null) {
         saveCurrent().then(() => advance(1));
@@ -586,18 +661,38 @@ btnModelApply.addEventListener("click", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// Gallery
+// Gallery (paginated)
 // ---------------------------------------------------------------------------
 async function openGallery() {
   galleryOverlay.classList.add("open");
+  // 現在の画像が含まれるページを特定
+  if (state.imageKey) {
+    try {
+      const data = await apiFetch(`/api/gallery/find_page?image_key=${encodeURIComponent(state.imageKey)}&per_page=${state.galleryPerPage}`);
+      state.galleryPage = data.page;
+    } catch {
+      state.galleryPage = 1;
+    }
+  } else {
+    state.galleryPage = 1;
+  }
+  await loadGalleryPage();
+}
+
+async function loadGalleryPage() {
+  galleryGrid.innerHTML = "";
   const loadingDiv = document.createElement("div");
   loadingDiv.style.cssText = "color:#888; text-align:center; padding:20px; grid-column:1/-1;";
   loadingDiv.textContent = "読み込み中...";
-  galleryGrid.innerHTML = "";
   galleryGrid.appendChild(loadingDiv);
+
   try {
-    const items = await apiFetch("/api/gallery");
-    renderGallery(items);
+    const data = await apiFetch(`/api/gallery?page=${state.galleryPage}&per_page=${state.galleryPerPage}&skip_filter=${state.gallerySkipFilter}`);
+    state.galleryPage = data.page;
+    state.galleryTotalPages = data.total_pages;
+    state.galleryTotalImages = data.total_images;
+    renderGalleryPage(data.items);
+    renderPaginationControls();
   } catch (err) {
     const errDiv = document.createElement("div");
     errDiv.style.cssText = "color:#f44336; padding:20px; grid-column:1/-1;";
@@ -607,7 +702,7 @@ async function openGallery() {
   }
 }
 
-function renderGallery(items) {
+function renderGalleryPage(items) {
   galleryGrid.innerHTML = "";
 
   if (items.length === 0) {
@@ -628,14 +723,13 @@ function renderGallery(items) {
     const isCurrent = item.image_key === state.imageKey;
 
     const card = document.createElement("div");
-    card.className = `gallery-card ${statusClass}${isCurrent ? " current" : ""}`;
+    card.className = `gallery-card ${statusClass}${isCurrent ? " current" : ""}${item.skipped ? " skipped" : ""}`;
 
-    // サムネイル画像
+    // サムネイル画像（個別API経由）
     const img = document.createElement("img");
-    if (item.thumbnail_b64) {
-      img.src = `data:image/jpeg;base64,${item.thumbnail_b64}`;
-    }
+    img.src = `/api/thumbnail?image_path=${encodeURIComponent(item.image_path)}`;
     img.alt = item.image_key;
+    img.loading = "lazy";
 
     // 進捗バッジ（画像右上に重ねて表示）
     const badge = document.createElement("div");
@@ -646,6 +740,14 @@ function renderGallery(items) {
     const doneMark = document.createElement("div");
     doneMark.className = "gallery-done-mark";
     doneMark.textContent = "✓ 完了";
+
+    // スキップバッジ（画像左上、完了マークと重複しないよう下にずらす）
+    if (item.skipped) {
+      const skipBadge = document.createElement("div");
+      skipBadge.className = "gallery-skip-badge";
+      skipBadge.textContent = "SKIP";
+      card.appendChild(skipBadge);
+    }
 
     // ファイル名ラベル（下部）
     const label = document.createElement("div");
@@ -674,7 +776,55 @@ function renderGallery(items) {
   }
 }
 
+function renderPaginationControls() {
+  let paginationDiv = document.getElementById("gallery-pagination");
+  if (!paginationDiv) {
+    paginationDiv = document.createElement("div");
+    paginationDiv.id = "gallery-pagination";
+    const modal = document.getElementById("gallery-modal");
+    const grid = document.getElementById("gallery-grid");
+    modal.insertBefore(paginationDiv, grid);
+  }
+
+  paginationDiv.innerHTML = "";
+
+  const prevBtn = document.createElement("button");
+  prevBtn.textContent = "\u2190 前へ";
+  prevBtn.disabled = state.galleryPage <= 1;
+  prevBtn.addEventListener("click", () => {
+    state.galleryPage--;
+    loadGalleryPage();
+  });
+
+  const pageInfo = document.createElement("span");
+  pageInfo.style.cssText = "color:#a8dadc; font-size:0.85rem;";
+  pageInfo.textContent = `${state.galleryPage} / ${state.galleryTotalPages} ページ (${state.galleryTotalImages} 画像)`;
+
+  const nextBtn = document.createElement("button");
+  nextBtn.textContent = "次へ \u2192";
+  nextBtn.disabled = state.galleryPage >= state.galleryTotalPages;
+  nextBtn.addEventListener("click", () => {
+    state.galleryPage++;
+    loadGalleryPage();
+  });
+
+  paginationDiv.appendChild(prevBtn);
+  paginationDiv.appendChild(pageInfo);
+  paginationDiv.appendChild(nextBtn);
+}
+
 btnGallery.addEventListener("click", openGallery);
+
+// ギャラリータブ切替
+document.querySelectorAll(".gallery-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".gallery-tab").forEach(t => t.classList.remove("active"));
+    tab.classList.add("active");
+    state.gallerySkipFilter = tab.dataset.filter;
+    state.galleryPage = 1;
+    loadGalleryPage();
+  });
+});
 
 btnGalleryClose.addEventListener("click", () => {
   galleryOverlay.classList.remove("open");
