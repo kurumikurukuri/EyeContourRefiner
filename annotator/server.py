@@ -28,7 +28,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import cv2
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -61,6 +61,13 @@ _ALLOWED_MODEL_DIRS = [
     _PROJECT_ROOT / "experiments",
 ]
 
+# インメモリサンプルキャッシュ（77MB JSONの毎回パース回避）
+_samples_cache: Optional[List[Dict[str, Any]]] = None
+
+# 画像グルーピングインデックス（ギャラリー用）
+_image_index: Optional[Dict[str, Dict[str, int]]] = None  # image_path → {first_pos, total, annotated}
+_image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
+
 # アノテーション書き込みの競合状態防止用ロック
 _samples_lock = threading.Lock()
 
@@ -76,8 +83,12 @@ _MAX_THUMBNAIL_CACHE = 500
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """アプリケーション起動時にモデルを読み込む。"""
+    """アプリケーション起動時にモデルとサンプルを読み込む。"""
     _try_load_infer_model()
+    _load_samples()
+    _build_image_index()
+    logger.info("Samples loaded: %d entries", len(_samples_cache) if _samples_cache else 0)
+    logger.info("Image index built: %d images", len(_image_order) if _image_order else 0)
     yield
 
 
@@ -281,15 +292,69 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 # ---------------------------------------------------------------------------
 
 def _load_samples() -> List[Dict[str, Any]]:
+    """サンプル一覧を返す。初回のみディスクから読み込み、以降はメモリキャッシュを使用。"""
+    global _samples_cache
+    if _samples_cache is not None:
+        return _samples_cache
     if not SAMPLES_PATH.exists():
-        return []
-    return json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
+        _samples_cache = []
+        return _samples_cache
+    _samples_cache = json.loads(SAMPLES_PATH.read_text(encoding="utf-8"))
+    return _samples_cache
 
 
 def _save_samples(samples: List[Dict[str, Any]]) -> None:
+    """サンプル一覧をメモリキャッシュとディスクの両方に保存。"""
+    global _samples_cache
+    _samples_cache = samples
     SAMPLES_PATH.write_text(
         json.dumps(samples, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+
+
+def _build_image_index() -> None:
+    """全サンプルをスキャンし、画像パス単位のグループインデックスを構築する。"""
+    global _image_index, _image_order
+    samples = _load_samples()
+    index: Dict[str, Dict[str, int]] = {}
+    order: List[str] = []
+    for pos, s in enumerate(samples):
+        key = s["image_path"]
+        if key not in index:
+            index[key] = {"first_pos": pos, "total": 0, "annotated": 0, "skipped": False}
+            order.append(key)
+        index[key]["total"] += 1
+        if s.get("t") is not None:
+            index[key]["annotated"] += 1
+        if s.get("skip_flag", False):
+            index[key]["skipped"] = True
+    _image_index = index
+    _image_order = order
+
+
+def _update_image_index_for_sample(
+    sample: Dict[str, Any],
+    old_t: Optional[float],
+    new_t: Optional[float],
+) -> None:
+    """単一サンプルの t 変更に応じてインデックスを差分更新する。"""
+    if _image_index is None:
+        return
+    key = sample["image_path"]
+    entry = _image_index.get(key)
+    if entry is None:
+        _build_image_index()
+        return
+    if old_t is None and new_t is not None:
+        entry["annotated"] += 1
+    elif old_t is not None and new_t is None:
+        entry["annotated"] -= 1
+
+
+def _invalidate_samples_cache() -> None:
+    """外部プロセスによるJSON変更後にキャッシュを無効化する。"""
+    global _samples_cache
+    _samples_cache = None
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +404,10 @@ class AnnotateRequest(BaseModel):
 class ModelSelectRequest(BaseModel):
     paths: Optional[List[str]] = None   # 個別ファイル指定（後方互換）
     exp_dir: Optional[str] = None       # 実験フォルダ指定（fold*.pt を自動収集）
+
+
+class SkipImageRequest(BaseModel):
+    skip: bool
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +595,7 @@ def get_samples_summary():
                 "point_index": s["point_index"],
                 "t": s.get("t"),
                 "label_source": s.get("label_source"),
+                "skip_flag": s.get("skip_flag", False),
             }
             for s in samples
         ],
@@ -671,6 +741,7 @@ def get_sample(idx: int):
         "image_path": sample["image_path"],
         "label_source": sample.get("label_source"),
         "confidence": sample.get("confidence"),
+        "skip_flag": sample.get("skip_flag", False),
     }
 
 
@@ -702,6 +773,8 @@ def annotate(idx: int, body: AnnotateRequest):
         if idx < 0 or idx >= len(samples):
             raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
+        old_t = samples[idx].get("t")
+
         def _update(i: int, s: dict) -> dict:
             if i != idx:
                 return s
@@ -712,8 +785,37 @@ def annotate(idx: int, body: AnnotateRequest):
         samples = [_update(i, s) for i, s in enumerate(samples)]
         _save_samples(samples)
 
+    _update_image_index_for_sample(samples[idx], old_t, t_raw)
+
     saved = samples[idx]
     return {"ok": True, "idx": idx, "t": body.t, "label_source": saved.get("label_source")}
+
+
+@app.post("/api/skip_image/{idx}")
+def skip_image(idx: int, body: SkipImageRequest):
+    """指定サンプルと同じ画像の全サンプルの skip_flag を一括更新する。"""
+    with _samples_lock:
+        samples = _load_samples()
+        if idx < 0 or idx >= len(samples):
+            raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+
+        image_path = samples[idx]["image_path"]
+        updated_count = 0
+
+        def _update_skip(i: int, s: dict) -> dict:
+            nonlocal updated_count
+            if s["image_path"] == image_path:
+                if s.get("skip_flag", False) != body.skip:
+                    updated_count += 1
+                return {**s, "skip_flag": body.skip}
+            return s
+
+        samples = [_update_skip(i, s) for i, s in enumerate(samples)]
+        _save_samples(samples)
+
+    _build_image_index()
+
+    return {"ok": True, "updated": updated_count, "skip": body.skip}
 
 
 @app.post("/api/apply_pred_eye/{idx}")
@@ -724,96 +826,136 @@ def apply_pred_eye(idx: int):
     if not has_model:
         raise HTTPException(status_code=400, detail="推論モデルが読み込まれていません")
 
-    samples = _load_samples()
-    if idx < 0 or idx >= len(samples):
-        raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
-
-    current = samples[idx]
-    image_path = current["image_path"]
-    face_index = current.get("face_index")
-    part_name = current.get("part_name", "")
-
-    targets = [
-        s for s in samples
-        if s["image_path"] == image_path
-        and s.get("face_index") == face_index
-        and s.get("part_name") == part_name
-        and s.get("t") is None
-    ]
-
-    if not targets:
-        return {"ok": True, "updated": 0, "message": "未ラベルのサンプルはありません"}
-
-    try:
-        image_rgb = _load_image_rgb(image_path)
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-
-    predictions: Dict[int, float] = {}
-    for s in targets:
-        is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
-        t_norm = _predict_t(image_rgb, float(s["px"]), float(s["py"]), float(s["qx"]), float(s["qy"]), is_upper)
-        if t_norm is not None:
-            predictions[s["idx"]] = t_norm * (T_MAX - T_MIN) + T_MIN
-
-    if not predictions:
-        raise HTTPException(status_code=500, detail="全サンプルの予測に失敗しました")
-
     with _samples_lock:
         samples = _load_samples()
+        if idx < 0 or idx >= len(samples):
+            raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+
+        current = samples[idx]
+        image_path = current["image_path"]
+        face_index = current.get("face_index")
+        part_name = current.get("part_name", "")
+
+        targets = [
+            s for s in samples
+            if s["image_path"] == image_path
+            and s.get("face_index") == face_index
+            and s.get("part_name") == part_name
+            and s.get("t") is None
+        ]
+
+        if not targets:
+            return {"ok": True, "updated": 0, "message": "未ラベルのサンプルはありません"}
+
+        try:
+            image_rgb = _load_image_rgb(image_path)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+        predictions: Dict[int, float] = {}
+        for s in targets:
+            is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
+            t_norm = _predict_t(image_rgb, float(s["px"]), float(s["py"]), float(s["qx"]), float(s["qy"]), is_upper)
+            if t_norm is not None:
+                predictions[s["idx"]] = t_norm * (T_MAX - T_MIN) + T_MIN
+
+        if not predictions:
+            raise HTTPException(status_code=500, detail="全サンプルの予測に失敗しました")
+
         updated = [{**s, "t": predictions[s["idx"]], "label_source": "auto_v1"} if s["idx"] in predictions else s
                    for s in samples]
         _save_samples(updated)
+
+    _build_image_index()
 
     return {"ok": True, "updated": len(predictions)}
 
 
 @app.get("/api/gallery")
-def get_gallery():
-    """各画像のサムネイルとアノテーション進捗を返す。"""
-    samples = _load_samples()
+def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_filter: str = Query("all")):
+    """ページネーション対応のギャラリー。メタデータのみ返す（サムネイルは別API）。"""
+    if _image_index is None or _image_order is None:
+        _build_image_index()
 
-    # image_path でグループ化（挿入順を保持）。first_pos は配列位置を記録する。
-    groups: Dict[str, Dict] = {}
-    for pos, s in enumerate(samples):
-        key = s["image_path"]
-        if key not in groups:
-            groups[key] = {"samples": [], "first_pos": pos}
-        groups[key]["samples"].append(s)
+    # skip フィルタリング
+    filtered_order = _image_order
+    if skip_filter == "active":
+        filtered_order = [p for p in _image_order if not _image_index[p].get("skipped", False)]
+    elif skip_filter == "skipped":
+        filtered_order = [p for p in _image_order if _image_index[p].get("skipped", False)]
 
-    result = []
-    for image_path, group in groups.items():
-        group_samples = group["samples"]
-        total = len(group_samples)
-        annotated = sum(1 for s in group_samples if s.get("t") is not None)
-        first_idx = group["first_pos"]  # 配列位置（/api/sample/{idx} で使用）
+    total_images = len(filtered_order)
+    total_pages = max(1, (total_images + per_page - 1) // per_page)
+    page = max(1, min(page, total_pages))
 
-        # キャッシュにあればそのまま使用（LRU: 末尾に移動）
-        with _thumbnail_cache_lock:
-            thumbnail_b64: Optional[str] = _thumbnail_cache.get(image_path)
-            if thumbnail_b64 is not None:
-                _thumbnail_cache.move_to_end(image_path)  # LRU 順序維持
-        if thumbnail_b64 is None:
-            try:
-                image_rgb = _load_image_rgb(image_path)
-                new_thumbnail = _to_base64_jpeg(image_rgb, max_side=200)
-                with _thumbnail_cache_lock:
-                    if len(_thumbnail_cache) >= _MAX_THUMBNAIL_CACHE:
-                        _thumbnail_cache.popitem(last=False)  # 最も古いエントリを削除
-                    _thumbnail_cache[image_path] = new_thumbnail
-                thumbnail_b64 = new_thumbnail
-            except Exception as exc:
-                logger.warning("サムネイル生成に失敗しました %s: %s", image_path, exc)
+    start = (page - 1) * per_page
+    end = min(start + per_page, total_images)
+    page_images = filtered_order[start:end]
 
-        result.append({
+    items = []
+    for image_path in page_images:
+        entry = _image_index[image_path]
+        items.append({
             "image_key": Path(image_path).name,
-            "thumbnail_b64": thumbnail_b64,
-            "total": total,
-            "annotated": annotated,
-            "first_idx": first_idx,
+            "image_path": image_path,
+            "total": entry["total"],
+            "annotated": entry["annotated"],
+            "first_idx": entry["first_pos"],
+            "skipped": entry.get("skipped", False),
         })
 
-    return result
+    return {
+        "items": items,
+        "page": page,
+        "per_page": per_page,
+        "total_images": total_images,
+        "total_pages": total_pages,
+    }
+
+
+@app.get("/api/gallery/find_page")
+def gallery_find_page(image_key: str = "", per_page: int = Query(80, ge=1, le=200)):
+    """指定画像が含まれるページ番号を返す。"""
+    if _image_order is None:
+        _build_image_index()
+    for i, path in enumerate(_image_order):
+        if Path(path).name == image_key:
+            return {"page": (i // per_page) + 1, "image_index": i}
+    return {"page": 1, "image_index": 0}
+
+
+@app.get("/api/thumbnail")
+def get_thumbnail(image_path: str, max_side: int = 200):
+    """個別サムネイル画像をJPEGで返す。ブラウザキャッシュを利用。"""
+    # パストラバーサル防止: インデックスに登録されたパスのみ許可
+    if _image_index is None:
+        _build_image_index()
+    if image_path not in _image_index:
+        raise HTTPException(status_code=404, detail=f"画像が見つかりません: {image_path}")
+
+    # LRUキャッシュを確認
+    with _thumbnail_cache_lock:
+        thumbnail_b64 = _thumbnail_cache.get(image_path)
+        if thumbnail_b64 is not None:
+            _thumbnail_cache.move_to_end(image_path)
+
+    if thumbnail_b64 is None:
+        try:
+            image_rgb = _load_image_rgb(image_path)
+            thumbnail_b64 = _to_base64_jpeg(image_rgb, max_side=max_side)
+            with _thumbnail_cache_lock:
+                if len(_thumbnail_cache) >= _MAX_THUMBNAIL_CACHE:
+                    _thumbnail_cache.popitem(last=False)
+                _thumbnail_cache[image_path] = thumbnail_b64
+        except Exception as exc:
+            raise HTTPException(status_code=404, detail=f"サムネイル生成失敗: {exc}")
+
+    img_bytes = base64.b64decode(thumbnail_b64)
+    return Response(
+        content=img_bytes,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -911,12 +1053,8 @@ def _render_eye_crop(
         return None
 
     # 色設定: t_true=緑系, t_pred=橙系
-    if use_pred:
-        color_upper = (0, 0,   0)
-        color_lower = (0, 0,   0)
-    else:
-        color_upper = (  0, 0, 0)
-        color_lower = (  0, 0,  0)
+    color_upper = (  0, 0, 255)
+    color_lower = (  0, 0,  255)
 
     # 先に拡大してから描画（拡大後の座標で thickness=1 にすることで線を細く保つ）
     crop_h, crop_w = crop.shape[:2]
@@ -934,14 +1072,14 @@ def _render_eye_crop(
     for i in range(len(upper_pts) - 1):
         cv2.line(crop, upper_pts[i], upper_pts[i + 1], color_upper, 1, cv2.LINE_AA)
     for pt in upper_pts:
-        cv2.circle(crop, pt, 5, color_upper, -1)
+        cv2.circle(crop, pt, 7, color_upper, -1)
 
     # lower: 破線
     lower_pts = [to_crop(rx, ry) for rx, ry in points_by_sub["lower"]]
     for i in range(len(lower_pts) - 1):
         _draw_dashed_line(crop, lower_pts[i], lower_pts[i + 1], color_lower, 1)
     for pt in lower_pts:
-        cv2.circle(crop, pt, 5, color_lower, -1)
+        cv2.circle(crop, pt, 7, color_lower, -1)
 
     return _to_base64_png(crop)
 

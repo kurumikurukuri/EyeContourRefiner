@@ -7,6 +7,8 @@ Chart.defaults.font.size     = 11;
 /* ── State ── */
 const charts  = {};   // id → Chart instance
 const loaded  = new Set();
+let currentExpPath = '';  // エラー分析で参照する実験パス（空 = data/predictions.csv）
+let currentSplit = 'test'; // train / test / all
 
 /* ── Chart helper ── */
 function mkBar(id, labels, data, opts = {}) {
@@ -42,6 +44,50 @@ function mkBar(id, labels, data, opts = {}) {
       scales: {
         x: { grid: { color: '#1a2a4a' }, ticks: { maxRotation: 45 } },
         y: { grid: { color: '#1a2a4a' }, beginAtZero: true },
+      },
+    },
+  });
+}
+
+function mkBoxplot(id, labels, datasets) {
+  if (charts[id]) charts[id].destroy();
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  charts[id] = new Chart(ctx.getContext('2d'), {
+    type: 'boxplot',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: {
+        legend: { display: true, position: 'top', labels: { boxWidth: 12, color: '#ccc', padding: 12 } },
+      },
+      scales: {
+        x: { grid: { color: '#1a2a4a' } },
+        y: { grid: { color: '#1a2a4a' }, beginAtZero: false, ticks: { color: '#888' } },
+      },
+    },
+  });
+}
+
+function mkViolin(id, labels, datasets) {
+  if (charts[id]) charts[id].destroy();
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  charts[id] = new Chart(ctx.getContext('2d'), {
+    type: 'violin',
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 300 },
+      plugins: {
+        legend: { display: datasets.length > 1, position: 'top', labels: { boxWidth: 12, color: '#ccc', padding: 12 } },
+      },
+      scales: {
+        x: { grid: { color: '#1a2a4a' } },
+        y: { grid: { color: '#1a2a4a' }, beginAtZero: true, ticks: { color: '#888' } },
       },
     },
   });
@@ -429,8 +475,8 @@ function renderQuality(d) {
 
     <div class="section-title">upper/lower × Point Index 別統計 (14パターン)</div>
     <div class="card" style="margin-bottom:16px">
-      <div class="card-title">平均 t値 — upper / lower 比較</div>
-      <div class="chart-wrap-tall"><canvas id="pt-sub-mean"></canvas></div>
+      <div class="card-title">t値分布 — upper / lower 比較 (箱ひげ図)</div>
+      <div class="chart-wrap-tall"><canvas id="pt-sub-box"></canvas></div>
     </div>
     <div class="card">
       <div class="card-title">upper/lower × Point Index 別 件数・統計</div>
@@ -458,20 +504,30 @@ function renderQuality(d) {
   const pqLabels = pq_distance.histogram.bins.map(b => b.toFixed(1));
   mkBar('pq-hist', pqLabels, pq_distance.histogram.counts, { color: 'rgba(255,152,0,0.75)' });
 
-  // Draw 14-pattern grouped bar chart
+  // Draw 14-pattern box plot
   const ptAxisLabels = allPts.map(k => `P${k}`);
-  mkGroupedBar('pt-sub-mean', ptAxisLabels, [
+  mkBoxplot('pt-sub-box', ptAxisLabels, [
     {
       label: 'upper',
-      data: allPts.map(k => upper[k]?.mean ?? null),
-      backgroundColor: 'rgba(26,120,194,0.8)',
-      borderRadius: 2, borderWidth: 0,
+      data: allPts.map(k => {
+        const s = upper[k];
+        return s ? { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max } : null;
+      }),
+      backgroundColor: 'rgba(79,195,247,0.35)',
+      borderColor: 'rgba(79,195,247,0.9)',
+      borderWidth: 1.5,
+      medianColor: '#4fc3f7',
     },
     {
       label: 'lower',
-      data: allPts.map(k => lower[k]?.mean ?? null),
-      backgroundColor: 'rgba(255,152,0,0.8)',
-      borderRadius: 2, borderWidth: 0,
+      data: allPts.map(k => {
+        const s = lower[k];
+        return s ? { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max } : null;
+      }),
+      backgroundColor: 'rgba(255,183,77,0.35)',
+      borderColor: 'rgba(255,183,77,0.9)',
+      borderWidth: 1.5,
+      medianColor: '#ffb74d',
     },
   ]);
 }
@@ -491,52 +547,77 @@ async function loadExperiments() {
 
 function renderExperiments(d) {
   if (!d.experiments || d.experiments.length === 0) {
-    const msg = d.message || 'runs/ に実験データがありません';
+    const msg = d.message || 'experiments/ に実験データがありません';
     html('experiments-content', `<div class="info-msg">${msg}</div>`);
     return;
   }
 
   const exps = d.experiments;
 
-  // Build table rows
-  const rows = exps.map(e => {
-    const mae   = e.best_val_mae != null ? e.best_val_mae.toFixed(5) : '–';
-    const folds = e.folds != null ? `${e.folds} fold` : '–';
-    const errMsg = e.error ? `<span style="color:var(--muted);font-size:0.75rem">${e.error}</span>` : '';
-    return `<tr>
-      <td style="font-size:0.8rem;word-break:break-all">${e.name}</td>
-      <td class="num">${folds}</td>
-      <td class="num ${e.best_val_mae != null ? (e.best_val_mae < 0.05 ? 'high' : '') : ''}">${mae}</td>
-      <td>${errMsg}</td>
-    </tr>`;
-  }).join('');
+  // グループ別に分類
+  const groups = {};
+  exps.forEach(e => {
+    const g = e.group || '(ungrouped)';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(e);
+  });
 
-  // Chart: best_val_mae per experiment
-  const withMae = exps.filter(e => e.best_val_mae != null);
-  const expNames = withMae.map(e => e.name.replace(/^(kfold|ensemble)-/, '').substring(0, 30));
-  const maeVals  = withMae.map(e => e.best_val_mae);
+  // テーブル行生成（グループヘッダー付き）
+  let rows = '';
+  Object.entries(groups).forEach(([groupName, groupExps]) => {
+    rows += `<tr><td colspan="7" style="background:#0d1a30;color:#a8dadc;font-size:0.75rem;padding:4px 8px;font-weight:bold">${esc(groupName)} (${groupExps.length}件)</td></tr>`;
+    groupExps.forEach(e => {
+      const cvMae = e.cv_mae != null ? e.cv_mae.toFixed(5) : '–';
+      const holdoutMae = e.holdout_mae != null ? e.holdout_mae.toFixed(5) : '–';
+      const cvClass = e.cv_mae != null && e.cv_mae < 0.05 ? 'high' : '';
+      const pqBadge = e.use_pq_ratio
+        ? '<span style="color:#a5d6a7;font-size:0.75rem">pq✓</span>'
+        : '<span style="color:#555;font-size:0.75rem">pq–</span>';
+      const predLink = e.has_predictions
+        ? `<button class="tab-link-btn" onclick="loadErrorsForExp('${esc(e.exp_dir)}')" style="font-size:0.75rem;padding:2px 8px">誤差分析</button>`
+        : '';
+      const reportLink = e.has_error_report
+        ? `<a href="/${esc(e.exp_dir)}/error_report.html" target="_blank" style="font-size:0.75rem;color:#80cbc4">レポート</a>`
+        : '';
+      rows += `<tr>
+        <td style="font-size:0.78rem;word-break:break-all;max-width:220px">${esc(e.exp_name || '')}</td>
+        <td class="num" style="font-size:0.78rem">${e.lr ?? '–'}</td>
+        <td class="num" style="font-size:0.78rem">${e.weight_decay ?? '–'}</td>
+        <td>${pqBadge}</td>
+        <td class="num ${cvClass}">${cvMae}</td>
+        <td class="num">${holdoutMae}</td>
+        <td>${predLink} ${reportLink}</td>
+      </tr>`;
+    });
+  });
+
+  // 比較チャート用データ（CV MAE + Holdout MAE）
+  const withMae = exps.filter(e => e.cv_mae != null);
+  const expLabels = withMae.map(e => (e.exp_name || '').substring(0, 25));
+  const cvVals = withMae.map(e => e.cv_mae);
+  const holdoutVals = withMae.map(e => e.holdout_mae);
 
   const h = `
     <div class="section-title">実験一覧 (${exps.length}件)</div>
     <div class="table-wrap" style="margin-bottom:20px">
       <table class="data-table">
-        <thead><tr><th>実験名</th><th>Folds</th><th>Best Val MAE</th><th>備考</th></tr></thead>
+        <thead><tr><th>実験名</th><th>LR</th><th>WD</th><th>pq</th><th>CV MAE</th><th>Holdout MAE</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
     ${withMae.length > 1 ? `
-    <div class="section-title">Best Val MAE 比較</div>
+    <div class="section-title">MAE 比較 (CV / Holdout)</div>
     <div class="card">
-      <div class="chart-wrap-tall"><canvas id="exp-mae"></canvas></div>
+      <div class="chart-wrap-tall"><canvas id="exp-mae-chart"></canvas></div>
     </div>` : ''}`;
 
   html('experiments-content', h);
 
   if (withMae.length > 1) {
-    // Color gradient: lowest MAE = greenest
-    const minMae = Math.min(...maeVals);
-    const maxMae = Math.max(...maeVals);
-    const barColors = maeVals.map(v => {
+    const minMae = Math.min(...cvVals.filter(v => v != null));
+    const maxMae = Math.max(...cvVals.filter(v => v != null));
+    const cvColors = cvVals.map(v => {
+      if (v == null) return 'rgba(100,100,100,0.4)';
       const ratio = maxMae > minMae ? (v - minMae) / (maxMae - minMae) : 0;
       const r = Math.round(26  + ratio * (244 - 26));
       const g = Math.round(120 + ratio * (67  - 120));
@@ -544,31 +625,51 @@ function renderExperiments(d) {
       return `rgba(${r},${g},${b},0.8)`;
     });
 
-    if (charts['exp-mae']) charts['exp-mae'].destroy();
-    const ctx = document.getElementById('exp-mae');
+    if (charts['exp-mae-chart']) charts['exp-mae-chart'].destroy();
+    const ctx = document.getElementById('exp-mae-chart');
     if (ctx) {
-      charts['exp-mae'] = new Chart(ctx.getContext('2d'), {
+      charts['exp-mae-chart'] = new Chart(ctx.getContext('2d'), {
         type: 'bar',
         data: {
-          labels: expNames,
-          datasets: [{ data: maeVals, backgroundColor: barColors, borderRadius: 2, borderWidth: 0 }],
+          labels: expLabels,
+          datasets: [
+            { label: 'CV MAE', data: cvVals, backgroundColor: cvColors, borderRadius: 2, borderWidth: 0 },
+            { label: 'Holdout MAE', data: holdoutVals, backgroundColor: 'rgba(255,152,0,0.5)', borderRadius: 2, borderWidth: 0 },
+          ],
         },
         options: {
           responsive: true,
           maintainAspectRatio: false,
           animation: { duration: 300 },
           plugins: {
-            legend: { display: false },
-            tooltip: { callbacks: { label: c => ` MAE: ${c.formattedValue}` } },
+            legend: { labels: { color: '#ccc', font: { size: 11 } } },
+            tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.formattedValue}` } },
           },
           scales: {
-            x: { grid: { color: '#1a2a4a' }, ticks: { maxRotation: 45, font: { size: 10 } } },
-            y: { grid: { color: '#1a2a4a' }, beginAtZero: false },
+            x: { grid: { color: '#1a2a4a' }, ticks: { maxRotation: 45, font: { size: 10 }, color: '#888' } },
+            y: { grid: { color: '#1a2a4a' }, beginAtZero: false, ticks: { color: '#888' } },
           },
         },
       });
     }
   }
+}
+
+function esc(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+async function loadErrorsForExp(expDir) {
+  // 実験比較タブ→エラー分析タブに遷移してその実験のデータを表示
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  const errTab = document.querySelector('.tab-btn[data-tab="errors"]');
+  if (errTab) errTab.classList.add('active');
+  const errPanel = document.getElementById('tab-errors');
+  if (errPanel) errPanel.classList.add('active');
+
+  currentExpPath = expDir;
+  await loadErrors();
 }
 
 /* ─────────────────────────────────────────────
@@ -577,16 +678,59 @@ function renderExperiments(d) {
 async function loadErrors() {
   html('errors-content', spinner());
   try {
-    const d = await api('/api/dashboard/errors');
-    renderErrors(d);
+    // 実験セレクターのデータを取得
+    const expData = await api('/api/dashboard/experiments');
+    const expsWithPred = (expData.experiments || []).filter(e => e.has_predictions);
+
+    const params = new URLSearchParams();
+    if (currentExpPath) params.set('exp_path', currentExpPath);
+    if (currentSplit) params.set('split', currentSplit);
+    const qs = params.toString();
+    const url = `/api/dashboard/errors${qs ? '?' + qs : ''}`;
+    const d = await api(url);
+
+    // 実験セレクターHTML
+    const selectorOptions = [
+      `<option value="" ${!currentExpPath ? 'selected' : ''}>data/predictions.csv (デフォルト)</option>`,
+      ...expsWithPred.map(e =>
+        `<option value="${esc(e.exp_dir)}" ${currentExpPath === e.exp_dir ? 'selected' : ''}>${esc(e.exp_name || e.exp_dir)}</option>`
+      ),
+    ].join('');
+
+    // split セレクターHTML
+    const splitOptions = [
+      { value: 'test', label: 'test (test_predictions.csv)' },
+      { value: 'train', label: 'train (train_predictions.csv)' },
+      { value: 'all', label: 'all (train + test)' },
+    ].map(o =>
+      `<option value="${o.value}" ${currentSplit === o.value ? 'selected' : ''}>${o.label}</option>`
+    ).join('');
+
+    const selectorHtml = `
+      <div style="margin-bottom:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="font-size:0.82rem;color:#888">参照実験:</label>
+        <select id="err-exp-select" style="background:#0d0d1a;color:#e0e0e0;border:1px solid #1a3460;border-radius:5px;padding:4px 8px;font-size:0.82rem">
+          ${selectorOptions}
+        </select>
+        <label style="font-size:0.82rem;color:#888;margin-left:8px">データ分割:</label>
+        <select id="err-split-select" style="background:#0d0d1a;color:#e0e0e0;border:1px solid #1a3460;border-radius:5px;padding:4px 8px;font-size:0.82rem">
+          ${splitOptions}
+        </select>
+      </div>`;
+
+    renderErrors(d, selectorHtml);
   } catch (e) {
     html('errors-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
   }
 }
 
-function renderErrors(d) {
+function renderErrors(d, selectorHtml = '') {
   if (!d.available) {
-    html('errors-content', `<div class="info-msg">${d.message}</div>`);
+    html('errors-content', (selectorHtml || '') + `<div class="info-msg">${d.message}</div>`);
+    const sel = document.getElementById('err-exp-select');
+    if (sel) sel.addEventListener('change', onErrExpChange);
+    const splitSel = document.getElementById('err-split-select');
+    if (splitSel) splitSel.addEventListener('change', onErrSplitChange);
     return;
   }
 
@@ -606,23 +750,23 @@ function renderErrors(d) {
 
   // Breakdown charts
   const breakdownHtml = `
-    <div class="section-title">誤差の内訳 (MAE)</div>
+    <div class="section-title">誤差の分布</div>
     <div class="card-grid-3">
       <div class="card">
-        <div class="card-title">Part Name 別</div>
+        <div class="card-title">Part Name 別 (箱ひげ図)</div>
         <div class="chart-wrap"><canvas id="err-part"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-title">Sub Key 別</div>
+        <div class="card-title">Sub Key 別 (バイオリン図)</div>
         <div class="chart-wrap"><canvas id="err-sub"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-title">Point Index 別 (7パターン)</div>
+        <div class="card-title">Point Index 別 (バイオリン図)</div>
         <div class="chart-wrap"><canvas id="err-pt"></canvas></div>
       </div>
     </div>
     <div class="card" style="margin-bottom:20px">
-      <div class="card-title">upper/lower × Point Index 別 (14パターン)</div>
+      <div class="card-title">upper/lower × Point Index 別 (箱ひげ図)</div>
       <div class="chart-wrap-tall"><canvas id="err-sub-pt"></canvas></div>
     </div>`;
 
@@ -666,35 +810,73 @@ function renderErrors(d) {
       </table>
     </div>`;
 
-  html('errors-content', summaryCards + breakdownHtml + histHtml + topErrHtml);
+  html('errors-content', (selectorHtml || '') + summaryCards + breakdownHtml + histHtml + topErrHtml);
 
-  // Draw charts
-  const partLabels = Object.keys(b.by_part_name);
-  mkBar('err-part', partLabels, partLabels.map(k => b.by_part_name[k]), { color: 'rgba(244,67,54,0.75)' });
+  // セレクターイベント
+  const sel = document.getElementById('err-exp-select');
+  if (sel) sel.addEventListener('change', onErrExpChange);
+  const splitSel = document.getElementById('err-split-select');
+  if (splitSel) splitSel.addEventListener('change', onErrSplitChange);
 
-  const subLabels = Object.keys(b.by_sub_key);
-  mkBar('err-sub', subLabels, subLabels.map(k => b.by_sub_key[k]), { color: 'rgba(255,152,0,0.75)' });
+  // Draw charts (box/violin plots)
+  const raw = b.raw || {};
 
-  const ptLabels = Object.keys(b.by_point_index).sort();
-  mkBar('err-pt', ptLabels.map(k => `P${k}`), ptLabels.map(k => b.by_point_index[k]), { color: 'rgba(156,39,176,0.75)' });
+  // Part Name: boxplot
+  const partLabels = Object.keys(raw.by_part_name || b.by_part_name);
+  mkBoxplot('err-part', partLabels, [{
+    label: '誤差',
+    data: partLabels.map(k => (raw.by_part_name || {})[k] || []),
+    backgroundColor: 'rgba(244,67,54,0.3)',
+    borderColor: 'rgba(244,67,54,0.9)',
+    borderWidth: 1.5,
+    medianColor: '#ef5350',
+  }]);
 
-  // 14-pattern grouped bar
-  const subPt = b.by_sub_pt || {};
-  const errUpper = subPt['upper'] || {};
-  const errLower = subPt['lower'] || {};
+  // Sub Key: violin
+  const rawSub = raw.by_sub_key || {};
+  const subLabels = Object.keys(rawSub).length ? Object.keys(rawSub) : Object.keys(b.by_sub_key);
+  mkViolin('err-sub', subLabels, [{
+    label: '誤差',
+    data: subLabels.map(k => rawSub[k] || []),
+    backgroundColor: subLabels.map(k => k === 'upper' ? 'rgba(26,120,194,0.4)' : 'rgba(255,152,0,0.4)'),
+    borderColor: subLabels.map(k => k === 'upper' ? 'rgba(79,195,247,0.9)' : 'rgba(255,183,77,0.9)'),
+    borderWidth: 1.5,
+  }]);
+
+  // Point Index: violin
+  const rawPt = raw.by_point_index || {};
+  const ptLabels = Object.keys(rawPt).length
+    ? Object.keys(rawPt).sort()
+    : Object.keys(b.by_point_index).sort();
+  mkViolin('err-pt', ptLabels.map(k => `P${k}`), [{
+    label: '誤差',
+    data: ptLabels.map(k => rawPt[k] || []),
+    backgroundColor: 'rgba(156,39,176,0.4)',
+    borderColor: 'rgba(186,104,200,0.9)',
+    borderWidth: 1.5,
+  }]);
+
+  // upper/lower × Point Index: grouped boxplot
+  const rawSubPt = raw.by_sub_pt || {};
+  const errUpper = rawSubPt['upper'] || {};
+  const errLower = rawSubPt['lower'] || {};
   const errAllPts = [...new Set([...Object.keys(errUpper), ...Object.keys(errLower)])].sort();
-  mkGroupedBar('err-sub-pt', errAllPts.map(k => `P${k}`), [
+  mkBoxplot('err-sub-pt', errAllPts.map(k => `P${k}`), [
     {
       label: 'upper',
-      data: errAllPts.map(k => errUpper[k] ?? null),
-      backgroundColor: 'rgba(26,120,194,0.8)',
-      borderRadius: 2, borderWidth: 0,
+      data: errAllPts.map(k => errUpper[k] || []),
+      backgroundColor: 'rgba(26,120,194,0.35)',
+      borderColor: 'rgba(79,195,247,0.9)',
+      borderWidth: 1.5,
+      medianColor: '#4fc3f7',
     },
     {
       label: 'lower',
-      data: errAllPts.map(k => errLower[k] ?? null),
-      backgroundColor: 'rgba(255,152,0,0.8)',
-      borderRadius: 2, borderWidth: 0,
+      data: errAllPts.map(k => errLower[k] || []),
+      backgroundColor: 'rgba(255,152,0,0.35)',
+      borderColor: 'rgba(255,183,77,0.9)',
+      borderWidth: 1.5,
+      medianColor: '#ffb74d',
     },
   ]);
 
@@ -721,13 +903,29 @@ async function togglePatch(idx) {
   if (img.src) return; // already loaded
 
   try {
-    const res = await fetch(`/api/dashboard/errors/${idx}/patch`);
+    const params = new URLSearchParams();
+    if (currentExpPath) params.set('exp_path', currentExpPath);
+    if (currentSplit) params.set('split', currentSplit);
+    const patchUrl = `/api/dashboard/errors/${idx}/patch?${params.toString()}`;
+    const res = await fetch(patchUrl);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const b64 = await res.text();
     img.src = `data:image/png;base64,${b64}`;
   } catch (e) {
     img.alt = `エラー: ${e.message}`;
   }
+}
+
+function onErrExpChange(e) {
+  currentExpPath = e.target.value;
+  loaded.delete('errors');
+  loadErrors();
+}
+
+function onErrSplitChange(e) {
+  currentSplit = e.target.value;
+  loaded.delete('errors');
+  loadErrors();
 }
 
 /* ─────────────────────────────────────────────

@@ -44,6 +44,16 @@ from eyeliner.data.eyeliner_landmarks import EYELINER_CORRECTION_MAP  # noqa: E4
 logger = logging.getLogger(__name__)
 
 
+def _normalize_path(p: str) -> str:
+    """パス区切りを POSIX 形式（/）に正規化する。"""
+    return Path(p).as_posix()
+
+
+# サンプル生成用: {part_name: {sub_key: (int | ('edge', p, q), ...)}}。
+# ('edge', p, q) の並び順が point_index（0〜6）に対応する。
+EYELINER_SAMPLES_MAP = EYELINER_CORRECTION_MAP
+
+
 def _extract_samples_from_image(
     image_path: Path,
 ) -> Optional[List[Dict[str, Any]]]:
@@ -91,7 +101,7 @@ def _extract_samples_from_image(
             [[lm.x * w, lm.y * h] for lm in face_landmarks.landmark],
             dtype=np.float32,
         )
-        for part_name, sub_map in EYELINER_CORRECTION_MAP.items():
+        for part_name, sub_map in EYELINER_SAMPLES_MAP.items():
             for sub_key, index_list in sub_map.items():
                 # index_list の各要素は int（アンカー点）か ('edge', p, q) タプル（P-Q ペア）
                 # アノテーションが必要なのは ('edge', p, q) のみ
@@ -103,7 +113,7 @@ def _extract_samples_from_image(
                     px, py = coords[p_idx]
                     qx, qy = coords[q_idx]
                     samples.append({
-                        "image_path": str(image_path),
+                        "image_path": _normalize_path(str(image_path)),
                         "face_index": face_index,
                         "part_name": part_name,
                         "sub_key": sub_key,
@@ -146,8 +156,9 @@ def generate_samples(
         try:
             existing = json.loads(output_path.read_text(encoding="utf-8"))
             for entry in existing:
+                normalized_path = _normalize_path(entry["image_path"])
                 key = (
-                    entry["image_path"],
+                    normalized_path,
                     entry.get("face_index", 0),
                     entry["part_name"],
                     entry["sub_key"],

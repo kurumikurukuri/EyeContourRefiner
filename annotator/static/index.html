@@ -54,7 +54,12 @@
     #btn-apply-pred-eye:disabled { opacity: 0.4; cursor: not-allowed; }
     #btn-next-unannotated { background: #1a3a5c; border-color: #4fc3f7; }
     #btn-next-unannotated:hover { background: #4fc3f7; color: #000; }
-    
+
+    #btn-skip-image { background: #3a2a1a; border-color: #8a6d3b; }
+    #btn-skip-image:hover { background: #8a6d3b; }
+    #btn-skip-image.skipped { background: #d84315; border-color: #ff6e40; }
+    #btn-skip-image.skipped:hover { background: #ff6e40; }
+
     #btn-model { background: #3a1a5c; border-color: #b39ddb; }
     #btn-model:hover { background: #7e57c2; }
 
@@ -396,6 +401,15 @@
     }
     #btn-gallery-close:hover { color: #f44336; background: transparent; }
 
+    #gallery-pagination {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8px 4px;
+      margin-bottom: 8px;
+      flex-shrink: 0;
+    }
+
     #gallery-grid {
       overflow-y: auto;
       display: grid;
@@ -429,7 +443,7 @@
 
     .gallery-card img {
       width: 100%;
-      height: 150px;
+      aspect-ratio: 4 / 3;
       object-fit: contain;
       display: block;
       background: #060610;
@@ -490,6 +504,45 @@
       background: #12122a;
       border-top: 1px solid #222;
     }
+
+    /* ギャラリータブ */
+    .gallery-tabs {
+      display: flex;
+      gap: 0;
+      margin-bottom: 10px;
+      border-bottom: 1px solid #2a2a4a;
+      flex-shrink: 0;
+    }
+    .gallery-tab {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #888;
+      padding: 6px 16px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      transition: color 0.15s, border-color 0.15s;
+      border-radius: 0;
+    }
+    .gallery-tab:hover { color: #ccc; background: transparent; }
+    .gallery-tab.active {
+      color: #a8dadc;
+      border-bottom-color: #4fc3f7;
+    }
+
+    /* スキップ済みバッジ */
+    .gallery-skip-badge {
+      position: absolute;
+      top: 6px;
+      left: 6px;
+      background: rgba(216, 67, 21, 0.85);
+      color: #fff;
+      border-radius: 4px;
+      font-size: 0.6rem;
+      font-weight: bold;
+      padding: 1px 5px;
+    }
+    .gallery-card.skipped { border-color: #d84315; }
   </style>
 </head>
 <body>
@@ -509,6 +562,7 @@
   <button id="btn-next">次へ →</button>
   <button id="btn-next-eyes">次の目へ →</button>
   <button id="btn-next-unannotated" title="次の未アノテーション画像へ (N)">未完へ ⏭</button>
+  <button id="btn-skip-image" title="この画像をスキップ対象にする">🚫 スキップ画像</button>
   <input id="input-jump" type="number" min="0" placeholder="idx" title="インデックスを入力してEnter" />
   <button id="btn-jump">移動</button>
   <button id="btn-model" title="推論モデルを選択">🤖 モデル</button>
@@ -522,6 +576,11 @@
     <div id="gallery-header">
       <span id="gallery-title">🖼 画像ギャラリー</span>
       <button id="btn-gallery-close">✕</button>
+    </div>
+    <div class="gallery-tabs">
+      <button class="gallery-tab active" data-filter="all">すべて</button>
+      <button class="gallery-tab" data-filter="active">アクティブ</button>
+      <button class="gallery-tab" data-filter="skipped">スキップ済み</button>
     </div>
     <div id="gallery-grid"></div>
   </div>
@@ -600,6 +659,6 @@
   </div>
 </div>
 
-<script src="/static/annotator.js?v=14"></script>
+<script src="/static/annotator.js?v=15"></script>
 </body>
 </html>
