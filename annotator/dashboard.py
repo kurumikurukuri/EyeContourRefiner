@@ -108,32 +108,26 @@ def get_overview() -> Dict[str, Any]:
     annotated      = sum(1 for r in rows if r["t_float"] is not None)
     unique_images  = len(set(r.get("image_path", "") for r in rows))
 
-    by_part:         Dict[str, int] = {}
-    by_sub_key:      Dict[str, int] = {}
-    by_label_source: Dict[str, int] = {}
-    by_point_index:  Dict[str, int] = {str(i): 0 for i in range(7)}
+    by_part:        Dict[str, int] = {}
+    by_sub_key:     Dict[str, int] = {}
+    by_point_index: Dict[str, int] = {str(i): 0 for i in range(7)}
 
     for r in rows:
         part = r.get("part_name", "unknown")
         sub  = r.get("sub_key",   "unknown")
-        src  = r.get("label_source") or (
-            "unannotated" if r["t_float"] is None else "manual"
-        )
         pt = str(r["point_index"])
-        by_part[part]            = by_part.get(part, 0) + 1
-        by_sub_key[sub]          = by_sub_key.get(sub, 0) + 1
-        by_label_source[src]     = by_label_source.get(src, 0) + 1
-        by_point_index[pt]       = by_point_index.get(pt, 0) + 1
+        by_part[part]      = by_part.get(part, 0) + 1
+        by_sub_key[sub]    = by_sub_key.get(sub, 0) + 1
+        by_point_index[pt] = by_point_index.get(pt, 0) + 1
 
     return {
-        "total":          total,
-        "annotated":      annotated,
-        "unannotated":    total - annotated,
-        "progress_pct":   round(100.0 * annotated / total, 1) if total > 0 else 0.0,
-        "unique_images":  unique_images,
-        "by_part_name":   by_part,
-        "by_sub_key":     by_sub_key,
-        "by_label_source": by_label_source,
+        "total":         total,
+        "annotated":     annotated,
+        "unannotated":   total - annotated,
+        "progress_pct":  round(100.0 * annotated / total, 1) if total > 0 else 0.0,
+        "unique_images": unique_images,
+        "by_part_name":  by_part,
+        "by_sub_key":    by_sub_key,
         "by_point_index": by_point_index,
     }
 

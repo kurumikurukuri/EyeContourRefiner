@@ -4,32 +4,13 @@
 使い方:
     python annotator/preprocessor.py \\
         --images data/images/ \\
-        --output data/samples.json
+        --db data/samples.db
 
-出力 samples.json のスキーマ:
-    [
-      {
-        "image_path": "data/images/face_001.jpg",
-        "face_index": 0,
-        "part_name": "eyeliner_left",
-        "sub_key": "upper",
-        "point_index": 0,
-        "px": 241.3, "py": 308.7,
-        "qx": 255.1, "qy": 302.4,
-        "t": null,
-        "idx": 0,
-        "label_source": null,
-        "confidence": null
-      },
-      ...
-    ]
-
-既存の samples.json が存在する場合、t / label_source / confidence 値を保持してマージします（再実行しても上書きしません）。
+既存の DB が存在する場合、t / skip_flag 値を保持してマージします（再実行しても上書きしません）。
 """
 from __future__ import annotations
 
 import argparse
-import json
 import logging
 import sys
 from pathlib import Path
@@ -39,6 +20,7 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+from annotator import db as _db  # noqa: E402
 from eyeliner.data.eyeliner_landmarks import EYELINER_CORRECTION_MAP  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -148,8 +130,7 @@ def _extract_samples_from_image(
                         "px": float(px), "py": float(py),
                         "qx": float(qx), "qy": float(qy),
                         "t": None,
-                        "label_source": None,
-                        "confidence": None,
+                        "skip_flag": False,
                     })
                     point_index += 1
 
@@ -158,12 +139,12 @@ def _extract_samples_from_image(
 
 def generate_samples(
     images_dir: Path,
-    output_path: Path,
+    db_path: Path,
 ) -> None:
     """
-    images_dir 内の全画像からサンプルを生成し output_path に保存する。
+    images_dir 内の全画像からサンプルを生成し db_path (SQLite) に保存する。
 
-    既存の output_path が存在する場合、t 値を保持してマージする。
+    既存の DB が存在する場合、t / skip_flag 値を保持してマージする。
     """
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     image_paths = sorted(
@@ -177,28 +158,27 @@ def generate_samples(
 
     logger.info("%d 枚の画像を処理します...", len(image_paths))
 
-    # 既存の t / label_source / confidence 値を保持するためのインデックスを構築
+    # 既存の t / skip_flag 値を保持するためのインデックスを構築
     existing_annotations: Dict[tuple, Dict[str, Any]] = {}
-    if output_path.exists():
-        try:
-            existing = json.loads(output_path.read_text(encoding="utf-8"))
-            for entry in existing:
-                normalized_path = _normalize_path(entry["image_path"])
-                key = (
-                    normalized_path,
-                    entry.get("face_index", 0),
-                    entry["part_name"],
-                    entry["sub_key"],
-                    entry["point_index"],
-                )
-                existing_annotations[key] = {
-                    "t": entry.get("t"),
-                    "label_source": entry.get("label_source"),
-                    "confidence": entry.get("confidence"),
-                }
-            logger.info("既存の samples.json から %d 件のアノテーションを読み込みました。", len(existing_annotations))
-        except Exception as exc:
-            logger.warning("既存の samples.json を読み込めませんでした: %s", exc)
+    _db.init_db(db_path)
+    try:
+        existing = _db.load_all_samples(db_path)
+        for entry in existing:
+            normalized_path = _normalize_path(entry["image_path"])
+            key = (
+                normalized_path,
+                entry.get("face_index", 0),
+                entry["part_name"],
+                entry["sub_key"],
+                entry["point_index"],
+            )
+            existing_annotations[key] = {
+                "t": entry.get("t"),
+                "skip_flag": entry.get("skip_flag", False),
+            }
+        logger.info("既存の DB から %d 件のアノテーションを読み込みました。", len(existing_annotations))
+    except Exception as exc:
+        logger.warning("既存の DB を読み込めませんでした: %s", exc)
 
     all_samples: List[Dict[str, Any]] = []
     for image_path in image_paths:
@@ -207,7 +187,7 @@ def generate_samples(
         if samples:
             all_samples.extend(samples)
 
-    # idx を付与し、既存の t / label_source / confidence 値をマージ
+    # idx を付与し、既存の t / skip_flag 値をマージ
     for idx, sample in enumerate(all_samples):
         sample["idx"] = idx
         key = (
@@ -220,17 +200,13 @@ def generate_samples(
         if key in existing_annotations:
             ann = existing_annotations[key]
             sample["t"] = ann["t"]
-            sample["label_source"] = ann["label_source"]
-            sample["confidence"] = ann["confidence"]
+            sample["skip_flag"] = ann["skip_flag"]
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        json.dumps(all_samples, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    _db.replace_all_samples(all_samples, db_path)
     logger.info(
-        "samples.json を保存しました: %d サンプル → %s",
-        len(all_samples), output_path,
+        "DB を保存しました: %d サンプル → %s",
+        len(all_samples), db_path,
     )
 
 
@@ -241,11 +217,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="アイラインアノテーション用サンプル生成")
     parser.add_argument("--images", required=True, type=Path, help="顔画像ディレクトリ")
     parser.add_argument(
-        "--output", default="data/samples.json", type=Path,
-        help="出力 JSON ファイルパス (default: data/samples.json)"
+        "--db", default="data/samples.db", type=Path,
+        help="出力 SQLite DB パス (default: data/samples.db)",
     )
     args = parser.parse_args()
-    generate_samples(args.images, args.output)
+    generate_samples(args.images, args.db)
 
 
 if __name__ == "__main__":

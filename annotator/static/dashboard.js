@@ -268,15 +268,6 @@ function renderOverview(d) {
   mkDoughnut('ov-sub', subLabels, subData,
     ['rgba(168,218,220,0.85)', 'rgba(156,39,176,0.85)']);
 
-  const srcLabels = Object.keys(d.by_label_source);
-  const srcData   = Object.values(d.by_label_source);
-  const srcColors = srcLabels.map(l =>
-    l === 'manual'       ? 'rgba(27,94,32,0.85)'
-    : l === 'unannotated' ? 'rgba(100,100,100,0.6)'
-    : l.startsWith('auto_reviewed') ? 'rgba(13,71,161,0.85)'
-    : 'rgba(230,81,0,0.85)');
-  mkDoughnut('ov-src', srcLabels, srcData, srcColors);
-
   const ptLabels = Object.keys(d.by_point_index).sort();
   const ptData   = ptLabels.map(k => d.by_point_index[k]);
   mkBar('ov-pt', ptLabels.map(k => `P${k}`), ptData, { color: 'rgba(26,120,194,0.75)' });

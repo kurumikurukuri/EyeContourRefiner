@@ -1,31 +1,33 @@
-"""data/samples.json から data/manifest.csv を生成するスクリプト。
+"""data/samples.db から data/manifest.csv を生成するスクリプト。
 
 使い方:
     python scripts/export_manifest.py
-    python scripts/export_manifest.py --samples data/samples.json --output data/manifest.csv
+    python scripts/export_manifest.py --db data/samples.db --output data/manifest.csv
 """
 from __future__ import annotations
 
 import argparse
 import csv
-import json
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from annotator import db as _db  # noqa: E402
+
 FIELDNAMES = [
     "idx", "image_path", "part_name", "sub_key", "point_index",
-    "px", "py", "qx", "qy", "t", "label_source", "confidence",
+    "px", "py", "qx", "qy", "t",
 ]
 
 
-def export_manifest(samples_path: Path, output_path: Path) -> int:
-    """samples.json のアノテーション済みエントリを manifest.csv に書き出す。
+def export_manifest(db_path: Path, output_path: Path) -> int:
+    """DB のアノテーション済みエントリを manifest.csv に書き出す。
 
     Returns:
         書き出したサンプル数
     """
-    samples = json.loads(samples_path.read_text(encoding="utf-8"))
-    annotated = [s for s in samples if s.get("t") is not None]
+    annotated = _db.get_annotated_samples(db_path)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -43,20 +45,18 @@ def export_manifest(samples_path: Path, output_path: Path) -> int:
                 "qx": s["qx"],
                 "qy": s["qy"],
                 "t": s["t"],
-                "label_source": s.get("label_source") or "manual",
-                "confidence": s.get("confidence") or "",
             })
 
     return len(annotated)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="samples.json から manifest.csv を生成する")
+    parser = argparse.ArgumentParser(description="samples.db から manifest.csv を生成する")
     parser.add_argument(
-        "--samples",
+        "--db",
         type=Path,
-        default=Path("data/samples.json"),
-        help="samples.json のパス（デフォルト: data/samples.json）",
+        default=Path("data/samples.db"),
+        help="samples.db のパス（デフォルト: data/samples.db）",
     )
     parser.add_argument(
         "--output",
@@ -66,11 +66,11 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if not args.samples.exists():
-        print(f"[ERROR] samples.json が見つかりません: {args.samples}")
+    if not args.db.exists():
+        print(f"[ERROR] samples.db が見つかりません: {args.db}")
         sys.exit(1)
 
-    n = export_manifest(args.samples, args.output)
+    n = export_manifest(args.db, args.output)
     print(f"[OK] manifest.csv 出力: {n} サンプル → {args.output}")
 
 

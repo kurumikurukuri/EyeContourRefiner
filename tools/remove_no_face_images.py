@@ -21,18 +21,20 @@ from __future__ import annotations
 
 import argparse
 import csv
-import json
 import logging
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import cv2
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from annotator import db as _db  # noqa: E402
 
 log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent.parent
 IMAGES_DIR   = ROOT / "data" / "images"
-SAMPLES_JSON = ROOT / "data" / "samples.json"
+DB_PATH      = ROOT / "data" / "samples.db"
 MANIFEST_CSV = ROOT / "data" / "manifest.csv"
 ATTRIBUTION_CSV = ROOT / "data" / "open_images_attribution.csv"
 
@@ -115,31 +117,24 @@ def scan_images(images_dir: Path) -> tuple[list[Path], list[Path]]:
 # Data cleanup helpers
 # ---------------------------------------------------------------------------
 
-def _remove_from_samples_json(no_face_paths: set[Path], dry_run: bool) -> int:
-    """samples.json から顔なし画像のエントリを削除する。削除件数を返す。"""
-    if not SAMPLES_JSON.exists():
+def _remove_from_db(no_face_paths: set[Path], dry_run: bool) -> int:
+    """DB から顔なし画像のエントリを削除する。削除件数を返す。"""
+    if not DB_PATH.exists():
         return 0
 
-    samples: list[dict] = json.loads(SAMPLES_JSON.read_text(encoding="utf-8"))
-    original_count = len(samples)
-
-    kept = []
-    for s in samples:
+    # DB に記録されている image_path の中で no_face_paths に含まれるものを抽出
+    all_samples = _db.load_all_samples(DB_PATH)
+    target_paths: list[str] = []
+    for s in all_samples:
         img_abs = (ROOT / s["image_path"]).resolve()
-        if img_abs not in no_face_paths:
-            kept.append(s)
+        if img_abs in no_face_paths:
+            target_paths.append(s["image_path"])
 
-    # idx を振り直す
-    for new_idx, s in enumerate(kept):
-        s["idx"] = new_idx
+    removed = len(set(target_paths))
+    log.info("DB: %d 画像のエントリを削除予定", removed)
 
-    removed = original_count - len(kept)
-    log.info("samples.json: %d エントリ削除 (残り %d)", removed, len(kept))
-
-    if not dry_run and removed > 0:
-        SAMPLES_JSON.write_text(
-            json.dumps(kept, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+    if not dry_run and target_paths:
+        _db.delete_samples_by_image_paths(list(set(target_paths)), DB_PATH)
     return removed
 
 
@@ -213,7 +208,7 @@ def main(images_dir: Path, dry_run: bool) -> None:
     no_face_stems = {p.stem for p in no_face}
 
     # データファイルから除去
-    _remove_from_samples_json(no_face_abs, dry_run)
+    _remove_from_db(no_face_abs, dry_run)
     _remove_from_manifest_csv(no_face_stems, dry_run)
     _remove_from_attribution_csv(no_face_stems, dry_run)
 
