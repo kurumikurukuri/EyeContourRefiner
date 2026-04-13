@@ -322,10 +322,26 @@ def get_errors(
         with open(path, newline="", encoding="utf-8") as f:
             for row in csv.DictReader(f):
                 try:
-                    t_true = float(row["t_true"])
-                    t_pred = float(row["t_pred"])
-                    result.append({**row, "t_true": t_true, "t_pred": t_pred,
-                                   "abs_error": abs(t_true - t_pred)})
+                    true_t_raw  = float(row["true_t_raw"])
+                    true_t_norm = float(row["true_t_norm"])
+                    pred_t_raw  = float(row["pred_t_raw"])
+                    pred_t_norm = float(row["pred_t_norm"])
+                    px = float(row.get("px", 0))
+                    py = float(row.get("py", 0))
+                    qx = float(row.get("qx", 0))
+                    qy = float(row.get("qy", 0))
+                    pq_dist = math.hypot(qx - px, qy - py)
+                    abs_err = abs(true_t_raw - pred_t_raw)
+                    result.append({
+                        **row,
+                        "true_t_raw":   true_t_raw,
+                        "true_t_norm":  true_t_norm,
+                        "pred_t_raw":   pred_t_raw,
+                        "pred_t_norm":  pred_t_norm,
+                        "pq_dist":      pq_dist,
+                        "abs_error":    abs_err,
+                        "abs_error_px": abs_err * pq_dist,
+                    })
                 except (KeyError, ValueError):
                     continue
         return result
@@ -361,14 +377,31 @@ def get_errors(
     if not rows:
         return {"available": False, "message": "有効なサンプルがありません"}
 
-    errors  = np.array([r["abs_error"] for r in rows], dtype=float)
+    errors      = np.array([r["abs_error"]    for r in rows], dtype=float)
+    errors_px   = np.array([r["abs_error_px"] for r in rows], dtype=float)
+    t_true_arr  = np.array([r["true_t_raw"]   for r in rows], dtype=float)
+    t_pred_arr  = np.array([r["pred_t_raw"]   for r in rows], dtype=float)
+    pq_dist_arr = np.array([r["pq_dist"]      for r in rows], dtype=float)
+    residuals    = t_pred_arr - t_true_arr
+    residuals_px = residuals * pq_dist_arr
+
     summary = {
-        "total":  len(rows),
-        "mae":    round(float(errors.mean()),                   5),
-        "median": round(float(np.median(errors)),               5),
-        "p90":    round(float(np.percentile(errors, 90)),       5),
-        "p95":    round(float(np.percentile(errors, 95)),       5),
-        "max":    round(float(errors.max()),                    5),
+        "total":          len(rows),
+        "mae":            round(float(errors.mean()),                5),
+        "median":         round(float(np.median(errors)),            5),
+        "p90":            round(float(np.percentile(errors, 90)),    5),
+        "p95":            round(float(np.percentile(errors, 95)),    5),
+        "max":            round(float(errors.max()),                 5),
+        "mae_px":         round(float(errors_px.mean()),             3),
+        "median_px":      round(float(np.median(errors_px)),         3),
+        "p90_px":         round(float(np.percentile(errors_px, 90)), 3),
+        "p95_px":         round(float(np.percentile(errors_px, 95)), 3),
+        "max_px":         round(float(errors_px.max()),              3),
+        "corr_coef":      round(float(np.corrcoef(t_true_arr, t_pred_arr)[0, 1]) if len(rows) > 1 else 0.0, 4),
+        "resid_mean":     round(float(residuals.mean()),    5),
+        "resid_std":      round(float(residuals.std()),     5),
+        "resid_mean_px":  round(float(residuals_px.mean()), 3),
+        "resid_std_px":   round(float(residuals_px.std()),  3),
     }
 
     by_part:        Dict[str, List[float]] = {}
@@ -402,30 +435,93 @@ def get_errors(
         },
     }
 
-    sorted_rows = sorted(rows, key=lambda r: r["abs_error"], reverse=True)
-    top_errors  = [
-        {
-            "rank":        i + 1,
-            "idx":         r.get("idx"),
-            "abs_error":   round(r["abs_error"], 5),
-            "t_true":      round(r["t_true"],    5),
-            "t_pred":      round(r["t_pred"],    5),
-            "part_name":   r.get("part_name"),
-            "sub_key":     r.get("sub_key"),
-            "point_index": r.get("point_index"),
-            "image_path":  r.get("image_path"),
+    def _make_top_row(i: int, r: Dict) -> Dict:
+        return {
+            "rank":          i + 1,
+            "idx":           r.get("idx"),
+            "abs_error":     round(r["abs_error"],    5),
+            "abs_error_px":  round(r["abs_error_px"], 3),
+            "true_t_raw":    round(r["true_t_raw"],   5),
+            "pred_t_raw":    round(r["pred_t_raw"],   5),
+            "pq_dist":       round(r["pq_dist"],      2),
+            "part_name":     r.get("part_name"),
+            "sub_key":       r.get("sub_key"),
+            "point_index":   r.get("point_index"),
+            "image_path":    r.get("image_path"),
         }
+
+    sorted_rows    = sorted(rows, key=lambda r: r["abs_error"],    reverse=True)
+    sorted_rows_px = sorted(rows, key=lambda r: r["abs_error_px"], reverse=True)
+
+    top_errors = [
+        _make_top_row(i, r)
         for i, r in enumerate(r for r in sorted_rows if r["abs_error"] >= threshold)
         if i < top
     ]
+    top_errors_px = [
+        _make_top_row(i, r)
+        for i, r in enumerate(sorted_rows_px)
+        if i < top
+    ]
+
+    # 散布図用データ（最大 1000 点サンプリング）
+    _MAX_SCATTER = 1000
+    rng = np.random.default_rng(seed=42)
+    indices = (
+        rng.choice(len(rows), size=_MAX_SCATTER, replace=False).tolist()
+        if len(rows) > _MAX_SCATTER
+        else list(range(len(rows)))
+    )
+    scatter_upper = [
+        {"x": round(rows[i]["true_t_raw"], 5), "y": round(rows[i]["pred_t_raw"], 5)}
+        for i in indices if rows[i].get("sub_key") == "upper"
+    ]
+    scatter_lower = [
+        {"x": round(rows[i]["true_t_raw"], 5), "y": round(rows[i]["pred_t_raw"], 5)}
+        for i in indices if rows[i].get("sub_key") != "upper"
+    ]
+    resid_upper = [
+        {"x": round(rows[i]["true_t_raw"], 5), "y": round(rows[i]["pred_t_raw"] - rows[i]["true_t_raw"], 5)}
+        for i in indices if rows[i].get("sub_key") == "upper"
+    ]
+    resid_lower = [
+        {"x": round(rows[i]["true_t_raw"], 5), "y": round(rows[i]["pred_t_raw"] - rows[i]["true_t_raw"], 5)}
+        for i in indices if rows[i].get("sub_key") != "upper"
+    ]
+    resid_upper_px = [
+        {"x": round(rows[i]["true_t_raw"], 5),
+         "y": round((rows[i]["pred_t_raw"] - rows[i]["true_t_raw"]) * rows[i]["pq_dist"], 3)}
+        for i in indices if rows[i].get("sub_key") == "upper"
+    ]
+    resid_lower_px = [
+        {"x": round(rows[i]["true_t_raw"], 5),
+         "y": round((rows[i]["pred_t_raw"] - rows[i]["true_t_raw"]) * rows[i]["pq_dist"], 3)}
+        for i in indices if rows[i].get("sub_key") != "upper"
+    ]
 
     return {
-        "available":       True,
-        "split":           split,
-        "summary":         summary,
-        "breakdown":       breakdown,
-        "error_histogram": _histogram(list(errors), n_bins=20),
-        "top_errors":      top_errors,
+        "available":              True,
+        "split":                  split,
+        "summary":                summary,
+        "breakdown":              breakdown,
+        "error_histogram":        _histogram(list(errors),       n_bins=20),
+        "error_histogram_px":     _histogram(list(errors_px),    n_bins=20),
+        "residual_histogram":     _histogram(list(residuals),    n_bins=30),
+        "residual_histogram_px":  _histogram(list(residuals_px), n_bins=30),
+        "scatter_data": {
+            "upper": scatter_upper,
+            "lower": scatter_lower,
+        },
+        "resid_scatter": {
+            "upper": resid_upper,
+            "lower": resid_lower,
+        },
+        "resid_scatter_px": {
+            "upper": resid_upper_px,
+            "lower": resid_lower_px,
+        },
+        "top_errors":    top_errors,
+        "top_errors_px": top_errors_px,
     }
 
 
@@ -477,9 +573,9 @@ def get_error_patch(idx: str, exp_path: Optional[str] = None, split: str = "test
         image_rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         patch = _draw_patch_with_markers(
             image_rgb,
-            float(target["px"]),    float(target["py"]),
-            float(target["qx"]),    float(target["qy"]),
-            float(target["t_true"]), float(target["t_pred"]),
+            float(target["px"]),           float(target["py"]),
+            float(target["qx"]),           float(target["qy"]),
+            float(target["true_t_raw"]),   float(target["pred_t_raw"]),
             scale=4,
         )
         b64 = _patch_to_base64(patch)

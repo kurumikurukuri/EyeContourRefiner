@@ -1,0 +1,25 @@
+# H1_baseline: EXP002 sig_tloss をそのまま新データで再実行
+# 目的: データ1.5x増加だけで精度がどれだけ改善するかの基準線
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+# patch パラメータ: EXP002デフォルト（変更なし）
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 128
+label_t_min: null
+label_t_max: null

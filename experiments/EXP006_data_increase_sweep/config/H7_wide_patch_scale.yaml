@@ -1,0 +1,25 @@
+# H2_wide_patch: EXP003 wide_label_base + sig_tloss の組み合わせ
+# 目的: EXP003ベスト(0.1268)とEXP002ベスト(sig_tloss)の相乗効果を確認
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+# patch パラメータ: wide_label_base（EXP003ベスト）
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 128
+label_t_min: -0.5
+label_t_max: 1.5
