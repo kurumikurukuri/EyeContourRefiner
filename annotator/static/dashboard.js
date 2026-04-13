@@ -131,6 +131,89 @@ function mkDoughnut(id, labels, data, colors) {
   });
 }
 
+/* scatter: datasets=[{label, data:[{x,y}], color}], refLine: bool */
+function mkScatter(id, datasets, opts = {}) {
+  if (charts[id]) charts[id].destroy();
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+
+  const chartDatasets = datasets.map(ds => ({
+    label: ds.label,
+    data: ds.data,
+    pointRadius: 2.5,
+    pointHoverRadius: 4,
+    backgroundColor: ds.color || 'rgba(26,120,194,0.5)',
+    borderColor: ds.color || 'rgba(26,120,194,0.5)',
+    borderWidth: 0,
+  }));
+
+  // 参照線は scatter チャート内で showLine: true を使う（type:'line' 上書きは不可）
+  function _refLineDataset(label, pts) {
+    return {
+      label,
+      data: pts,
+      showLine: true,
+      pointRadius: 0,
+      pointHoverRadius: 0,
+      borderColor: 'rgba(180,180,180,0.55)',
+      borderWidth: 1.5,
+      borderDash: [5, 5],
+      backgroundColor: 'transparent',
+    };
+  }
+
+  if (opts.refLine) {
+    const allX = datasets.flatMap(ds => ds.data.map(p => p.x));
+    const minX = allX.length ? Math.min(...allX) : 0;
+    const maxX = allX.length ? Math.max(...allX) : 1;
+    chartDatasets.push(_refLineDataset('y = x', [{ x: minX, y: minX }, { x: maxX, y: maxX }]));
+  }
+
+  if (opts.hline !== undefined) {
+    const allX = datasets.flatMap(ds => ds.data.map(p => p.x));
+    const minX = allX.length ? Math.min(...allX) : 0;
+    const maxX = allX.length ? Math.max(...allX) : 1;
+    chartDatasets.push(_refLineDataset('y = 0', [{ x: minX, y: 0 }, { x: maxX, y: 0 }]));
+  }
+
+  charts[id] = new Chart(ctx.getContext('2d'), {
+    type: 'scatter',
+    data: { datasets: chartDatasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: { duration: 0 },
+      plugins: {
+        legend: {
+          display: datasets.length > 1,
+          position: 'top',
+          labels: { boxWidth: 10, color: '#ccc', padding: 10, usePointStyle: true, pointStyle: 'circle',
+                    filter: item => item.text !== 'y = x' && item.text !== 'y = 0' },
+        },
+        title: opts.title
+          ? { display: true, text: opts.title, color: '#a8dadc', font: { size: 12 } }
+          : { display: false },
+        tooltip: {
+          filter: item => item.dataset.showLine !== true,
+          callbacks: {
+            label: ctx => `(${ctx.parsed.x.toFixed(4)}, ${ctx.parsed.y.toFixed(4)})`,
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: '#1a2a4a' },
+          title: { display: !!opts.xLabel, text: opts.xLabel, color: '#888' },
+        },
+        y: {
+          grid: { color: '#1a2a4a' },
+          title: { display: !!opts.yLabel, text: opts.yLabel, color: '#888' },
+        },
+      },
+    },
+  });
+}
+
 /* ── API helper ── */
 async function api(path) {
   const res = await fetch(path);
@@ -732,11 +815,14 @@ function renderErrors(d, selectorHtml = '') {
   const summaryCards = `
     <div class="card-grid">
       <div class="stat-card"><span class="stat-label">サンプル数</span><span class="stat-value">${s.total.toLocaleString()}</span></div>
-      <div class="stat-card"><span class="stat-label">MAE</span><span class="stat-value" style="font-size:1.3rem">${s.mae}</span></div>
-      <div class="stat-card"><span class="stat-label">中央値</span><span class="stat-value" style="font-size:1.3rem">${s.median}</span></div>
-      <div class="stat-card"><span class="stat-label">P90</span><span class="stat-value" style="font-size:1.3rem;color:var(--orange)">${s.p90}</span></div>
-      <div class="stat-card"><span class="stat-label">P95</span><span class="stat-value" style="font-size:1.3rem;color:var(--orange)">${s.p95}</span></div>
-      <div class="stat-card"><span class="stat-label">最大誤差</span><span class="stat-value" style="font-size:1.3rem;color:var(--red)">${s.max}</span></div>
+      <div class="stat-card"><span class="stat-label">MAE (t)</span><span class="stat-value" style="font-size:1.3rem">${s.mae}</span></div>
+      <div class="stat-card"><span class="stat-label">MAE (px)</span><span class="stat-value" style="font-size:1.3rem;color:#80cbc4">${s.mae_px}</span></div>
+      <div class="stat-card"><span class="stat-label">中央値 (t)</span><span class="stat-value" style="font-size:1.3rem">${s.median}</span></div>
+      <div class="stat-card"><span class="stat-label">中央値 (px)</span><span class="stat-value" style="font-size:1.3rem;color:#80cbc4">${s.median_px}</span></div>
+      <div class="stat-card"><span class="stat-label">P90 (t)</span><span class="stat-value" style="font-size:1.3rem;color:var(--orange)">${s.p90}</span></div>
+      <div class="stat-card"><span class="stat-label">P90 (px)</span><span class="stat-value" style="font-size:1.3rem;color:var(--orange)">${s.p90_px}</span></div>
+      <div class="stat-card"><span class="stat-label">最大誤差 (t)</span><span class="stat-value" style="font-size:1.3rem;color:var(--red)">${s.max}</span></div>
+      <div class="stat-card"><span class="stat-label">最大誤差 (px)</span><span class="stat-value" style="font-size:1.3rem;color:var(--red)">${s.max_px}</span></div>
     </div>`;
 
   // Breakdown charts
@@ -761,47 +847,106 @@ function renderErrors(d, selectorHtml = '') {
       <div class="chart-wrap-tall"><canvas id="err-sub-pt"></canvas></div>
     </div>`;
 
+  // Scatter / residual analysis section
+  const corr        = d.summary.corr_coef     != null ? d.summary.corr_coef     : '–';
+  const residMean   = d.summary.resid_mean    != null ? d.summary.resid_mean    : '–';
+  const residStd    = d.summary.resid_std     != null ? d.summary.resid_std     : '–';
+  const residMeanPx = d.summary.resid_mean_px != null ? d.summary.resid_mean_px : '–';
+  const residStdPx  = d.summary.resid_std_px  != null ? d.summary.resid_std_px  : '–';
+  const scatterHtml = `
+    <div class="section-title">true_t_raw vs pred_t_raw 散布図・残差分析 (t値)</div>
+    <div class="card-grid" style="margin-bottom:8px">
+      <div class="stat-card"><span class="stat-label">相関係数 r</span><span class="stat-value" style="font-size:1.2rem">${corr}</span></div>
+      <div class="stat-card"><span class="stat-label">残差 平均 (t)</span><span class="stat-value" style="font-size:1.2rem">${residMean}</span></div>
+      <div class="stat-card"><span class="stat-label">残差 標準偏差 (t)</span><span class="stat-value" style="font-size:1.2rem">${residStd}</span></div>
+    </div>
+    <div class="card-grid-3" style="margin-bottom:20px">
+      <div class="card">
+        <div class="card-title">true_t_raw vs pred_t_raw（点線: y=x）</div>
+        <div class="chart-wrap"><canvas id="err-scatter-pred"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">残差 (pred_t_raw − true_t_raw) vs true_t_raw</div>
+        <div class="chart-wrap"><canvas id="err-scatter-resid"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">残差分布ヒストグラム (t値)</div>
+        <div class="chart-wrap"><canvas id="err-resid-hist"></canvas></div>
+      </div>
+    </div>
+
+    <div class="section-title">残差分析 (ピクセル単位)</div>
+    <div class="card-grid" style="margin-bottom:8px">
+      <div class="stat-card"><span class="stat-label">残差 平均 (px)</span><span class="stat-value" style="font-size:1.2rem;color:#80cbc4">${residMeanPx}</span></div>
+      <div class="stat-card"><span class="stat-label">残差 標準偏差 (px)</span><span class="stat-value" style="font-size:1.2rem;color:#80cbc4">${residStdPx}</span></div>
+    </div>
+    <div class="card-grid-2" style="margin-bottom:20px">
+      <div class="card">
+        <div class="card-title">残差 (px) vs true_t_raw</div>
+        <div class="chart-wrap"><canvas id="err-scatter-resid-px"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">残差分布ヒストグラム (px)</div>
+        <div class="chart-wrap"><canvas id="err-resid-hist-px"></canvas></div>
+      </div>
+    </div>`;
+
   // Error distribution histogram
   const histHtml = `
-    <div class="section-title">誤差分布</div>
-    <div class="card">
-      <div class="chart-wrap"><canvas id="err-hist"></canvas></div>
+    <div class="section-title">絶対誤差分布</div>
+    <div class="card-grid-2">
+      <div class="card">
+        <div class="card-title">誤差分布 (t値)</div>
+        <div class="chart-wrap"><canvas id="err-hist"></canvas></div>
+      </div>
+      <div class="card">
+        <div class="card-title">誤差分布 (px)</div>
+        <div class="chart-wrap"><canvas id="err-hist-px"></canvas></div>
+      </div>
     </div>`;
 
-  // Top errors table
-  const errRows = d.top_errors.map(r => {
-    const cls = r.abs_error >= 0.3 ? 'high' : r.abs_error >= 0.15 ? 'mid' : '';
-    return `<tr>
-      <td class="num">${r.rank}</td>
-      <td class="num ${cls}">${r.abs_error}</td>
-      <td class="num">${r.t_true}</td>
-      <td class="num">${r.t_pred}</td>
-      <td>${r.part_name || ''}</td>
-      <td>${r.sub_key || ''}</td>
-      <td class="num">${r.point_index}</td>
-      <td><a href="/?idx=${r.idx}" target="_blank">${r.idx}</a></td>
-      <td><button class="patch-btn" data-idx="${r.idx}" style="font-size:0.75rem;padding:2px 8px">パッチ表示</button></td>
-    </tr>
-    <tr class="patch-row" id="patch-row-${r.idx}" style="display:none">
-      <td colspan="9" style="background:var(--bg-card);padding:8px 16px">
-        <img id="patch-img-${r.idx}" class="patch-img" alt="パッチ" />
-      </td>
-    </tr>`;
-  }).join('');
+  // Top errors tables (t-sorted and px-sorted) are built inside errTableHtml()
 
-  const topErrHtml = `
-    <div class="section-title">誤差上位 ${d.top_errors.length} 件</div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead>
-          <tr><th>#</th><th>誤差</th><th>t_true</th><th>t_pred</th>
-          <th>part</th><th>sub</th><th>pt</th><th>idx</th><th></th></tr>
-        </thead>
-        <tbody>${errRows}</tbody>
-      </table>
-    </div>`;
+  function errTableHtml(title, topList) {
+    const rows_ = topList.map(r => {
+      const cls   = r.abs_error    >= 0.3  ? 'high' : r.abs_error    >= 0.15 ? 'mid' : '';
+      const clsPx = r.abs_error_px != null && r.abs_error_px >= 2.0 ? 'high' : r.abs_error_px >= 1.0 ? 'mid' : '';
+      return `<tr>
+        <td class="num">${r.rank}</td>
+        <td class="num ${cls}">${r.abs_error}</td>
+        <td class="num ${clsPx}">${r.abs_error_px != null ? r.abs_error_px : '–'}</td>
+        <td class="num">${r.true_t_raw}</td>
+        <td class="num">${r.pred_t_raw}</td>
+        <td class="num">${r.pq_dist != null ? r.pq_dist : '–'}</td>
+        <td>${r.part_name || ''}</td>
+        <td>${r.sub_key || ''}</td>
+        <td class="num">${r.point_index}</td>
+        <td><a href="/?idx=${r.idx}" target="_blank">${r.idx}</a></td>
+        <td><button class="patch-btn" data-idx="${r.idx}" style="font-size:0.75rem;padding:2px 8px">パッチ表示</button></td>
+      </tr>
+      <tr class="patch-row" id="patch-row-${r.idx}" style="display:none">
+        <td colspan="11" style="background:var(--bg-card);padding:8px 16px">
+          <img id="patch-img-${r.idx}" class="patch-img" alt="パッチ" />
+        </td>
+      </tr>`;
+    }).join('');
+    return `
+      <div class="section-title">${title}</div>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th>#</th><th>誤差(t)</th><th>誤差(px)</th><th>true_t_raw</th><th>pred_t_raw</th>
+            <th>pq_dist</th><th>part</th><th>sub</th><th>pt</th><th>idx</th><th></th></tr>
+          </thead>
+          <tbody>${rows_}</tbody>
+        </table>
+      </div>`;
+  }
 
-  html('errors-content', (selectorHtml || '') + summaryCards + breakdownHtml + histHtml + topErrHtml);
+  const topErrHtml = errTableHtml(`誤差上位 ${d.top_errors.length} 件（t値順）`, d.top_errors)
+    + (d.top_errors_px ? errTableHtml(`誤差上位 ${d.top_errors_px.length} 件（px順）`, d.top_errors_px) : '');
+
+  html('errors-content', (selectorHtml || '') + summaryCards + breakdownHtml + scatterHtml + histHtml + topErrHtml);
 
   // セレクターイベント
   const sel = document.getElementById('err-exp-select');
@@ -873,6 +1018,60 @@ function renderErrors(d, selectorHtml = '') {
 
   const histBins = d.error_histogram.bins.map(b => b.toFixed(3));
   mkBar('err-hist', histBins, d.error_histogram.counts, { color: 'rgba(244,67,54,0.65)' });
+
+  if (d.error_histogram_px) {
+    const histBinsPx = d.error_histogram_px.bins.map(b => b.toFixed(2));
+    mkBar('err-hist-px', histBinsPx, d.error_histogram_px.counts, { color: 'rgba(0,188,212,0.65)' });
+  }
+
+  // t_true vs t_pred scatter
+  const sc = d.scatter_data || {};
+  mkScatter('err-scatter-pred', [
+    {
+      label: 'upper',
+      data: sc.upper || [],
+      color: 'rgba(79,195,247,0.5)',
+    },
+    {
+      label: 'lower',
+      data: sc.lower || [],
+      color: 'rgba(255,183,77,0.5)',
+    },
+  ], { refLine: true, xLabel: 'true_t_raw', yLabel: 'pred_t_raw' });
+
+  // Residual vs t_true scatter
+  const rs = d.resid_scatter || {};
+  mkScatter('err-scatter-resid', [
+    {
+      label: 'upper',
+      data: rs.upper || [],
+      color: 'rgba(79,195,247,0.5)',
+    },
+    {
+      label: 'lower',
+      data: rs.lower || [],
+      color: 'rgba(255,183,77,0.5)',
+    },
+  ], { hline: 0, xLabel: 'true_t_raw', yLabel: '残差 (pred_t_raw − true_t_raw)' });
+
+  // Residual histogram (t)
+  if (d.residual_histogram) {
+    const residBins = d.residual_histogram.bins.map(b => b.toFixed(3));
+    mkBar('err-resid-hist', residBins, d.residual_histogram.counts, { color: 'rgba(26,120,194,0.7)' });
+  }
+
+  // Residual scatter (px)
+  const rsPx = d.resid_scatter_px || {};
+  mkScatter('err-scatter-resid-px', [
+    { label: 'upper', data: rsPx.upper || [], color: 'rgba(79,195,247,0.5)' },
+    { label: 'lower', data: rsPx.lower || [], color: 'rgba(255,183,77,0.5)' },
+  ], { hline: 0, xLabel: 'true_t_raw', yLabel: '残差 (px)' });
+
+  // Residual histogram (px)
+  if (d.residual_histogram_px) {
+    const residBinsPx = d.residual_histogram_px.bins.map(b => b.toFixed(2));
+    mkBar('err-resid-hist-px', residBinsPx, d.residual_histogram_px.counts, { color: 'rgba(0,188,212,0.7)' });
+  }
 
   // Patch toggle buttons
   document.querySelectorAll('.patch-btn').forEach(btn => {

@@ -16,7 +16,9 @@
 
 出力 CSV の列:
     idx, image_path, part_name, sub_key, point_index,
-    px, py, qx, qy, t_pred, rx_pred, ry_pred
+    px, py, qx, qy,
+    true_t_raw, true_t_norm, pred_t_raw, pred_t_norm,
+    rx_pred, ry_pred
 """
 from __future__ import annotations
 
@@ -143,7 +145,9 @@ def run_manifest(
 
     out_fieldnames = [
         "idx", "image_path", "part_name", "sub_key", "point_index",
-        "px", "py", "qx", "qy", "t_true", "t_pred", "rx_pred", "ry_pred",
+        "px", "py", "qx", "qy",
+        "true_t_raw", "true_t_norm", "pred_t_raw", "pred_t_norm",
+        "rx_pred", "ry_pred",
     ]
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,24 +180,32 @@ def run_manifest(
                 patch_size=patch_size,
                 use_t_norm=use_t_norm,
             )
+            # label 範囲（None のときは crop 範囲にフォールバック）
+            eff_label_min = label_t_min if label_t_min is not None else patch_t_min
+            eff_label_max = label_t_max if label_t_max is not None else patch_t_max
+            label_range = eff_label_max - eff_label_min
+
             if use_t_norm:
-                # label 範囲（None のときは crop 範囲にフォールバック）
-                eff_label_min = label_t_min if label_t_min is not None else patch_t_min
-                eff_label_max = label_t_max if label_t_max is not None else patch_t_max
-                # t_pred (t_norm [0,1]) → 物理 t → 座標復元
-                t_actual_pred = t_pred * (eff_label_max - eff_label_min) + eff_label_min
+                # t_pred はモデル出力の [0,1] 正規化済み値
+                pred_t_norm = float(np.clip(t_pred, 0.0, 1.0))
+                pred_t_raw = pred_t_norm * label_range + eff_label_min
             else:
                 # no_t_norm: モデル出力が既に生の物理 t 値
-                t_actual_pred = t_pred
-            rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, t_actual_pred)
+                pred_t_raw = t_pred
+                pred_t_norm = (pred_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
 
-            # t_true: manifest の t は生の物理 t 値をそのまま使用
+            rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, pred_t_raw)
+
+            # true_t: manifest の t は生の物理 t 値
             t_stored = rec.get("t", "")
             try:
-                t_actual_true = float(t_stored)
-                t_true_str = f"{t_actual_true:.6f}"
+                true_t_raw = float(t_stored)
+                true_t_norm = (true_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
+                true_t_raw_str  = f"{true_t_raw:.6f}"
+                true_t_norm_str = f"{true_t_norm:.6f}"
             except (ValueError, TypeError):
-                t_true_str = t_stored
+                true_t_raw_str  = t_stored
+                true_t_norm_str = ""
 
             writer.writerow({
                 "idx":         rec.get("idx", ""),
@@ -202,10 +214,12 @@ def run_manifest(
                 "sub_key":     rec.get("sub_key", ""),
                 "point_index": rec.get("point_index", ""),
                 "px": px, "py": py, "qx": qx, "qy": qy,
-                "t_true":   t_true_str,
-                "t_pred":   f"{t_actual_pred:.6f}",
-                "rx_pred":  f"{rx_pred:.2f}",
-                "ry_pred":  f"{ry_pred:.2f}",
+                "true_t_raw":  true_t_raw_str,
+                "true_t_norm": true_t_norm_str,
+                "pred_t_raw":  f"{pred_t_raw:.6f}",
+                "pred_t_norm": f"{pred_t_norm:.6f}",
+                "rx_pred":     f"{rx_pred:.2f}",
+                "ry_pred":     f"{ry_pred:.2f}",
             })
             del image
 
@@ -235,12 +249,12 @@ def _load_manifest(manifest_path: Path) -> List[dict]:
 
 
 def _print_mae(predictions_path: Path) -> None:
-    """t_true と t_pred の MAE をログ出力する。"""
+    """true_t_raw と pred_t_raw の MAE をログ出力する。"""
     errors: List[float] = []
     with open(predictions_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                errors.append(abs(float(row["t_true"]) - float(row["t_pred"])))
+                errors.append(abs(float(row["true_t_raw"]) - float(row["pred_t_raw"])))
             except (ValueError, KeyError):
                 continue
     if errors:
