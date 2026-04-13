@@ -2,6 +2,7 @@
 !/data/samples.json
 !/data/manifest.csv
 !/data/open_images_attribution.csv
+!/data/samples.db
 /models/
 
 # Experiment artifacts（モデルとTBログは除外、設定とmanifestは追跡）
