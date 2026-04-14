@@ -1,0 +1,26 @@
+# I1_baseline: EXP006 H1_baseline と同条件 / 損失のみ dead_zone に変更
+# 目的: dead_zone 損失のベースライン効果を確認（H1との直接比較）
+backbone: custom
+loss_fn: dead_zone
+loss_epsilon: 0.01
+loss_delta: 0.05
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 128
+label_t_min: null
+label_t_max: null

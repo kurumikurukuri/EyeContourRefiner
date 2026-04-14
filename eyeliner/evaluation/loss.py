@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import functools
 from typing import Callable
 
 import torch
@@ -18,6 +19,35 @@ def huber_t_loss(pred: Tensor, y: Tensor, delta: float = 0.05) -> Tensor:
     """
     dt = (pred - y).abs()
     return torch.where(dt < delta, 0.5 * dt**2 / delta, dt - 0.5 * delta).mean()
+
+
+def dead_zone_huber_loss(
+    pred: Tensor,
+    y: Tensor,
+    epsilon: float = 0.01,
+    delta: float = 0.05,
+) -> Tensor:
+    """デッドゾーン付き Huber 損失（epsilon-insensitive Huber）。
+
+    |残差| < epsilon の場合は損失 = 0（許容精度内なら勾配を与えない）。
+    epsilon 以上の残差に対してシフトした Huber を適用する。
+
+        loss = 0                              if |r| < epsilon
+             = 0.5 * r'^2 / delta             if epsilon <= |r| < epsilon + delta
+             = r' - 0.5 * delta               if |r| >= epsilon + delta
+
+    ここで r' = |r| - epsilon（シフト済み残差）。
+
+    アイライナー検出における「ほぼ正解（例: 残差 < 1px）なら penalize しない」
+    というユースケースに対応する。epsilon=0.01 は正規化 t スケールで約 0.64px 相当。
+    """
+    dt = (pred - y).abs()
+    dt_shifted = (dt - epsilon).clamp(min=0.0)
+    return torch.where(
+        dt_shifted < delta,
+        0.5 * dt_shifted**2 / delta,
+        dt_shifted - 0.5 * delta,
+    ).mean()
 
 
 def t_weighted_huber_loss(
@@ -58,13 +88,21 @@ LOSS_FN_REGISTRY: dict[str, Callable] = {
     "t": huber_t_loss,
     "t_weighted": t_weighted_huber_loss,
     "normalized_pixel": eye_normalized_smooth_l1_loss,
+    "dead_zone": dead_zone_huber_loss,
 }
 
 
-def get_loss_fn(name: str) -> Callable:
-    """名前で損失関数を取得する。未知の名前は ValueError を送出。"""
+def get_loss_fn(name: str, **kwargs) -> Callable:
+    """名前で損失関数を取得する。未知の名前は ValueError を送出。
+
+    kwargs を渡すと functools.partial でパラメータを固定した関数を返す。
+    例: get_loss_fn("dead_zone", epsilon=0.01, delta=0.05)
+    """
     if name not in LOSS_FN_REGISTRY:
         raise ValueError(
             f"未知の損失関数: {name!r}. 利用可能: {list(LOSS_FN_REGISTRY)}"
         )
-    return LOSS_FN_REGISTRY[name]
+    fn = LOSS_FN_REGISTRY[name]
+    if kwargs:
+        return functools.partial(fn, **kwargs)
+    return fn
