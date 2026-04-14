@@ -36,7 +36,7 @@ from eyeliner.evaluation.metrics import holdout_mae as compute_holdout_mae
 logger = logging.getLogger(__name__)
 
 BACKBONE_CHOICES = ["custom", "soft_argmax", "mobilenet_v3_small", "efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_v2_s", "efficientnet_v2_m", "resnet18"]
-LOSS_FN_CHOICES = ["t", "t_weighted", "normalized_pixel"]
+LOSS_FN_CHOICES = ["t", "t_weighted", "normalized_pixel", "dead_zone"]
 
 
 def make_exp_name(args: argparse.Namespace) -> str:
@@ -51,8 +51,13 @@ def make_exp_name(args: argparse.Namespace) -> str:
     depth_str = f"conv{args.num_conv_layers}"
     tws_str = f"tws{str(args.t_weight_alpha).replace('.', '')}" if args.use_t_weighted_sampler else "notws"
     twl_str = f"twl{str(args.t_loss_alpha).replace('.', '')}" if args.loss_fn == "t_weighted" else "notwl"
+    dz_str = f"dz{str(args.loss_epsilon).replace('.', '')}d{str(args.loss_delta).replace('.', '')}" if args.loss_fn == "dead_zone" else ""
     res_str = f"res{args.patch_h}x{args.patch_w}"
-    return f"{arch}_{lr_str}_{wd_str}_{pq_str}_{sigmoid_str}_{bn_str}_{depth_str}_{tws_str}_{twl_str}_{res_str}_{date_str}"
+    parts = [arch, lr_str, wd_str, pq_str, sigmoid_str, bn_str, depth_str, tws_str, twl_str]
+    if dz_str:
+        parts.append(dz_str)
+    parts += [res_str, date_str]
+    return "_".join(parts)
 
 
 def build_experiment_record(
@@ -88,7 +93,10 @@ def build_experiment_record(
             "use_t_weighted_sampler": args.use_t_weighted_sampler,
             "t_weight_alpha": args.t_weight_alpha,
             "t_loss_alpha": args.t_loss_alpha,
+            "loss_epsilon": args.loss_epsilon,
+            "loss_delta": args.loss_delta,
             "use_distance_from_center": args.use_distance_from_center,
+            "use_norm_eye_scale": args.use_norm_eye_scale,
             "use_logit_target": args.use_logit_target,
             "patch_h": args.patch_h,
             "patch_w": args.patch_w,
@@ -228,7 +236,10 @@ def mode_kfold(args: argparse.Namespace) -> None:
         use_t_weighted_sampler=args.use_t_weighted_sampler,
         t_weight_alpha=args.t_weight_alpha,
         t_loss_alpha=args.t_loss_alpha,
+        loss_epsilon=args.loss_epsilon,
+        loss_delta=args.loss_delta,
         use_distance_from_center=args.use_distance_from_center,
+        use_norm_eye_scale=args.use_norm_eye_scale,
         use_logit_target=args.use_logit_target,
         use_t_norm=args.use_t_norm,
         patch_t_min=args.patch_t_min,
@@ -297,6 +308,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
                 ensemble, holdout_loader, device,
                 use_pq_ratio=args.use_pq_ratio,
                 use_distance_from_center=args.use_distance_from_center,
+                use_norm_eye_scale=args.use_norm_eye_scale,
             )
             logger.info("holdout_mae: %.6f", holdout_mae_value)
         except Exception as exc:
@@ -410,6 +422,10 @@ def main() -> None:
         help="端点度 min(pi, 6-pi)/3 をモデルの追加スカラー入力として使用する",
     )
     parser.add_argument(
+        "--use_norm_eye_scale", action="store_true",
+        help="eye_scale / sqrt(img_H * img_W) をモデルの追加スカラー入力として使用する",
+    )
+    parser.add_argument(
         "--use_logit_target", action="store_true",
         help="ターゲット t を logit 空間に変換して学習する（use_sigmoid は False にすること）",
     )
@@ -428,6 +444,14 @@ def main() -> None:
     parser.add_argument(
         "--t_loss_alpha", type=float, default=3.0,
         help="t_weighted 損失の重み係数 α（weight = 1 + α × |y - 0.5|, default: 3.0）",
+    )
+    parser.add_argument(
+        "--loss_epsilon", type=float, default=0.01,
+        help="dead_zone 損失のデッドゾーン幅（正規化 t スケール, default: 0.01 ≈ 0.64px）",
+    )
+    parser.add_argument(
+        "--loss_delta", type=float, default=0.05,
+        help="dead_zone / huber 損失の二次→線形遷移点（default: 0.05）",
     )
     parser.add_argument(
         "--patch_t_min", type=float, default=-0.5,

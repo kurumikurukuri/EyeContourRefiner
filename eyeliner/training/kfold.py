@@ -131,6 +131,7 @@ def run_kfold(
             use_batchnorm=config.use_batchnorm,
             num_conv_layers=config.num_conv_layers,
             use_distance_from_center=config.use_distance_from_center,
+            use_norm_eye_scale=config.use_norm_eye_scale,
         ).to(device)
 
         # Phase 1: バックボーン凍結（転移学習時のみ）
@@ -176,13 +177,17 @@ def run_kfold(
                 config.loss_fn, device,
                 use_pq_ratio=config.use_pq_ratio,
                 use_distance_from_center=config.use_distance_from_center,
+                use_norm_eye_scale=config.use_norm_eye_scale,
                 use_logit_target=config.use_logit_target,
                 t_loss_alpha=config.t_loss_alpha,
+                loss_epsilon=config.loss_epsilon,
+                loss_delta=config.loss_delta,
             )
             result = validate_one_epoch(
                 model, val_loader, device,
                 use_pq_ratio=config.use_pq_ratio,
                 use_distance_from_center=config.use_distance_from_center,
+                use_norm_eye_scale=config.use_norm_eye_scale,
                 use_logit_target=config.use_logit_target,
             )
             current_lr = scheduler.get_last_lr()[0]

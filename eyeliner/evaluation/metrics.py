@@ -27,6 +27,7 @@ def holdout_mae(
     device: torch.device,
     use_pq_ratio: bool = False,
     use_distance_from_center: bool = False,
+    use_norm_eye_scale: bool = False,
 ) -> float:
     """固定 Hold-out セットでの MAE 評価。汎化性能の不偏推定に使用する。
 
@@ -36,18 +37,20 @@ def holdout_mae(
     Args:
         use_pq_ratio:              モデルが pq_ratio を入力として受け取る場合 True
         use_distance_from_center:  モデルが dist_from_center を入力として受け取る場合 True
+        use_norm_eye_scale:        モデルが norm_eye_scale を入力として受け取る場合 True
     """
     model.eval()
     all_preds: list[Tensor] = []
     all_labels: list[Tensor] = []
 
     with torch.no_grad():
-        for x, is_upper, pq_ratio, y, _w, _vw, dist_from_center in holdout_loader:
+        for x, is_upper, pq_ratio, y, _w, _vw, dist_from_center, norm_eye_scale in holdout_loader:
             x = x.to(device)
             is_upper = is_upper.to(device)
             pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
             dist_dev = dist_from_center.to(device) if use_distance_from_center else None
-            pred = model(x, is_upper, pq_ratio_dev, dist_dev)
+            nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
+            pred = model(x, is_upper, pq_ratio_dev, dist_dev, nes_dev)
             all_preds.append(pred.cpu())
             all_labels.append(y)
 

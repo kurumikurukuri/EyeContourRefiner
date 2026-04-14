@@ -40,3 +40,4 @@ def compute_eye_meta(records: list[dict]) -> None:
         rec["weight"] = pq_dist / (eye_scale * n_pq)
         rec["val_weight"] = pq_dist / n_pq
         rec["pq_ratio"] = pq_dist / eye_scale
+        rec["eye_scale"] = eye_scale
