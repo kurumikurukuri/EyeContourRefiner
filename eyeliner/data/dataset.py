@@ -4,6 +4,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import logging
+import math
 from pathlib import Path
 
 import cv2
@@ -69,13 +70,15 @@ def load_manifest_df(
 class EyelinerPatchDataset(Dataset):
     """アイライン輪郭検出用パッチデータセット。
 
-    各サンプルは以下を返す（6-tuple）:
-        x          : (3, H, W) float32 正規化済みパッチ
-        is_upper   : (1,) float32  上アイライン=1.0, 下=0.0
-        pq_ratio   : (1,) float32  pq_dist / eye_scale（目スケールに対するPQ比率）
-        y          : (1,) float32  正規化位置 t
-        weight     : (1,) float32  訓練損失用重み（目スケール正規化）
-        val_weight : (1,) float32  検証ピクセル誤差用重み
+    各サンプルは以下を返す（8-tuple）:
+        x               : (3, H, W) float32 正規化済みパッチ
+        is_upper        : (1,) float32  上アイライン=1.0, 下=0.0
+        pq_ratio        : (1,) float32  pq_dist / eye_scale（目スケールに対するPQ比率）
+        y               : (1,) float32  正規化位置 t
+        weight          : (1,) float32  訓練損失用重み（目スケール正規化）
+        val_weight      : (1,) float32  検証ピクセル誤差用重み
+        dist_from_center: (1,) float32  点番号に基づく中心からの距離
+        norm_eye_scale  : (1,) float32  eye_scale / sqrt(img_H * img_W)
     """
 
     def __init__(
@@ -121,6 +124,12 @@ class EyelinerPatchDataset(Dataset):
                 if bgr is not None:
                     self._image_cache[img_path] = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             logger.info("画像キャッシュ完了: %d 枚", len(self._image_cache))
+
+        # 画像対角長マップ（norm_eye_scale 計算用）
+        self._img_diag_map: dict[str, float] = {
+            img_path: math.sqrt(img.shape[0] * img.shape[1])
+            for img_path, img in self._image_cache.items()
+        }
 
     def __len__(self) -> int:
         return len(self.records)
@@ -180,4 +189,13 @@ class EyelinerPatchDataset(Dataset):
         val_weight = torch.tensor([float(rec["val_weight"])], dtype=torch.float32)
         pi = int(rec.get("point_index", 3))
         dist_from_center = torch.tensor([min(pi, 6 - pi) / 3.0], dtype=torch.float32)
-        return x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center
+
+        eye_scale = float(rec.get("eye_scale", 1.0))
+        img_diag = self._img_diag_map.get(image_path)
+        if img_diag is None and image is not None:
+            img_diag = math.sqrt(image.shape[0] * image.shape[1])
+            self._img_diag_map[image_path] = img_diag
+        norm_eye_scale_val = eye_scale / img_diag if img_diag else 0.0
+        norm_eye_scale = torch.tensor([norm_eye_scale_val], dtype=torch.float32)
+
+        return x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale

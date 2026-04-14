@@ -94,18 +94,20 @@ class TransferModel(nn.Module):
         use_pq_ratio: bool = False,
         use_sigmoid: bool = False,
         use_distance_from_center: bool = False,
+        use_norm_eye_scale: bool = False,
     ) -> None:
         super().__init__()
         self.backbone_name = backbone_name
         self.use_pq_ratio = use_pq_ratio
         self.use_sigmoid = use_sigmoid
         self.use_distance_from_center = use_distance_from_center
+        self.use_norm_eye_scale = use_norm_eye_scale
         feat_dim = BACKBONE_FEAT_DIMS[backbone_name]
 
         self.backbone = _build_backbone_features(backbone_name, pretrained)
         self.pool = nn.AdaptiveAvgPool2d((1, 32))
 
-        scalar_in = 1 + int(use_pq_ratio) + int(use_distance_from_center)
+        scalar_in = 1 + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
         regressor_in = feat_dim * 32 + scalar_in
         regressor_layers: list[nn.Module] = [
             nn.Linear(regressor_in, 256),
@@ -126,6 +128,7 @@ class TransferModel(nn.Module):
         is_upper: torch.Tensor,
         pq_ratio: torch.Tensor | None = None,
         dist_from_center: torch.Tensor | None = None,
+        norm_eye_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         feat = self.backbone(x)           # (B, C, H', W')
         feat = self.pool(feat)            # (B, C, 1, 32)
@@ -135,6 +138,8 @@ class TransferModel(nn.Module):
             scalars.append(pq_ratio)
         if self.use_distance_from_center and dist_from_center is not None:
             scalars.append(dist_from_center)
+        if self.use_norm_eye_scale and norm_eye_scale is not None:
+            scalars.append(norm_eye_scale)
         feat = torch.cat(scalars, dim=1)
         return self.regressor(feat)       # (B, 1)
 

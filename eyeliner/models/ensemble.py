@@ -21,8 +21,9 @@ class EnsembleModel(nn.Module):
         is_upper: torch.Tensor,
         pq_ratio: torch.Tensor | None = None,
         dist_from_center: torch.Tensor | None = None,
+        norm_eye_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        preds = torch.stack([m(x, is_upper, pq_ratio, dist_from_center) for m in self._models])
+        preds = torch.stack([m(x, is_upper, pq_ratio, dist_from_center, norm_eye_scale) for m in self._models])
         return preds.mean(0)
 
 
@@ -34,11 +35,12 @@ def build_model(
     use_batchnorm: bool = True,
     num_conv_layers: int = 3,
     use_distance_from_center: bool = False,
+    use_norm_eye_scale: bool = False,
 ) -> nn.Module:
     """バックボーン名からモデルを構築する。"""
     if backbone == "custom":
         from eyeliner.models.eyeliner_cnn import EyelinerCNN
-        return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
+        return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale)
     if backbone == "soft_argmax":
         from eyeliner.models.soft_argmax import SoftArgmaxEyelinerCNN
         return SoftArgmaxEyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
@@ -65,7 +67,8 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
         use_batchnorm = ckpt.get("use_batchnorm", True)
         num_conv_layers = ckpt.get("num_conv_layers", 3)
         use_distance_from_center = ckpt.get("use_distance_from_center", False)
-        model = build_model(ckpt["backbone"], pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
+        use_norm_eye_scale = ckpt.get("use_norm_eye_scale", False)
+        model = build_model(ckpt["backbone"], pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale)
         model.load_state_dict(ckpt["state_dict"])
         return model
 
@@ -77,7 +80,8 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
         use_batchnorm = ckpt.get("use_batchnorm", True)
         num_conv_layers = ckpt.get("num_conv_layers", 3)
         use_distance_from_center = ckpt.get("use_distance_from_center", False)
-        models = [build_model(backbone, pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center) for _ in range(n_models)]
+        use_norm_eye_scale = ckpt.get("use_norm_eye_scale", False)
+        models = [build_model(backbone, pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale) for _ in range(n_models)]
         ensemble = EnsembleModel(models)
         ensemble.load_state_dict(ckpt["state_dict"])
         return ensemble
@@ -95,8 +99,9 @@ def save_model(model: nn.Module, backbone: str, path: Path) -> None:
     use_batchnorm = getattr(model, "use_batchnorm", True)
     num_conv_layers = getattr(model, "num_conv_layers", 3)
     use_distance_from_center = getattr(model, "use_distance_from_center", False)
+    use_norm_eye_scale = getattr(model, "use_norm_eye_scale", False)
     torch.save(
-        {"backbone": backbone, "use_pq_ratio": use_pq_ratio, "use_sigmoid": use_sigmoid, "use_batchnorm": use_batchnorm, "num_conv_layers": num_conv_layers, "use_distance_from_center": use_distance_from_center, "state_dict": model.state_dict()},
+        {"backbone": backbone, "use_pq_ratio": use_pq_ratio, "use_sigmoid": use_sigmoid, "use_batchnorm": use_batchnorm, "num_conv_layers": num_conv_layers, "use_distance_from_center": use_distance_from_center, "use_norm_eye_scale": use_norm_eye_scale, "state_dict": model.state_dict()},
         path,
     )
 
@@ -109,6 +114,7 @@ def save_ensemble(ensemble: EnsembleModel, backbone: str, path: Path) -> None:
     use_batchnorm = getattr(first_model, "use_batchnorm", True)
     num_conv_layers = getattr(first_model, "num_conv_layers", 3)
     use_distance_from_center = getattr(first_model, "use_distance_from_center", False)
+    use_norm_eye_scale = getattr(first_model, "use_norm_eye_scale", False)
     torch.save(
         {
             "type": "ensemble",
@@ -118,6 +124,7 @@ def save_ensemble(ensemble: EnsembleModel, backbone: str, path: Path) -> None:
             "use_batchnorm": use_batchnorm,
             "num_conv_layers": num_conv_layers,
             "use_distance_from_center": use_distance_from_center,
+            "use_norm_eye_scale": use_norm_eye_scale,
             "n_models": len(ensemble._models),
             "state_dict": ensemble.state_dict(),
         },

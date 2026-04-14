@@ -40,7 +40,10 @@ class TrainConfig:
     t_weight_alpha: float = 3.0
     use_t_weighted_loss: bool = False
     t_loss_alpha: float = 3.0
+    loss_epsilon: float = 0.01  # dead_zone 損失のデッドゾーン幅（正規化 t スケール）
+    loss_delta: float = 0.05   # dead_zone / huber 損失の二次→線形遷移点
     use_distance_from_center: bool = False
+    use_norm_eye_scale: bool = False
     use_logit_target: bool = False
     use_t_norm: bool = True
     patch_t_min: float = -0.5
@@ -84,8 +87,11 @@ def train_one_epoch(
     device: torch.device,
     use_pq_ratio: bool = False,
     use_distance_from_center: bool = False,
+    use_norm_eye_scale: bool = False,
     use_logit_target: bool = False,
     t_loss_alpha: float = 3.0,
+    loss_epsilon: float = 0.01,
+    loss_delta: float = 0.05,
 ) -> tuple[float, float]:
     """1エポック訓練を実行する。
 
@@ -93,13 +99,16 @@ def train_one_epoch(
         (avg_train_loss, avg_train_mae)
     """
     model.train()
-    loss_fn = get_loss_fn(loss_fn_name)
+    if loss_fn_name == "dead_zone":
+        loss_fn = get_loss_fn(loss_fn_name, epsilon=loss_epsilon, delta=loss_delta)
+    else:
+        loss_fn = get_loss_fn(loss_fn_name)
     total_loss = 0.0
     total_abs_error = 0.0
     total_elements = 0
     n_batches = 0
 
-    for x, is_upper, pq_ratio, y, weight, _, dist_from_center in loader:
+    for x, is_upper, pq_ratio, y, weight, _, dist_from_center, norm_eye_scale in loader:
         x = x.to(device)
         is_upper = is_upper.to(device)
         y = y.to(device)
@@ -108,10 +117,11 @@ def train_one_epoch(
         optimizer.zero_grad()
         pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
         dfc_dev = dist_from_center.to(device) if use_distance_from_center else None
-        pred = model(x, is_upper, pq_ratio_dev, dfc_dev)
+        nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
+        pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev)
 
         y_target = torch.logit(y.clamp(1e-4, 1 - 1e-4)) if use_logit_target else y
-        if loss_fn_name == "t":
+        if loss_fn_name in ("t", "dead_zone"):
             loss = loss_fn(pred, y_target)
         elif loss_fn_name == "t_weighted":
             t_w = 1.0 + t_loss_alpha * (y - 0.5).abs()
@@ -141,6 +151,7 @@ def validate_one_epoch(
     device: torch.device,
     use_pq_ratio: bool = False,
     use_distance_from_center: bool = False,
+    use_norm_eye_scale: bool = False,
     use_logit_target: bool = False,
 ) -> EpochResult:
     """1エポック検証を実行する。
@@ -155,12 +166,13 @@ def validate_one_epoch(
     all_rel_weights: list[torch.Tensor] = []
 
     with torch.no_grad():
-        for x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center in loader:
+        for x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale in loader:
             x = x.to(device)
             is_upper = is_upper.to(device)
             pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
             dfc_dev = dist_from_center.to(device) if use_distance_from_center else None
-            pred = model(x, is_upper, pq_ratio_dev, dfc_dev)
+            nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
+            pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev)
             if use_logit_target:
                 pred = torch.sigmoid(pred)
             all_preds.append(pred.cpu())
