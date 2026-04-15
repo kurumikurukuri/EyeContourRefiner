@@ -40,6 +40,8 @@ const state = {
   galleryTotalPages: 1,
   galleryTotalImages: 0,
   gallerySkipFilter: "all",  // "all" | "active" | "skipped"
+  gallerySortBy: "idx",      // "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc"
+  sortedIdxList: null,       // null = idx順; ソート時はサンプルidxの配列
 };
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,31 @@ async function loadSamplesSummary() {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Sort order helpers
+// ---------------------------------------------------------------------------
+
+/** ソート済みリスト上での currentIdx の位置を返す。リストがなければ currentIdx そのものを返す。 */
+function _sortedPos() {
+  if (!state.sortedIdxList) return state.currentIdx;
+  const pos = state.sortedIdxList.indexOf(state.currentIdx);
+  return pos === -1 ? 0 : pos;
+}
+
+/** ソート済みリスト上でのリスト位置 pos から eye group の先頭位置を返す。 */
+function _eyeGroupStartInList(pos) {
+  const list = state.sortedIdxList;
+  const meta = state.sampleMeta;
+  const { image_path, part_name } = meta[list[pos]];
+  while (pos > 0 &&
+         meta[list[pos - 1]].image_path === image_path &&
+         meta[list[pos - 1]].part_name === part_name) {
+    pos--;
+  }
+  return pos;
+}
+
+/** idx順でのeye group先頭 idx を返す（ソートなし時に使用）。 */
 function _eyeGroupStart(idx) {
   const meta = state.sampleMeta;
   if (!meta.length) return idx;
@@ -141,9 +168,25 @@ function jumpToNextEye() {
   const meta = state.sampleMeta;
   if (!meta.length) { advance(14); return; }
   const { image_path, part_name } = meta[state.currentIdx];
+
+  if (state.sortedIdxList) {
+    const list = state.sortedIdxList;
+    let pos = _sortedPos();
+    // 現在のeye groupを末尾まで読み飛ばす
+    while (pos < list.length && meta[list[pos]].image_path === image_path && meta[list[pos]].part_name === part_name) pos++;
+    // 次のeye groupを探す（skip済みグループはまるごと飛ばす）
+    while (pos < list.length) {
+      if (!state.skipFlags[list[pos]]) { loadSample(list[pos]); return; }
+      // skipグループを末尾まで読み飛ばす
+      const sg = meta[list[pos]];
+      while (pos < list.length && meta[list[pos]].image_path === sg.image_path && meta[list[pos]].part_name === sg.part_name) pos++;
+    }
+    setStatus("次の目はありません");
+    return;
+  }
+
   for (let i = state.currentIdx + 1; i < state.total; i++) {
     if (meta[i].image_path !== image_path || meta[i].part_name !== part_name) {
-      // skip_flag=True の画像はスキップ
       if (state.skipFlags[i]) continue;
       loadSample(i);
       return;
@@ -155,28 +198,54 @@ function jumpToNextEye() {
 function jumpToPrevEye() {
   const meta = state.sampleMeta;
   if (!meta.length) { advance(-14); return; }
+
+  if (state.sortedIdxList) {
+    const list = state.sortedIdxList;
+    let pos = _eyeGroupStartInList(_sortedPos());
+    if (pos === 0) { setStatus("前の目はありません"); return; }
+    pos--;
+    // skip済みグループはまるごと飛ばして前へ
+    while (pos >= 0) {
+      const groupStart = _eyeGroupStartInList(pos);
+      if (!state.skipFlags[list[groupStart]]) { loadSample(list[groupStart]); return; }
+      if (groupStart === 0) break;
+      pos = groupStart - 1;
+    }
+    setStatus("前の目はありません");
+    return;
+  }
+
   const groupStart = _eyeGroupStart(state.currentIdx);
   if (groupStart === 0) { setStatus("前の目はありません"); return; }
   let candidate = _eyeGroupStart(groupStart - 1);
-  // skip_flag=True の画像はスキップしてさらに前へ
   while (candidate > 0 && state.skipFlags[candidate]) {
     const prevStart = _eyeGroupStart(candidate - 1);
     if (prevStart === candidate) break;
     candidate = prevStart;
   }
-  if (state.skipFlags[candidate]) {
-    setStatus("前の目はありません");
-    return;
-  }
+  if (state.skipFlags[candidate]) { setStatus("前の目はありません"); return; }
   loadSample(candidate);
 }
 
 function jumpToNextUnannotated() {
-  // 現在位置の次から探す
+  if (state.sortedIdxList) {
+    const list = state.sortedIdxList;
+    const pos = _sortedPos();
+    for (let p = pos + 1; p < list.length; p++) {
+      const i = list[p];
+      if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
+    }
+    for (let p = 0; p <= pos; p++) {
+      const i = list[p];
+      if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
+    }
+    setStatus("全サンプルのアノテーションが完了しています！");
+    return;
+  }
+
   for (let i = state.currentIdx + 1; i < state.total; i++) {
     if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
   }
-  // 先頭から現在位置まで折り返し検索
   for (let i = 0; i < state.currentIdx; i++) {
     if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
   }
@@ -226,11 +295,18 @@ async function loadSample(idx) {
     // アイラインプレビューを非同期で更新（重い処理なので分離）
     loadEyelinerPreview(idx);
 
-    btnPrev.disabled = (idx <= 0);
-    btnNext.disabled = (idx >= state.total - 1);
-
-    btnPrevEyes.disabled = (idx <= 0);
-    btnNextEyes.disabled = (idx >= state.total - 1);
+    if (state.sortedIdxList) {
+      const pos = _sortedPos();
+      btnPrev.disabled = (pos <= 0);
+      btnNext.disabled = (pos >= state.sortedIdxList.length - 1);
+      btnPrevEyes.disabled = (pos <= 0);
+      btnNextEyes.disabled = (pos >= state.sortedIdxList.length - 1);
+    } else {
+      btnPrev.disabled = (idx <= 0);
+      btnNext.disabled = (idx >= state.total - 1);
+      btnPrevEyes.disabled = (idx <= 0);
+      btnNextEyes.disabled = (idx >= state.total - 1);
+    }
 
     if (state.annotated >= state.total) {
       elBanner.style.display = "block";
@@ -475,8 +551,18 @@ inputJump.addEventListener("keydown", (e) => {
 });
 
 function advance(delta) {
+  if (state.sortedIdxList) {
+    const list = state.sortedIdxList;
+    let pos = _sortedPos() + delta;
+    while (pos >= 0 && pos < list.length && state.skipFlags[list[pos]]) {
+      pos += delta;
+    }
+    if (pos >= 0 && pos < list.length) {
+      loadSample(list[pos]);
+    }
+    return;
+  }
   let next = state.currentIdx + delta;
-  // skip_flag=True のサンプルをスキップ
   while (next >= 0 && next < state.total && state.skipFlags[next]) {
     next += delta;
   }
@@ -661,7 +747,7 @@ async function loadGalleryPage() {
   galleryGrid.appendChild(loadingDiv);
 
   try {
-    const data = await apiFetch(`/api/gallery?page=${state.galleryPage}&per_page=${state.galleryPerPage}&skip_filter=${state.gallerySkipFilter}`);
+    const data = await apiFetch(`/api/gallery?page=${state.galleryPage}&per_page=${state.galleryPerPage}&skip_filter=${state.gallerySkipFilter}&sort_by=${state.gallerySortBy}`);
     state.galleryPage = data.page;
     state.galleryTotalPages = data.total_pages;
     state.galleryTotalImages = data.total_images;
@@ -727,6 +813,18 @@ function renderGalleryPage(items) {
     const label = document.createElement("div");
     label.className = "gallery-label";
     label.textContent = item.image_key.replace(/\.[^.]+$/, "");
+
+    // eye_scale バッジ（ソート時に表示）
+    if (item.eye_scale != null && state.gallerySortBy !== "idx") {
+      const scaleBadge = document.createElement("div");
+      scaleBadge.className = "gallery-eye-scale";
+      if (state.gallerySortBy.startsWith("norm_eye_scale") && item.norm_eye_scale != null) {
+        scaleBadge.textContent = `nes=${item.norm_eye_scale.toFixed(3)}`;
+      } else {
+        scaleBadge.textContent = `es=${Math.round(item.eye_scale)}px`;
+      }
+      card.appendChild(scaleBadge);
+    }
 
     card.appendChild(img);
     card.appendChild(badge);
@@ -799,6 +897,29 @@ document.querySelectorAll(".gallery-tab").forEach(tab => {
     loadGalleryPage();
   });
 });
+
+// ギャラリーソート切替
+const gallerySortSelect = document.getElementById("gallery-sort-select");
+gallerySortSelect.addEventListener("change", async () => {
+  state.gallerySortBy = gallerySortSelect.value;
+  state.galleryPage = 1;
+  await updateSortedOrder();
+  loadGalleryPage();
+});
+
+async function updateSortedOrder() {
+  if (state.gallerySortBy === "idx") {
+    state.sortedIdxList = null;
+    return;
+  }
+  try {
+    const data = await apiFetch(`/api/sample_order?sort_by=${state.gallerySortBy}`);
+    state.sortedIdxList = data.order;
+  } catch (err) {
+    state.sortedIdxList = null;
+    setStatus("ソート順の取得に失敗しました: " + err.message);
+  }
+}
 
 btnGalleryClose.addEventListener("click", () => {
   galleryOverlay.classList.remove("open");

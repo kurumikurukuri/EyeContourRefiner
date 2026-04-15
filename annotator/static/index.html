@@ -512,6 +512,7 @@
       margin-bottom: 10px;
       border-bottom: 1px solid #2a2a4a;
       flex-shrink: 0;
+      align-items: center;
     }
     .gallery-tab {
       background: transparent;
@@ -528,6 +529,41 @@
     .gallery-tab.active {
       color: #a8dadc;
       border-bottom-color: #4fc3f7;
+    }
+    /* ギャラリーソート */
+    .gallery-sort {
+      margin-left: auto;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding-bottom: 2px;
+      flex-shrink: 0;
+    }
+    .gallery-sort label {
+      font-size: 0.78rem;
+      color: #888;
+      white-space: nowrap;
+    }
+    #gallery-sort-select {
+      background: #0f3460;
+      color: #e0e0e0;
+      border: 1px solid #1a78c2;
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 0.78rem;
+      cursor: pointer;
+    }
+    /* eye_scale バッジ */
+    .gallery-eye-scale {
+      position: absolute;
+      bottom: 22px;
+      left: 0;
+      right: 0;
+      text-align: center;
+      font-size: 0.6rem;
+      color: #a8dadc;
+      background: rgba(0,0,0,0.5);
+      padding: 1px 0;
     }
 
     /* スキップ済みバッジ */
@@ -581,6 +617,16 @@
       <button class="gallery-tab active" data-filter="all">すべて</button>
       <button class="gallery-tab" data-filter="active">アクティブ</button>
       <button class="gallery-tab" data-filter="skipped">スキップ済み</button>
+      <div class="gallery-sort">
+        <label for="gallery-sort-select">並び順:</label>
+        <select id="gallery-sort-select">
+          <option value="idx">idx順</option>
+          <option value="eye_scale_asc">eye_scale 小→大</option>
+          <option value="eye_scale_desc">eye_scale 大→小</option>
+          <option value="norm_eye_scale_asc">norm_eye_scale 小→大</option>
+          <option value="norm_eye_scale_desc">norm_eye_scale 大→小</option>
+        </select>
+      </div>
     </div>
     <div id="gallery-grid"></div>
   </div>

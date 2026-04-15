@@ -17,7 +17,7 @@ def compute_eye_meta(records: list[dict]) -> None:
     eye_count: dict[tuple, int] = defaultdict(int)
 
     for rec in records:
-        key = (rec["image_path"], rec["part_name"])
+        key = (rec["image_path"], rec.get("face_index", 0), rec["part_name"])
         eye_points[key].append((float(rec["px"]), float(rec["py"])))
         eye_points[key].append((float(rec["qx"]), float(rec["qy"])))
         eye_count[key] += 1
@@ -30,7 +30,7 @@ def compute_eye_meta(records: list[dict]) -> None:
         eye_scale_map[key] = max(scale, 1.0)  # ゼロ除算防止
 
     for rec in records:
-        key = (rec["image_path"], rec["part_name"])
+        key = (rec["image_path"], rec.get("face_index", 0), rec["part_name"])
         pq_dist = math.sqrt(
             (float(rec["qx"]) - float(rec["px"])) ** 2
             + (float(rec["qy"]) - float(rec["py"])) ** 2
