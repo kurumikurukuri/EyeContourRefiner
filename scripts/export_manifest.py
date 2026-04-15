@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from annotator import db as _db  # noqa: E402
 
 FIELDNAMES = [
-    "idx", "image_path", "part_name", "sub_key", "point_index",
+    "idx", "image_path", "face_index", "part_name", "sub_key", "point_index",
     "px", "py", "qx", "qy", "t",
 ]
 
@@ -37,6 +37,7 @@ def export_manifest(db_path: Path, output_path: Path) -> int:
             writer.writerow({
                 "idx": s["idx"],
                 "image_path": s["image_path"].replace("\\", "/"),
+                "face_index": s.get("face_index", 0),
                 "part_name": s["part_name"],
                 "sub_key": s.get("sub_key", ""),
                 "point_index": s.get("point_index", 0),

@@ -62,6 +62,8 @@ _ALLOWED_MODEL_DIRS = [
 # 画像グルーピングインデックス（ギャラリー用）
 _image_index: Optional[Dict[str, Dict[str, Any]]] = None  # image_path → {first_pos, total, annotated, skipped}
 _image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
+_image_eye_scale: Optional[Dict[str, float]] = None  # image_path → min eye_scale (px)
+_image_dims_cache: Dict[str, tuple] = {}  # image_path → (w, h) — norm_eye_scale 計算用遅延キャッシュ
 
 # モデル状態（_infer_models 等）の競合状態防止用ロック
 _models_lock = threading.Lock()
@@ -287,8 +289,23 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 
 def _build_image_index() -> None:
     """DB から画像パス単位のグループインデックスを構築する。"""
-    global _image_index, _image_order
+    global _image_index, _image_order, _image_eye_scale
     _image_index, _image_order = _db.get_image_index()
+    _image_eye_scale = _db.get_eye_scale_per_image()
+
+
+def _get_image_dims(image_path: str) -> tuple:
+    """画像の (width, height) を返す。PIL ヘッダ読みでキャッシュする。"""
+    if image_path in _image_dims_cache:
+        return _image_dims_cache[image_path]
+    try:
+        from PIL import Image as _PILImage
+        with _PILImage.open(image_path) as img:
+            dims = img.size  # (w, h)
+    except Exception:
+        dims = (1, 1)
+    _image_dims_cache[image_path] = dims
+    return dims
 
 
 # ---------------------------------------------------------------------------
@@ -744,18 +761,53 @@ def apply_pred_eye(idx: int):
 
 
 @app.get("/api/gallery")
-def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_filter: str = Query("all")):
-    """ページネーション対応のギャラリー。メタデータのみ返す（サムネイルは別API）。"""
+def get_gallery(
+    page: int = 1,
+    per_page: int = Query(80, ge=1, le=200),
+    skip_filter: str = Query("all"),
+    sort_by: str = Query("idx"),
+):
+    """ページネーション対応のギャラリー。メタデータのみ返す（サムネイルは別API）。
+
+    sort_by:
+      "idx"                  — デフォルト（DB挿入順）
+      "eye_scale_asc"        — eye_scale 昇順（小→大）
+      "eye_scale_desc"       — eye_scale 降順（大→小）
+      "norm_eye_scale_asc"   — 正規化 eye_scale 昇順
+      "norm_eye_scale_desc"  — 正規化 eye_scale 降順
+    """
+    import math
     if _image_index is None or _image_order is None:
         _build_image_index()
 
-
     # skip フィルタリング
-    filtered_order = _image_order
+    filtered_order = list(_image_order)
     if skip_filter == "active":
         filtered_order = [p for p in _image_order if not _image_index[p].get("skipped", False)]
     elif skip_filter == "skipped":
         filtered_order = [p for p in _image_order if _image_index[p].get("skipped", False)]
+
+    # ソート
+    eye_scale_index = _image_eye_scale or {}
+    if sort_by in ("eye_scale_asc", "eye_scale_desc"):
+        reverse = sort_by == "eye_scale_desc"
+        filtered_order = sorted(
+            filtered_order,
+            key=lambda p: eye_scale_index.get(p, float("inf")),
+            reverse=reverse,
+        )
+    elif sort_by in ("norm_eye_scale_asc", "norm_eye_scale_desc"):
+        reverse = sort_by == "norm_eye_scale_desc"
+
+        def _norm_key(p: str) -> float:
+            es = eye_scale_index.get(p)
+            if es is None:
+                return float("inf")
+            w, h = _get_image_dims(p)
+            diag = math.sqrt(w * h)
+            return es / diag if diag > 0 else float("inf")
+
+        filtered_order = sorted(filtered_order, key=_norm_key, reverse=reverse)
 
     total_images = len(filtered_order)
     total_pages = max(1, (total_images + per_page - 1) // per_page)
@@ -768,6 +820,12 @@ def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_fil
     items = []
     for image_path in page_images:
         entry = _image_index[image_path]
+        eye_scale_val = eye_scale_index.get(image_path)
+        norm_eye_scale_val = None
+        if eye_scale_val is not None:
+            w, h = _get_image_dims(image_path)
+            diag = math.sqrt(w * h)
+            norm_eye_scale_val = round(eye_scale_val / diag, 4) if diag > 0 else None
         items.append({
             "image_key": Path(image_path).name,
             "image_path": image_path,
@@ -775,6 +833,8 @@ def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_fil
             "annotated": entry["annotated"],
             "first_idx": entry["first_pos"],
             "skipped": entry.get("skipped", False),
+            "eye_scale": round(eye_scale_val, 1) if eye_scale_val is not None else None,
+            "norm_eye_scale": norm_eye_scale_val,
         })
 
     return {
@@ -784,6 +844,55 @@ def get_gallery(page: int = 1, per_page: int = Query(80, ge=1, le=200), skip_fil
         "total_images": total_images,
         "total_pages": total_pages,
     }
+
+
+@app.get("/api/sample_order")
+def get_sample_order(sort_by: str = Query("idx")):
+    """ソート順のサンプル idx リストを返す。
+
+    フロントエンドはこのリストを使って前へ/次へナビゲーションを行う。
+    sort_by: "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc"
+    """
+    import math
+    from collections import defaultdict
+
+    all_samples = _db.load_all_samples()
+
+    if sort_by == "idx":
+        return {"order": [s["idx"] for s in all_samples]}
+
+    # (image_path, face_index, part_name) → [idx, ...] のグループ化（idx順を維持）
+    groups: Dict[tuple, List[int]] = defaultdict(list)
+    for s in all_samples:
+        groups[(s["image_path"], s["face_index"], s["part_name"])].append(s["idx"])
+
+    eye_scale_map = _db.get_eye_scale_per_eye()
+
+    def _eye_scale_key(group_key: tuple) -> float:
+        return eye_scale_map.get(group_key, float("inf"))
+
+    def _norm_eye_scale_key(group_key: tuple) -> float:
+        image_path = group_key[0]
+        es = eye_scale_map.get(group_key)
+        if es is None:
+            return float("inf")
+        w, h = _get_image_dims(image_path)
+        diag = math.sqrt(w * h)
+        return es / diag if diag > 0 else float("inf")
+
+    reverse = sort_by.endswith("_desc")
+    if sort_by in ("eye_scale_asc", "eye_scale_desc"):
+        sorted_groups = sorted(groups.keys(), key=_eye_scale_key, reverse=reverse)
+    elif sort_by in ("norm_eye_scale_asc", "norm_eye_scale_desc"):
+        sorted_groups = sorted(groups.keys(), key=_norm_eye_scale_key, reverse=reverse)
+    else:
+        sorted_groups = list(groups.keys())
+
+    order: List[int] = []
+    for key in sorted_groups:
+        order.extend(groups[key])
+
+    return {"order": order}
 
 
 @app.get("/api/gallery/find_page")
