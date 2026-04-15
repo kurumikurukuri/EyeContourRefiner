@@ -24,10 +24,10 @@ mid帯の学習安定性が上がり、端点予測精度が改善する。
 
 ## ベースライン（EXP006）
 
-| 条件 | Holdout 生t MAE | 備考 |
-|------|-----------------|------|
-| H1_baseline | - | 未記入（EXP006結果を参照） |
-| H2_wide_patch | - | 未記入（EXP006結果を参照） |
+| 条件 | CV MAE (norm) | Holdout MAE (norm) | Holdout MAE (生t) | 相関係数 |
+|------|:---:|:---:|:---:|:---:|
+| H1_baseline | 0.05835 | 0.06622 | 0.1325 | 0.569 |
+| H2_wide_patch | 0.05641 | 0.06332 | 0.1267 | 0.626 |
 
 ## 条件対応表
 
@@ -36,19 +36,64 @@ mid帯の学習安定性が上がり、端点予測精度が改善する。
 | I1_baseline | H1_baseline | loss_fn: t → dead_zone |
 | I2_wide_patch | H2_wide_patch | loss_fn: t → dead_zone |
 
-
 manifests: EXP006 の manifests を共有（同一 train/test 分割で比較を保証）
 
 ## 実行手順
 
 ```bash
-# EXP006 の manifests を使用するため split_holdout は不要
-
-# 全条件を実行
 python scripts/sweep.py --exp 007
-
-# 2グループ並行実行
-python scripts/sweep.py --exp 007 --configs I1_baseline I2_wide_patch I3_deep &
-python scripts/sweep.py --exp 007 --configs I4_sampler I5_wide_patch_short I6_wide_patch_w I7_wide_patch_scale I8_wide_patch_w_scale &
 ```
 
+## 結果
+
+### holdout MAE
+
+| 条件 | CV MAE (norm) | Holdout MAE (norm) | Holdout MAE (生t) | 相関係数 |
+|------|:---:|:---:|:---:|:---:|
+| EXP006 H1_baseline (参考) | 0.05835 | 0.06622 | 0.1325 | 0.569 |
+| EXP006 H2_wide_patch (参考) | 0.05641 | **0.06332** | **0.1267** | **0.626** |
+| EXP007 I1_baseline | 0.05825 | 0.06553 | 0.1311 | 0.590 |
+| EXP007 I2_wide_patch | **0.05676** | 0.06356 | 0.1271 | 0.621 |
+
+### t 分位ごとのバイアス（pred - true, 生t）
+
+| t の範囲 | H1 | H2 | I1 | I2 |
+|---|:---:|:---:|:---:|:---:|
+| t < 0.2  | +0.416 | +0.408 | +0.409 | +0.414 |
+| 0.2–0.4  | +0.230 | +0.221 | +0.221 | +0.219 |
+| 0.4–0.6  | +0.081 | +0.081 | +0.078 | +0.080 |
+| 0.6–0.8  | +0.008 | +0.008 | +0.003 | +0.011 |
+| 0.8–1.0  | -0.113 | -0.102 | -0.116 | -0.105 |
+| t > 1.0  | -0.354 | -0.311 | -0.350 | -0.312 |
+
+## 考察
+
+### 1. dead_zone_loss の効果：軽微な改善、有意差なし
+
+| 比較ペア | EXP006 MAE(生t) | EXP007 MAE(生t) | 差分 |
+|---|:---:|:---:|:---:|
+| Baseline: H1 vs I1 | 0.1325 | 0.1311 | **-0.0014（I1 改善）** |
+| Wide patch: H2 vs I2 | **0.1267** | 0.1271 | +0.0004（I2 わずか悪化） |
+
+- I1（baseline）は H1 より生t MAE が若干改善（-0.001）し、相関係数も 0.569 → 0.590 に向上。
+- I2（wide_patch）は H2 とほぼ同等で、有意な差異なし。
+- dead_zone_loss がプラスに働く場面はあるものの、効果は限定的で、構成依存。
+
+### 2. 平均回帰バイアスは解消されず
+
+t < 0.2（+0.41）および t > 1.0（-0.31〜-0.35）の体系的バイアスは全条件で一貫して存在し、
+dead_zone_loss による改善はほぼなかった。  
+「微小残差への勾配排除」はバイアスの根本原因（t分布の不均衡）に対処できない。
+
+### 3. ベストモデルは引き続き EXP006 H2_wide_patch
+
+Holdout MAE（生t）で H2（0.1267）が I2（0.1271）を上回った。
+dead_zone_loss への切り替えは採用しない。
+
+## 結論
+
+**dead_zone_loss は有効ではない。採用しない。**
+
+- 性能差は誤差範囲内（±0.001）
+- 平均回帰バイアスは改善なし
+- EXP006 H2_wide_patch が引き続きベストモデル（生t MAE = 0.1267）
