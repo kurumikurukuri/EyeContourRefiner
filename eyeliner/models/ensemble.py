@@ -45,7 +45,7 @@ def build_model(
         from eyeliner.models.soft_argmax import SoftArgmaxEyelinerCNN
         return SoftArgmaxEyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
     from eyeliner.models.transfer import TransferModel
-    return TransferModel(backbone, pretrained=pretrained, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_distance_from_center=use_distance_from_center)
+    return TransferModel(backbone, pretrained=pretrained, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale)
 
 
 def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
