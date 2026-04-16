@@ -1,0 +1,23 @@
+# H2: batch=16
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 100
+batch: 16
+k: 1
+patience: 25
+seed: 42
+aug_flags: 79
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 128
+label_t_min: -0.5
+label_t_max: 1.5
