@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.model_selection import GroupKFold
+from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
 from eyeliner.data.weights import compute_eye_meta
@@ -66,14 +66,22 @@ def run_kfold(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("デバイス: %s", device)
 
-    kf = GroupKFold(n_splits=k_folds)
     groups = [r["image_path"] for r in records]
     use_transfer = config.backbone not in {"custom", "soft_argmax"}
     effective_freeze = config.freeze_epochs if use_transfer else 0
 
+    if k_folds == 1:
+        # k=1: GroupShuffleSplit による固定 80/20 分割（CV なし・高速）
+        gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=config.seed)
+        splits = list(gss.split(records, groups=groups))
+        logger.info("k=1 モード: GroupShuffleSplit(test_size=0.2, seed=%d)", config.seed)
+    else:
+        kf = GroupKFold(n_splits=k_folds)
+        splits = list(kf.split(records, groups=groups))
+
     fold_results: list[FoldResult] = []
 
-    for fold, (train_idx, val_idx) in enumerate(kf.split(records, groups=groups)):
+    for fold, (train_idx, val_idx) in enumerate(splits):
         logger.info("\n===== Fold %d/%d =====", fold + 1, k_folds)
 
         train_records = [records[i] for i in train_idx]
