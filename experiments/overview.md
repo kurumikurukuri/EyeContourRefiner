@@ -13,4 +13,5 @@
 | [EXP007](EXP007_dead_zone_sweep/summary.md) | dead_zone_huber_loss × EXP006全条件比較 | 8 | 未実施 | - |
 | [EXP008](EXP008_norm_eye_scale_sweep/summary.md) | norm_eye_scale スカラー補助入力 sweep | 2 | 未実施 | - |
 | [EXP009](EXP009_small_eye_filter_sweep/summary.md) | small_eye_filter（eye_scale下位20%除外） sweep | 2 | 完了・考察済 | K2_wide_patch: CV 0.05634 / Holdout 0.06205（**共通評価ではH2に劣る**） |
-| [EXP010](EXP010_data_v2_wide_patch/summary.md) | データv2（~6930件）× wide_patch 再検証 | 2 | 完了・考察済 | L1_wide_patch: CV 0.05768 / Holdout 0.05603（生t MAE=0.1121、**新ベスト**）/ L2(pq_ratio)は効果なし |
+| [EXP010](EXP010_data_v2_wide_patch/summary.md) | データv2（~6930件）× wide_patch 再検証 | 3 | 完了・考察済 | L1_wide_patch: CV 0.05768 / Holdout 0.05603（生t MAE=0.1121、**新ベスト**）/ L2(pq_ratio)・L3(wo_flip)はいずれも効果なし |
+| [EXP012](EXP012_patch_grid_sweep/summary.md) | パッチサイズ格子 sweep（patch_t_min/max × perp_scale × h × w） | 108 | 未実施 | - |
