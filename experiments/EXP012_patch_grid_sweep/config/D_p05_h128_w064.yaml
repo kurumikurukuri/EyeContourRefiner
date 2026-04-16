@@ -1,0 +1,23 @@
+# D_p05_h128_w064: t_min=-1.25, t_max=2.25, perp_scale=0.5, h=128, w=64
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 3
+use_t_weighted_sampler: false
+lr: 0.0001
+weight_decay: 0.0001
+epochs: 100
+batch: 32
+k: 1
+patience: 25
+seed: 42
+aug_flags: 79
+label_t_min: -0.5
+label_t_max: 1.5
+patch_t_min: -1.25
+patch_t_max: 2.25
+patch_perp_scale: 0.5
+patch_h: 128
+patch_w: 64
