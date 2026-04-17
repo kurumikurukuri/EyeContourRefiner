@@ -52,6 +52,8 @@
     #btn-apply-pred-eye { background: #4a2000; border-color: #ff6d00; }
     #btn-apply-pred-eye:hover { background: #ff6d00; color: #000; }
     #btn-apply-pred-eye:disabled { opacity: 0.4; cursor: not-allowed; }
+    #btn-reset-eye { background: #3a0000; border-color: #cc3333; }
+    #btn-reset-eye:hover { background: #cc3333; }
     #btn-next-unannotated { background: #1a3a5c; border-color: #4fc3f7; }
     #btn-next-unannotated:hover { background: #4fc3f7; color: #000; }
 
@@ -698,6 +700,7 @@
     <button id="btn-undo">やり直し</button>
     <button id="btn-apply-pred" disabled>予測を適用</button>
     <button id="btn-apply-pred-eye" disabled title="同じ目の未ラベル点すべてに予測を一括適用">目全体に予測を適用</button>
+    <button id="btn-reset-eye" title="同じ目の全アノテーションをNullにリセット">目をリセット</button>
   </div>
   <div id="status-msg"></div>
   <div>
@@ -705,6 +708,6 @@
   </div>
 </div>
 
-<script src="/static/annotator.js?v=15"></script>
+<script src="/static/annotator.js?v=16"></script>
 </body>
 </html>

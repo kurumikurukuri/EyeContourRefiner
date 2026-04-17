@@ -77,6 +77,7 @@ const btnUndo            = document.getElementById("btn-undo");
 const btnSave            = document.getElementById("btn-save");
 const btnApplyPred       = document.getElementById("btn-apply-pred");
 const btnApplyPredEye    = document.getElementById("btn-apply-pred-eye");
+const btnResetEye        = document.getElementById("btn-reset-eye");
 const btnModel           = document.getElementById("btn-model");
 const modelPanel         = document.getElementById("model-panel");
 const modelList          = document.getElementById("model-list");
@@ -531,6 +532,23 @@ btnApplyPredEye.addEventListener("click", async () => {
   } finally {
     btnApplyPredEye.disabled = (state.tPred === null);
     btnApplyPredEye.textContent = "目全体に予測を適用";
+  }
+});
+
+btnResetEye.addEventListener("click", async () => {
+  if (!confirm("この目の全アノテーションをNullにリセットしますか？")) return;
+  btnResetEye.disabled = true;
+  btnResetEye.textContent = "リセット中...";
+  try {
+    const result = await apiFetch(`/api/reset_eye/${state.currentIdx}`, { method: "POST" });
+    setStatus(`🗑 ${result.updated} 点をリセットしました`);
+    await loadSamplesSummary();
+    await loadSample(state.currentIdx);
+  } catch (err) {
+    setStatus("リセットエラー: " + err.message);
+  } finally {
+    btnResetEye.disabled = false;
+    btnResetEye.textContent = "目をリセット";
   }
 });
 

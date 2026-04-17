@@ -122,6 +122,22 @@ def batch_update_t(
         )
 
 
+def reset_t_for_eye(
+    image_path: str,
+    face_index: Optional[int],
+    part_name: str,
+    db_path: Path = DB_PATH,
+) -> int:
+    """同一眼（image_path + face_index + part_name）の全サンプルの t を NULL にリセットする。更新件数を返す。"""
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            """UPDATE samples SET t = NULL
+               WHERE image_path = ? AND face_index = ? AND part_name = ?""",
+            (image_path, face_index if face_index is not None else 0, part_name),
+        )
+        return cur.rowcount
+
+
 def get_unannotated_samples_for_eye(
     image_path: str,
     face_index: Optional[int],

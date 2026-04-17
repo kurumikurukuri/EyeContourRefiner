@@ -760,6 +760,23 @@ def apply_pred_eye(idx: int):
     return {"ok": True, "updated": len(updates)}
 
 
+@app.post("/api/reset_eye/{idx}")
+def reset_eye(idx: int):
+    """現在サンプルと同一目（image_path + face_index + part_name）の全サンプルの t を NULL にリセットする。"""
+    current = _db.get_sample_by_idx(idx)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
+
+    image_path = current["image_path"]
+    face_index = current.get("face_index")
+    part_name = current.get("part_name", "")
+
+    updated = _db.reset_t_for_eye(image_path, face_index, part_name)
+    _build_image_index()
+
+    return {"ok": True, "updated": updated}
+
+
 @app.get("/api/gallery")
 def get_gallery(
     page: int = 1,
