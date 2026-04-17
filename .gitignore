@@ -5,8 +5,12 @@
 !/data/samples.db
 /models/
 
-# Experiment artifacts（モデルとTBログは除外、設定とmanifestは追跡）
-experiments/*/outputs/
+# Experiment artifacts（モデルとTBログは除外、experiment.jsonは追跡）
+experiments/*/outputs/**/*.pt
+experiments/*/outputs/**/*.pth
+experiments/*/outputs/**/events.out.*
+experiments/*/outputs/**/*_prediction*.csv
+experiments/*/outputs/**/*_predictions*.csv
 experiments/*/runs/
 
 __pycache__/
