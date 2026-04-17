@@ -28,7 +28,7 @@
 ```
 backbone: custom / loss_fn: t / use_sigmoid: true / use_batchnorm: true
 num_conv_layers: 3 / lr: 1e-4 / weight_decay: 1e-4
-epochs: 100 / batch: 32 / k: 1 / patience: 25 / seed: 42
+epochs: 80 / batch: 64 / k: 1 / patience: 20 / seed: 42
 aug_flags: 79 / label_t_min: -0.5 / label_t_max: 1.5
 ```
 
