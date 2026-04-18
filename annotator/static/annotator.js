@@ -59,7 +59,9 @@ const elInfoSub   = document.getElementById("info-sub");
 const elInfoP     = document.getElementById("info-p");
 const elInfoQ     = document.getElementById("info-q");
 const elInfoR     = document.getElementById("info-r");
-const elInfoPred  = document.getElementById("info-pred");
+const elInfoPred      = document.getElementById("info-pred");
+const elInfoEyeScale  = document.getElementById("info-eye-scale");
+const elInfoNormEyeScale = document.getElementById("info-norm-eye-scale");
 const elStatus    = document.getElementById("status-msg");
 const elBanner    = document.getElementById("complete-banner");
 
@@ -67,7 +69,7 @@ const btnPrevEyes        = document.getElementById("btn-prev-eyes");
 const btnNextEyes        = document.getElementById("btn-next-eyes");
 
 const btnPrev            = document.getElementById("btn-prev");
-const btnSkip            = document.getElementById("btn-skip");
+const btnRandom          = document.getElementById("btn-random");
 const btnNext            = document.getElementById("btn-next");
 const btnNextUnannotated = document.getElementById("btn-next-unannotated");
 const btnSkipImage       = document.getElementById("btn-skip-image");
@@ -282,6 +284,8 @@ async function loadSample(idx) {
     elInfoSub.textContent  = `${data.sub_key} [${data.point_index}]`;
     elInfoP.textContent    = `(${data.px.toFixed(1)}, ${data.py.toFixed(1)})`;
     elInfoQ.textContent    = `(${data.qx.toFixed(1)}, ${data.qy.toFixed(1)})`;
+    elInfoEyeScale.textContent     = data.eye_scale != null ? `${Math.round(data.eye_scale)}px` : "--";
+    elInfoNormEyeScale.textContent = data.norm_eye_scale != null ? data.norm_eye_scale.toFixed(4) : "--";
 
     updateProgress();
     updateLabelSourceBadge();
@@ -483,9 +487,27 @@ btnSave.addEventListener("click", async () => {
   advance(1);
 });
 
-btnSkip.addEventListener("click", () => {
-  advance(1);
-});
+function jumpToRandom() {
+  const candidates = [];
+  const list = state.sortedIdxList;
+  if (list) {
+    for (const i of list) {
+      if (!state.annotationStatus[i] && !state.skipFlags[i]) candidates.push(i);
+    }
+  } else {
+    for (let i = 0; i < state.total; i++) {
+      if (!state.annotationStatus[i] && !state.skipFlags[i]) candidates.push(i);
+    }
+  }
+  if (candidates.length === 0) {
+    setStatus("未アノテーションのサンプルがありません");
+    return;
+  }
+  const idx = candidates[Math.floor(Math.random() * candidates.length)];
+  loadSample(idx);
+}
+
+btnRandom.addEventListener("click", jumpToRandom);
 
 btnPrev.addEventListener("click", () => {
   advance(-1);
@@ -616,7 +638,7 @@ document.addEventListener("keydown", (e) => {
   switch (e.key) {
     case "ArrowRight": advance(1);  break;
     case "ArrowLeft":  advance(-1); break;
-    case "s": case "S": advance(1); break;  // skip
+    case "s": case "S": jumpToRandom(); break;  // random
     case "n": case "N": jumpToNextUnannotated(); break;  // next unannotated
     case "g": case "G": openGallery(); break;             // gallery
     case "x": case "X": btnSkipImage.click(); break;     // toggle skip image

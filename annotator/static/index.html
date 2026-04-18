@@ -596,7 +596,7 @@
   <span id="progress">読み込み中...</span>
   <button id="btn-prev-eyes">← 前の目へ</button>
   <button id="btn-prev">← 前へ</button>
-  <button id="btn-skip">スキップ</button>
+  <button id="btn-random" title="未アノテーション・スキップなしからランダムに移動">ランダム</button>
   <button id="btn-next">次へ →</button>
   <button id="btn-next-eyes">次の目へ →</button>
   <button id="btn-next-unannotated" title="次の未アノテーション画像へ (N)">未完へ ⏭</button>
@@ -668,6 +668,7 @@
       <div><span class="key">Q:    </span><span class="val" id="info-q">--</span></div>
       <div><span class="key">R:    </span><span class="val" id="info-r">--</span></div>
       <div><span class="key" style="color:#ff9800;">予測 t: </span><span class="val" style="color:#ff9800;" id="info-pred">--</span></div>
+      <div><span class="key">eye_scale: </span><span class="val" id="info-eye-scale">--</span><span class="key" style="margin-left:12px;">norm: </span><span class="val" id="info-norm-eye-scale">--</span></div>
       <div style="margin-top:6px; display:none;">
         <span id="label-source-badge"></span>
         <span id="label-confidence"></span>
@@ -708,6 +709,6 @@
   </div>
 </div>
 
-<script src="/static/annotator.js?v=16"></script>
+<script src="/static/annotator.js?v=17"></script>
 </body>
 </html>
