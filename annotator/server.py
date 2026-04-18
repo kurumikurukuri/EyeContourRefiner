@@ -63,6 +63,7 @@ _ALLOWED_MODEL_DIRS = [
 _image_index: Optional[Dict[str, Dict[str, Any]]] = None  # image_path → {first_pos, total, annotated, skipped}
 _image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
 _image_eye_scale: Optional[Dict[str, float]] = None  # image_path → min eye_scale (px)
+_eye_scale_per_eye: Optional[Dict[tuple, float]] = None  # (image_path, face_index, part_name) → eye_scale (px)
 _image_dims_cache: Dict[str, tuple] = {}  # image_path → (w, h) — norm_eye_scale 計算用遅延キャッシュ
 
 # モデル状態（_infer_models 等）の競合状態防止用ロック
@@ -289,9 +290,22 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 
 def _build_image_index() -> None:
     """DB から画像パス単位のグループインデックスを構築する。"""
-    global _image_index, _image_order, _image_eye_scale
+    global _image_index, _image_order, _image_eye_scale, _eye_scale_per_eye
     _image_index, _image_order = _db.get_image_index()
     _image_eye_scale = _db.get_eye_scale_per_image()
+    _eye_scale_per_eye = _db.get_eye_scale_per_eye()
+
+
+def _build_eye_scale_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """サンプルに対応する eye_scale / norm_eye_scale を返す。"""
+    key = (sample["image_path"], int(sample.get("face_index", 0)), sample["part_name"])
+    es = (_eye_scale_per_eye or {}).get(key)
+    if es is None:
+        return {"eye_scale": None, "norm_eye_scale": None}
+    w, h = _get_image_dims(sample["image_path"])
+    diag = float(np.sqrt(h * w))
+    nes = round(es / diag, 4) if diag > 0 else None
+    return {"eye_scale": round(es, 1), "norm_eye_scale": nes}
 
 
 def _get_image_dims(image_path: str) -> tuple:
@@ -678,6 +692,7 @@ def get_sample(idx: int):
         "point_index": sample["point_index"],
         "image_path": sample["image_path"],
         "skip_flag": sample.get("skip_flag", False),
+        **_build_eye_scale_fields(sample),
     }
 
 
