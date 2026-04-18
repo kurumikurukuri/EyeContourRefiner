@@ -9,8 +9,8 @@
 experiments/*/outputs/**/*.pt
 experiments/*/outputs/**/*.pth
 experiments/*/outputs/**/events.out.*
-experiments/*/outputs/**/*_prediction*.csv
-experiments/*/outputs/**/*_predictions*.csv
+# experiments/*/outputs/**/*_prediction*.csv  # tracked
+# experiments/*/outputs/**/*_predictions*.csv  # tracked
 experiments/*/runs/
 
 __pycache__/
