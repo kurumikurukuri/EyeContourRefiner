@@ -59,49 +59,99 @@ python experiments/EXP003_input_sweep/scr/train_exp003.py
 python experiments/EXP003_input_sweep/scr/train_exp003.py --configs base tight size_large
 ```
 
-## 結果（第1回: 8条件）
+## 結果（全13条件）
 
-label_range = label_t_max - label_t_min。raw = norm × label_range。
+label_range = label_t_max - label_t_min。生t MAE = norm MAE × label_range。
 
-| 条件名 | label_range | CV MAE (norm) | Holdout MAE (norm) | Holdout MAE (raw) | CV folds (norm) |
+| 条件名 | label_range | CV MAE (norm) | Holdout MAE (norm) | **Holdout MAE (raw)** | 相関係数 r |
 |---|---|---|---|---|---|
-| aligned_wide | 3.0 | 0.042683 | 0.043247 | **0.1297** | [0.0412, 0.0458, 0.0443, 0.0431, 0.0389] |
-| wide_label_base | 2.0 | 0.063566 | 0.063387 | **0.1268** | [0.0620, 0.0680, 0.0667, 0.0643, 0.0568] |
-| perp_wide | 2.0 | 0.063607 | 0.064237 | 0.1285 | [0.0620, 0.0670, 0.0661, 0.0651, 0.0579] |
-| base | 2.0 | 0.065144 | 0.065531 | 0.1311 | [0.0642, 0.0698, 0.0680, 0.0654, 0.0584] |
-| perp_narrow | 2.0 | 0.065331 | 0.065597 | 0.1312 | [0.0651, 0.0692, 0.0683, 0.0657, 0.0584] |
-| size_large | 2.0 | 0.065506 | 0.066313 | 0.1326 | [0.0644, 0.0691, 0.0677, 0.0661, 0.0602] |
-| tight_wide_perp | 1.5 | 0.085831 | 0.087498 | 0.1312 | [0.0854, 0.0883, 0.0890, 0.0876, 0.0789] |
-| tight | 1.5 | 0.087684 | 0.089424 | 0.1341 | [0.0871, 0.0909, 0.0914, 0.0885, 0.0805] |
+| **wide_label_base** | 2.0 | 0.0636 | 0.0634 | **0.1268** | **0.484** |
+| aligned_wide_large | 3.0 | 0.0444 | 0.0431 | 0.1293 | 0.474 |
+| perp_mid | 2.0 | 0.0655 | 0.0645 | 0.1290 | 0.471 |
+| perp_wide | 2.0 | 0.0636 | 0.0642 | 0.1285 | 0.471 |
+| size_small | 2.0 | 0.0649 | 0.0649 | 0.1297 | 0.457 |
+| aligned_wide | 3.0 | 0.0427 | 0.0432 | 0.1297 | 0.476 |
+| base | 2.0 | 0.0651 | 0.0655 | 0.1310 | 0.449 |
+| perp_narrow | 2.0 | 0.0653 | 0.0656 | 0.1312 | 0.460 |
+| size_large | 2.0 | 0.0655 | 0.0663 | 0.1326 | 0.449 |
+| tight_wide_perp | 1.5 | 0.0858 | 0.0875 | 0.1312 | 0.438 |
+| tight | 1.5 | 0.0877 | 0.0894 | 0.1341 | 0.424 |
+| tight_large | 1.5 | 0.0912 | 0.0922 | 0.1383 | 0.390 |
+| ultra_tight | 1.0 | 0.1345 | 0.1319 | **0.1319** | 0.357 |
 
-参考: EXP002 ベスト(sig_tloss) Holdout 0.064225 (norm, label_range=2.0 → raw=0.1285)
+参考: EXP002 sig_tloss Holdout raw=0.1284 / r=0.479
 
-## 考察（第1回）
+## 考察（全条件）
 
-### 1. aligned_wide の normalized MAE は misleading
-`aligned_wide` は norm MAE=0.043 と突出して低いが、label_range=3.0 なので raw=0.130 となり、
-`wide_label_base`(raw=0.127) より **悪い**。wide patch が有効なのは確かだが、
-label 範囲を広げることは予測対象のスケールを薄めるだけで精度向上には寄与しない。
+### 1. wide_label_base が生t MAE ベスト（0.1268）
 
-### 2. wide_label_base がベスト（raw MAE 基準）
-`wide_label_base`（patch=(-1.0,2.0)、label=(-0.5,1.5)）が raw Holdout MAE=0.1268 で最良。
-EXP002 ベスト(0.1285)を上回った。**patch 範囲を広く取って周辺コンテキストを与えつつ、
-label 正規化はデフォルト範囲に保つ**のが効果的。
+`wide_label_base`（patch=(-1.0,2.0)、label=(-0.5,1.5)）が raw Holdout MAE=0.1268 / r=0.484 で最良。
+EXP002 ベスト(raw=0.1284, r=0.479)を上回る。
+**patch 範囲を広く取って周辺コンテキストを与えつつ、label 正規化はデフォルト範囲に保つ**
+のが最も効果的なパターン。
 
-### 3. t 範囲を絞るのは逆効果
-`tight` と `tight_wide_perp` は raw でも最悪クラス（0.134, 0.131）。
-(-0.25, 1.25) への絞り込みはデータの多様性を削り過学習を招く可能性がある。
+### 2. normalized MAE の misleading 問題
 
-### 4. perp_wide は有効、perp_narrow は無効
-`perp_wide`(perp=2.0) は base より若干改善(raw: 0.1285 vs 0.1311)。
-`perp_narrow`(perp=0.5) は base とほぼ同じ。垂直方向は広い方が有益だが、
-`wide_label_base` ほどの効果はない。
+`aligned_wide`（label_range=3.0）は norm MAE=0.043 と見かけ上は突出して低いが、
+raw 換算では 0.1297 と base より悪化するケースすらある。
+`aligned_wide_large` も同様（raw=0.1293）。
+**label 範囲を広げても学習対象のスケールが薄まるだけで、実質的な精度向上には
+寄与しない**ことが確認された。以降は生t MAE で比較統一する。
 
-### 5. size_large は効果なし
-96×192 は base(64×128) より悪化(raw: 0.1326 vs 0.1311)。
-解像度増加よりも適切な patch 範囲の方が重要。
+### 3. ultra_tight が最悪（0.1319）
 
-### 次の実験への示唆
-- **patch_t をさらに広げる**: (-1.5, 2.5) や (-2.0, 3.0) でどこまで有効か確認
-- **wide_label_base × perp_wide の複合**: 現在未検証の有望な組み合わせ
-- **wide_label_base × size_large の複合**: tight_large で検証済みだが wide_label_base 版は未実施
+`ultra_tight`（patch=(0,1)、label=同）は r=0.357 と相関も最低で、mid 外のサンプルに
+対する識別力が崩壊している。**patch 範囲を label と同じ [0,1] に絞ることは、
+境界外サンプルを学習から排除して CV を悪化させる**。
+
+### 4. tight 系は生tスケールで見ても劣化
+
+- tight: raw 0.1341 (-0.007 vs wide_label_base)
+- tight_wide_perp: 0.1312 (-0.004)
+- tight_large: 0.1383 (-0.012 最悪クラス)
+- tight_large で解像度を上げても改善せず、逆に悪化
+
+**patch_t を絞るのは相関を下げるだけで、tight × size_large の組み合わせで
+さらに悪化する**（解像度を上げても情報量が見かけ上増えるだけで有用な信号は減る）。
+
+### 5. perp_scale（垂直範囲）は広げても効果限定的
+
+| perp_scale | raw MAE | r |
+|---|---|---|
+| 0.5 (narrow) | 0.1312 | 0.460 |
+| 1.0 (base) | 0.1310 | 0.449 |
+| 1.5 (mid) | 0.1290 | 0.471 |
+| 2.0 (wide) | 0.1285 | 0.471 |
+
+perp を広げると微改善するが、wide_label_base（+0.0017改善）ほどの効果はない。
+垂直方向はアイライン位置特定には比較的冗長な情報を含む。
+
+### 6. 解像度の効果は patch 範囲に依存
+
+- size_small (32×64): 0.1297（base より改善）
+- base (64×128): 0.1310
+- size_large (96×192): 0.1326（base より悪化）
+
+**解像度を上げるより、むしろデフォルトや縮小した方が汎化には良い**。
+64×128 は現データ量では十分な解像度であり、大解像度は過学習を招く。
+
+### 7. エッジケース平均回帰は全条件で解消されない
+
+全13条件でバイアスパターン（t<0.2 で過大、t>1 で過小）は一貫して存在し、
+patch 構成変更では根本解決にならない（EXP004-005 の動機と整合）。
+
+## 結論
+
+| 採用/不採用 | 項目 | 理由 |
+|---|---|---|
+| ✅ | patch (-1.0, 2.0) + label (-0.5, 1.5) | raw MAE ベスト、以降のベースライン |
+| ❓ | perp_scale=2.0 | 微改善、単独では弱いが wide_patch と組み合わせ候補 |
+| ❌ | label_range 拡大 (aligned_wide) | 見かけの norm 改善にすぎない |
+| ❌ | tight 系 (patch 絞り) | 全て悪化 |
+| ❌ | size_large | 過学習で逆効果 |
+| ❌ | ultra_tight | 相関崩壊 |
+
+**次実験への示唆:**
+- wide_label_base を標準化して入力 sweep を卒業し、EXP004 で use_sigmoid=False や
+  dfc（distance_from_center）など補助特徴量でエッジケース改善を試みる
+- wide_label_base × perp_wide の複合は EXP006 H2_wide_patch で検証
