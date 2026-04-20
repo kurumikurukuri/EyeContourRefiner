@@ -15,4 +15,5 @@
 | [EXP009](EXP009_small_eye_filter_sweep/summary.md) | small_eye_filter（eye_scale下位20%除外） sweep | 2 | 完了・考察済 | K2_wide_patch: CV 0.05634 / Holdout 0.06205（**共通評価ではH2に劣る**） |
 | [EXP010](EXP010_data_v2_wide_patch/summary.md) | データv2（~6930件）× wide_patch 再検証 | 8 | 完了・考察済 | **L4_wide_patch_wo_flip_deep4**: CV 0.05377 / Holdout 0.05544（生t MAE=0.1111、r=0.711、**新ベスト**）／L6(lr=1e-3) が Holdout で同等、L2/L3/L5/L8 は効果なし |
 | [EXP011](EXP011_hparam_sweep/summary.md) | ハイパーパラメータ総合 sweep（lr/wd・conv層数・loss・aug等） | 63 | 完了・考察済 | E6_lr1e3_wd1e4: test MAE=0.1123（**lr=1e-3+conv5+tws1_twl3の組み合わせ推奨**） |
-| [EXP012](EXP012_patch_grid_sweep/summary.md) | パッチサイズ格子 sweep（patch_t_min/max × perp_scale × h × w） | 108 | 未実施 | - |
+| [EXP012](EXP012_patch_grid_sweep/summary.md) | パッチサイズ格子 sweep（patch_t_min/max × perp_scale × h × w） | 108 | 完了・考察済 | **A_p10_h064_w064**: CV 0.056557 / Holdout **0.056123**（patch_w=64・perp_scale=1.0・t_min=-1.0/t_max=2.0 推奨） |
+| [EXP013](EXP013_hparam_combo/summary.md) | ハイパーパラメータ組み合わせ検証（L7 ベース × lr/conv/twl/正則化） | 6 | 未実施 | - |
