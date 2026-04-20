@@ -46,6 +46,7 @@ class TrainConfig:
     use_norm_eye_scale: bool = False
     use_logit_target: bool = False
     use_t_norm: bool = True
+    dropout_rate: float = 0.3
     patch_t_min: float = -0.5
     patch_t_max: float =  1.5
     label_t_min: float | None = None

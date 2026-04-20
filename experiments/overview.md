@@ -16,4 +16,4 @@
 | [EXP010](EXP010_data_v2_wide_patch/summary.md) | データv2（~6930件）× wide_patch 再検証 | 8 | 完了・考察済 | **L4_wide_patch_wo_flip_deep4**: CV 0.05377 / Holdout 0.05544（生t MAE=0.1111、r=0.711、**新ベスト**）／L6(lr=1e-3) が Holdout で同等、L2/L3/L5/L8 は効果なし |
 | [EXP011](EXP011_hparam_sweep/summary.md) | ハイパーパラメータ総合 sweep（lr/wd・conv層数・loss・aug等） | 63 | 完了・考察済 | E6_lr1e3_wd1e4: test MAE=0.1123（**lr=1e-3+conv5+tws1_twl3の組み合わせ推奨**） |
 | [EXP012](EXP012_patch_grid_sweep/summary.md) | パッチサイズ格子 sweep（patch_t_min/max × perp_scale × h × w） | 108 | 完了・考察済 | **A_p10_h064_w064**: CV 0.056557 / Holdout **0.056123**（patch_w=64・perp_scale=1.0・t_min=-1.0/t_max=2.0 推奨） |
-| [EXP013](EXP013_hparam_combo/summary.md) | ハイパーパラメータ組み合わせ検証（L7 ベース × lr/conv/twl/正則化） | 6 | 未実施 | - |
+| [EXP013](EXP013_hparam_combo/summary.md) | ハイパーパラメータ組み合わせ検証（L7 ベース × lr/conv/twl/正則化 × label範囲） | 11 | 完了・考察済 | **Q10_lr3_label_wide_scale**: CV(生t) 0.1133 / Holdout(生t) 0.1019（Q1 baseline 0.1041 比 `-0.0022`、単体効果の加算性なし） |

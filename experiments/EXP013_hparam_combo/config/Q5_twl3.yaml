@@ -1,0 +1,25 @@
+# Q5_twl3: Q1 + t_weighted_loss alpha=3（EXP011 A5/C03 の loss 効果を L7 で再検証）
+backbone: custom
+loss_fn: t_weighted
+t_loss_alpha: 3.0
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+lr: 1.0e-4
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 64
+label_t_min: -0.5
+label_t_max: 1.5

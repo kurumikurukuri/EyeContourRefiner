@@ -104,6 +104,7 @@ def build_experiment_record(
             "patch_t_max": args.patch_t_max,
             "label_t_min": args.label_t_min,
             "label_t_max": args.label_t_max,
+            "dropout_rate": args.dropout_rate,
         },
         "data": {
             "data_version": data_version,
@@ -242,6 +243,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         use_norm_eye_scale=args.use_norm_eye_scale,
         use_logit_target=args.use_logit_target,
         use_t_norm=args.use_t_norm,
+        dropout_rate=args.dropout_rate,
         patch_t_min=args.patch_t_min,
         patch_t_max=args.patch_t_max,
         patch_perp_scale=args.patch_perp_scale,
@@ -484,6 +486,10 @@ def main() -> None:
     parser.add_argument(
         "--aug_flags", type=lambda x: int(x, 0), default=0x4F,
         help="オーグメンテーションのビットフラグ（0x4F=全有効, 0x00=全無効）",
+    )
+    parser.add_argument(
+        "--dropout_rate", type=float, default=0.3,
+        help="回帰ヘッドの Dropout 率（default: 0.3）",
     )
     parser.add_argument(
         "--save_prediction_train", action="store_true",

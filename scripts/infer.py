@@ -227,7 +227,9 @@ def run_manifest(
     logger.info("推論完了: %d 件成功, %d 件スキップ -> %s", n, errors, output_path)
     if errors > 0:
         logger.warning("%d 件の画像読み込みに失敗しました。MAE は成功分のみで計算します。", errors)
-    _print_mae(output_path)
+    mae = _compute_mae(output_path)
+    if mae is not None:
+        _update_experiment_json(output_path, mae)
 
 
 def _load_manifest(manifest_path: Path) -> List[dict]:
@@ -248,18 +250,43 @@ def _load_manifest(manifest_path: Path) -> List[dict]:
     return records
 
 
-def _print_mae(predictions_path: Path) -> None:
-    """true_t_raw と pred_t_raw の MAE をログ出力する。"""
-    errors: List[float] = []
+def _compute_mae(predictions_path: Path) -> float | None:
+    """true_t_raw と pred_t_raw の MAE を計算してログ出力し、値を返す。"""
+    import json
+    diffs: List[float] = []
     with open(predictions_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                errors.append(abs(float(row["true_t_raw"]) - float(row["pred_t_raw"])))
+                diffs.append(abs(float(row["true_t_raw"]) - float(row["pred_t_raw"])))
             except (ValueError, KeyError):
                 continue
-    if errors:
-        mae = sum(errors) / len(errors)
-        logger.info("MAE (raw t): %.4f  (n=%d)", mae, len(errors))
+    if not diffs:
+        return None
+    mae = sum(diffs) / len(diffs)
+    logger.info("MAE (raw t): %.4f  (n=%d)", mae, len(diffs))
+    return mae
+
+
+def _update_experiment_json(predictions_path: Path, mae: float) -> None:
+    """experiment.json の results に test_mae / train_mae を書き込む。"""
+    import json
+    exp_json = predictions_path.parent / "experiment.json"
+    if not exp_json.exists():
+        return
+    name = predictions_path.name
+    if "test" in name:
+        key = "test_mae"
+    elif "train" in name:
+        key = "train_mae"
+    else:
+        return
+    try:
+        data = json.loads(exp_json.read_text(encoding="utf-8"))
+        data.setdefault("results", {})[key] = mae
+        exp_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        logger.info("experiment.json に %s=%.6f を記録しました: %s", key, mae, exp_json)
+    except Exception as exc:
+        logger.warning("experiment.json の更新に失敗しました: %s", exc)
 
 
 # ---------------------------------------------------------------------------
