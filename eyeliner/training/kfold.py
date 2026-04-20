@@ -140,6 +140,7 @@ def run_kfold(
             num_conv_layers=config.num_conv_layers,
             use_distance_from_center=config.use_distance_from_center,
             use_norm_eye_scale=config.use_norm_eye_scale,
+            dropout_rate=config.dropout_rate,
         ).to(device)
 
         # Phase 1: バックボーン凍結（転移学習時のみ）

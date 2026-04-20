@@ -1,0 +1,24 @@
+# Q4_lr3_conv5_reg: lr=1e-3 + conv5 + wd=1e-3 + dropout=0.1（L8 崩壊を正則化で回避）
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 5
+dropout_rate: 0.1
+use_t_weighted_sampler: false
+lr: 1.0e-3
+weight_decay: 1.0e-3
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 64
+label_t_min: -0.5
+label_t_max: 1.5

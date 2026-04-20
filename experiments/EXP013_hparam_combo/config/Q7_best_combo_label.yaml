@@ -1,0 +1,25 @@
+# Q7_best_combo_label: Q6 + patch_t/label_t 範囲拡大（-1.5,2.5 / -1.0,2.0）
+backbone: custom
+loss_fn: t_weighted
+t_loss_alpha: 3.0
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 5
+dropout_rate: 0.1
+use_t_weighted_sampler: false
+lr: 1.0e-3
+weight_decay: 1.0e-3
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 79
+patch_t_min: -1.5
+patch_t_max: 2.5
+patch_perp_scale: 1.0
+patch_h: 64
+patch_w: 64
+label_t_min: -1
+label_t_max: 2

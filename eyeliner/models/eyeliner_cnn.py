@@ -22,6 +22,7 @@ class EyelinerCNN(nn.Module):
         num_conv_layers: int = 3,
         use_distance_from_center: bool = False,
         use_norm_eye_scale: bool = False,
+        dropout_rate: float = 0.3,
     ) -> None:
         super().__init__()
         self.use_pq_ratio = use_pq_ratio
@@ -30,6 +31,7 @@ class EyelinerCNN(nn.Module):
         self.num_conv_layers = num_conv_layers
         self.use_distance_from_center = use_distance_from_center
         self.use_norm_eye_scale = use_norm_eye_scale
+        self.dropout_rate = dropout_rate
 
         def _bn(channels: int) -> nn.Module:
             return nn.BatchNorm2d(channels) if use_batchnorm else nn.Identity()
@@ -50,7 +52,7 @@ class EyelinerCNN(nn.Module):
         regressor_layers: list[nn.Module] = [
             nn.Linear(cnn_flat + scalar_in, 64),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(dropout_rate),
             nn.Linear(64, 1),
         ]
         if use_sigmoid:
