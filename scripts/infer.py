@@ -17,7 +17,8 @@
 出力 CSV の列:
     idx, image_path, part_name, sub_key, point_index,
     px, py, qx, qy,
-    true_t_raw, true_t_norm, pred_t_raw, pred_t_norm,
+    true_t_raw, true_t_raw_quant, true_t_norm,
+    pred_t_raw, pred_t_raw_quant, pred_t_norm,
     rx_pred, ry_pred
 """
 from __future__ import annotations
@@ -122,6 +123,13 @@ def predict(
 # Manifest mode
 # ---------------------------------------------------------------------------
 
+def _quantize(value: float, step: float | None) -> float:
+    """raw t 値を step 分解能に量子化する。step が None/0 以下ならそのまま返す。"""
+    if step is None or step <= 0:
+        return value
+    return round(value / step) * step
+
+
 def run_manifest(
     model: EyelinerCNN,
     device: torch.device,
@@ -134,6 +142,7 @@ def run_manifest(
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
     use_t_norm: bool = True,
+    t_quant_step: float | None = None,
 ) -> None:
     records = _load_manifest(manifest_path)
     if not records:
@@ -146,7 +155,8 @@ def run_manifest(
     out_fieldnames = [
         "idx", "image_path", "part_name", "sub_key", "point_index",
         "px", "py", "qx", "qy",
-        "true_t_raw", "true_t_norm", "pred_t_raw", "pred_t_norm",
+        "true_t_raw", "true_t_raw_quant", "true_t_norm",
+        "pred_t_raw", "pred_t_raw_quant", "pred_t_norm",
         "rx_pred", "ry_pred",
     ]
 
@@ -194,32 +204,38 @@ def run_manifest(
                 pred_t_raw = t_pred
                 pred_t_norm = (pred_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
 
+            pred_t_raw_quant = _quantize(pred_t_raw, t_quant_step)
             rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, pred_t_raw)
 
             # true_t: manifest の t は生の物理 t 値
             t_stored = rec.get("t", "")
             try:
                 true_t_raw = float(t_stored)
+                true_t_raw_quant = _quantize(true_t_raw, t_quant_step)
                 true_t_norm = (true_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
-                true_t_raw_str  = f"{true_t_raw:.6f}"
-                true_t_norm_str = f"{true_t_norm:.6f}"
+                true_t_raw_str       = f"{true_t_raw:.6f}"
+                true_t_raw_quant_str = f"{true_t_raw_quant:.6f}"
+                true_t_norm_str      = f"{true_t_norm:.6f}"
             except (ValueError, TypeError):
-                true_t_raw_str  = t_stored
-                true_t_norm_str = ""
+                true_t_raw_str       = t_stored
+                true_t_raw_quant_str = ""
+                true_t_norm_str      = ""
 
             writer.writerow({
-                "idx":         rec.get("idx", ""),
-                "image_path":  image_path,
-                "part_name":   rec.get("part_name", ""),
-                "sub_key":     rec.get("sub_key", ""),
-                "point_index": rec.get("point_index", ""),
+                "idx":              rec.get("idx", ""),
+                "image_path":       image_path,
+                "part_name":        rec.get("part_name", ""),
+                "sub_key":          rec.get("sub_key", ""),
+                "point_index":      rec.get("point_index", ""),
                 "px": px, "py": py, "qx": qx, "qy": qy,
-                "true_t_raw":  true_t_raw_str,
-                "true_t_norm": true_t_norm_str,
-                "pred_t_raw":  f"{pred_t_raw:.6f}",
-                "pred_t_norm": f"{pred_t_norm:.6f}",
-                "rx_pred":     f"{rx_pred:.2f}",
-                "ry_pred":     f"{ry_pred:.2f}",
+                "true_t_raw":       true_t_raw_str,
+                "true_t_raw_quant": true_t_raw_quant_str,
+                "true_t_norm":      true_t_norm_str,
+                "pred_t_raw":       f"{pred_t_raw:.6f}",
+                "pred_t_raw_quant": f"{pred_t_raw_quant:.6f}",
+                "pred_t_norm":      f"{pred_t_norm:.6f}",
+                "rx_pred":          f"{rx_pred:.2f}",
+                "ry_pred":          f"{ry_pred:.2f}",
             })
             del image
 
@@ -227,9 +243,9 @@ def run_manifest(
     logger.info("推論完了: %d 件成功, %d 件スキップ -> %s", n, errors, output_path)
     if errors > 0:
         logger.warning("%d 件の画像読み込みに失敗しました。MAE は成功分のみで計算します。", errors)
-    mae = _compute_mae(output_path)
-    if mae is not None:
-        _update_experiment_json(output_path, mae)
+    mae_raw, mae_quant = _compute_mae(output_path, t_quant_step=t_quant_step)
+    if mae_raw is not None:
+        _update_experiment_json(output_path, mae_raw, mae_quant, t_quant_step)
 
 
 def _load_manifest(manifest_path: Path) -> List[dict]:
@@ -250,41 +266,80 @@ def _load_manifest(manifest_path: Path) -> List[dict]:
     return records
 
 
-def _compute_mae(predictions_path: Path) -> float | None:
-    """true_t_raw と pred_t_raw の MAE を計算してログ出力し、値を返す。"""
-    import json
-    diffs: List[float] = []
+def _compute_mae(
+    predictions_path: Path,
+    t_quant_step: float | None = None,
+) -> tuple[float | None, float | None]:
+    """MAE を二重計算する。
+
+    Returns:
+        (mae_raw, mae_quant)
+        mae_raw   : |true_t_raw - pred_t_raw|                 （常に計算）
+        mae_quant : |true_t_raw_quant - pred_t_raw_quant|     （t_quant_step 指定時のみ）
+    """
+    diffs_raw: List[float] = []
+    diffs_quant: List[float] = []
     with open(predictions_path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             try:
-                diffs.append(abs(float(row["true_t_raw"]) - float(row["pred_t_raw"])))
+                diffs_raw.append(abs(float(row["true_t_raw"]) - float(row["pred_t_raw"])))
             except (ValueError, KeyError):
                 continue
-    if not diffs:
-        return None
-    mae = sum(diffs) / len(diffs)
-    logger.info("MAE (raw t): %.4f  (n=%d)", mae, len(diffs))
-    return mae
+            if t_quant_step is not None and t_quant_step > 0:
+                try:
+                    diffs_quant.append(
+                        abs(float(row["true_t_raw_quant"]) - float(row["pred_t_raw_quant"]))
+                    )
+                except (ValueError, KeyError):
+                    continue
+    if not diffs_raw:
+        return None, None
+    mae_raw = sum(diffs_raw) / len(diffs_raw)
+    logger.info("MAE (raw t): %.4f  (n=%d)", mae_raw, len(diffs_raw))
+    mae_quant: float | None = None
+    if diffs_quant:
+        mae_quant = sum(diffs_quant) / len(diffs_quant)
+        logger.info(
+            "MAE (quant t, step=%g): %.4f  (n=%d)",
+            t_quant_step, mae_quant, len(diffs_quant),
+        )
+    return mae_raw, mae_quant
 
 
-def _update_experiment_json(predictions_path: Path, mae: float) -> None:
-    """experiment.json の results に test_mae / train_mae を書き込む。"""
+def _update_experiment_json(
+    predictions_path: Path,
+    mae_raw: float,
+    mae_quant: float | None,
+    t_quant_step: float | None,
+) -> None:
+    """experiment.json の results に test_mae / train_mae を書き込む。
+
+    互換性のため test_mae / train_mae は raw 値を指す。量子化側は
+    test_mae_quant / train_mae_quant として別キーに記録する。
+    """
     import json
     exp_json = predictions_path.parent / "experiment.json"
     if not exp_json.exists():
         return
     name = predictions_path.name
     if "test" in name:
-        key = "test_mae"
+        prefix = "test"
     elif "train" in name:
-        key = "train_mae"
+        prefix = "train"
     else:
         return
     try:
         data = json.loads(exp_json.read_text(encoding="utf-8"))
-        data.setdefault("results", {})[key] = mae
+        results = data.setdefault("results", {})
+        results[f"{prefix}_mae"] = mae_raw
+        if mae_quant is not None:
+            results[f"{prefix}_mae_quant"] = mae_quant
+            results[f"{prefix}_mae_quant_step"] = t_quant_step
         exp_json.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        logger.info("experiment.json に %s=%.6f を記録しました: %s", key, mae, exp_json)
+        log_msg = f"experiment.json に {prefix}_mae={mae_raw:.6f}"
+        if mae_quant is not None:
+            log_msg += f" / {prefix}_mae_quant={mae_quant:.6f} (step={t_quant_step})"
+        logger.info("%s を記録しました: %s", log_msg, exp_json)
     except Exception as exc:
         logger.warning("experiment.json の更新に失敗しました: %s", exc)
 
@@ -395,7 +450,26 @@ def main() -> None:
         "--no_t_norm", action="store_true",
         help="t正規化なしで学習したモデルの推論時に指定。モデル出力を生の物理 t 値として扱う。",
     )
+    parser.add_argument(
+        "--t_quant_step", type=float, default=None,
+        help="生の物理 t 値の量子化ステップ（例: 0.1 / 0.02 / 0.01）。"
+             "指定時は quantized 列と MAE_quant も出力する。",
+    )
+    parser.add_argument(
+        "--round_t", type=int, default=None,
+        help="(後方互換) --t_quant_step = 10**(-round_t) に翻訳される。新規は --t_quant_step を使うこと",
+    )
     args = parser.parse_args()
+
+    # --round_t エイリアス
+    if args.round_t is not None:
+        if args.t_quant_step is not None:
+            parser.error("--round_t と --t_quant_step は同時指定できません。--t_quant_step を使ってください。")
+        args.t_quant_step = 10.0 ** (-args.round_t)
+        logger.warning(
+            "--round_t=%d は非推奨です。--t_quant_step=%g に翻訳しました。",
+            args.round_t, args.t_quant_step,
+        )
 
     if args.image and any(v is None for v in [args.px, args.py, args.qx, args.qy]):
         parser.error("--image 使用時は --px --py --qx --qy が必要です。")
@@ -421,6 +495,7 @@ def main() -> None:
             patch_perp_scale=args.patch_perp_scale,
             patch_size=patch_size,
             use_t_norm=use_t_norm,
+            t_quant_step=args.t_quant_step,
         )
     else:
         run_single(

@@ -28,7 +28,7 @@ class TrainConfig:
     epochs: int = 200
     patience: int = 50
     seed: int = 42
-    round_t: int | None = None
+    t_quant_step: float | None = None
     pretrained: bool = True
     norm_mean: list = field(default_factory=lambda: list(IMAGENET_MEAN))
     norm_std: list = field(default_factory=lambda: list(IMAGENET_STD))

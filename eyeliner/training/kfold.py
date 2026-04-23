@@ -90,7 +90,7 @@ def run_kfold(
         train_ds = EyelinerPatchDataset(
             train_records, augment_data=True,
             aug_flags=config.aug_flags,
-            round_t=config.round_t,
+            t_quant_step=config.t_quant_step,
             norm_mean=config.norm_mean,
             norm_std=config.norm_std,
             patch_t_min=config.patch_t_min,
@@ -103,7 +103,7 @@ def run_kfold(
         )
         val_ds = EyelinerPatchDataset(
             val_records, augment_data=False,
-            round_t=config.round_t,
+            t_quant_step=config.t_quant_step,
             norm_mean=config.norm_mean,
             norm_std=config.norm_std,
             patch_t_min=config.patch_t_min,

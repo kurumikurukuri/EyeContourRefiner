@@ -1,6 +1,7 @@
 """annotator/db.py のテスト。"""
 from __future__ import annotations
 
+import sqlite3
 import threading
 from pathlib import Path
 
@@ -339,6 +340,59 @@ class TestImagePathExists:
 # ---------------------------------------------------------------------------
 # Concurrent access (WAL mode)
 # ---------------------------------------------------------------------------
+
+class TestFaceOrientationColumns:
+    def test_roundtrip_face_pose_values(self, db_path):
+        upsert_samples(
+            [_make_sample(0, face_yaw=12.3, face_pitch=-4.5, face_roll=1.0)],
+            db_path,
+        )
+        row = load_all_samples(db_path)[0]
+        assert row["face_yaw"] == pytest.approx(12.3)
+        assert row["face_pitch"] == pytest.approx(-4.5)
+        assert row["face_roll"] == pytest.approx(1.0)
+
+    def test_missing_face_pose_stored_as_null(self, db_path):
+        upsert_samples([_make_sample(0)], db_path)  # face_* 未指定
+        row = load_all_samples(db_path)[0]
+        assert row["face_yaw"] is None
+        assert row["face_pitch"] is None
+        assert row["face_roll"] is None
+
+    def test_migration_adds_missing_columns(self, tmp_path):
+        """旧スキーマ DB → init_db で face_* カラムが自動付与される。"""
+        path = tmp_path / "old.db"
+        with sqlite3.connect(str(path)) as conn:
+            conn.execute(
+                """CREATE TABLE samples (
+                    idx INTEGER PRIMARY KEY,
+                    image_path TEXT NOT NULL,
+                    face_index INTEGER NOT NULL DEFAULT 0,
+                    part_name TEXT NOT NULL,
+                    sub_key TEXT NOT NULL,
+                    point_index INTEGER NOT NULL,
+                    px REAL NOT NULL, py REAL NOT NULL,
+                    qx REAL NOT NULL, qy REAL NOT NULL,
+                    t REAL, skip_flag INTEGER NOT NULL DEFAULT 0
+                )"""
+            )
+            conn.execute(
+                """INSERT INTO samples VALUES
+                   (0, 'img.jpg', 0, 'eyeliner_left', 'upper', 0,
+                    1.0, 2.0, 3.0, 4.0, NULL, 0)"""
+            )
+
+        init_db(path)  # マイグレーション発火
+
+        with sqlite3.connect(str(path)) as conn:
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(samples)").fetchall()}
+        assert "face_yaw" in cols
+        assert "face_pitch" in cols
+        assert "face_roll" in cols
+
+        row = load_all_samples(path)[0]
+        assert row["face_yaw"] is None
+
 
 class TestConcurrentAccess:
     def test_parallel_reads(self, populated_db):

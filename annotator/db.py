@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sqlite3
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple  # noqa: F401  (Optional used in callers)
+from typing import Any, Dict, List, Optional, Tuple
 
 DB_PATH = Path("data/samples.db")
 
@@ -20,7 +20,10 @@ CREATE TABLE IF NOT EXISTS samples (
     qx          REAL    NOT NULL,
     qy          REAL    NOT NULL,
     t           REAL,
-    skip_flag   INTEGER NOT NULL DEFAULT 0
+    skip_flag   INTEGER NOT NULL DEFAULT 0,
+    face_yaw    REAL,
+    face_pitch  REAL,
+    face_roll   REAL
 )
 """
 
@@ -30,6 +33,23 @@ _CREATE_IDX_IMAGE_PATH = (
 _CREATE_IDX_T = (
     "CREATE INDEX IF NOT EXISTS idx_t_annotated ON samples(t)"
 )
+
+# 追加カラム（後方互換のため ALTER TABLE ADD COLUMN で冪等に付与）。
+_ADDITIONAL_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("face_yaw", "REAL"),
+    ("face_pitch", "REAL"),
+    ("face_roll", "REAL"),
+)
+
+
+def _ensure_columns(conn: sqlite3.Connection) -> None:
+    """既存 DB に不足している追加カラムを補充する（冪等）。"""
+    existing = {
+        row["name"] for row in conn.execute("PRAGMA table_info(samples)").fetchall()
+    }
+    for col_name, col_type in _ADDITIONAL_COLUMNS:
+        if col_name not in existing:
+            conn.execute(f"ALTER TABLE samples ADD COLUMN {col_name} {col_type}")
 
 
 def _connect(db_path: Path) -> sqlite3.Connection:
@@ -47,11 +67,12 @@ def _row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
 
 
 def init_db(db_path: Path = DB_PATH) -> None:
-    """テーブルとインデックスを作成する（冪等）。"""
+    """テーブルとインデックスを作成する（冪等）。既存 DB にカラム不足があれば補充。"""
     with _connect(db_path) as conn:
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_IDX_IMAGE_PATH)
         conn.execute(_CREATE_IDX_T)
+        _ensure_columns(conn)
 
 
 def load_all_samples(db_path: Path = DB_PATH) -> List[Dict[str, Any]]:
@@ -186,34 +207,50 @@ def delete_orphan_samples(
         return cur.rowcount
 
 
+def _optional_float(value: Any) -> Optional[float]:
+    """None を保持して float 変換。"""
+    if value is None:
+        return None
+    return float(value)
+
+
+def _sample_to_row(s: Dict[str, Any]) -> Tuple[Any, ...]:
+    """サンプル dict を INSERT 用タプルへ変換する。"""
+    return (
+        s["idx"],
+        s["image_path"],
+        s.get("face_index", 0),
+        s["part_name"],
+        s["sub_key"],
+        s["point_index"],
+        float(s["px"]),
+        float(s["py"]),
+        float(s["qx"]),
+        float(s["qy"]),
+        s.get("t"),
+        int(bool(s.get("skip_flag", False))),
+        _optional_float(s.get("face_yaw")),
+        _optional_float(s.get("face_pitch")),
+        _optional_float(s.get("face_roll")),
+    )
+
+
+_INSERT_COLUMNS = (
+    "idx, image_path, face_index, part_name, sub_key, point_index, "
+    "px, py, qx, qy, t, skip_flag, face_yaw, face_pitch, face_roll"
+)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * 15)
+
+
 def replace_all_samples(
     samples: List[Dict[str, Any]], db_path: Path = DB_PATH
 ) -> None:
     """全サンプルを削除してから挿入する（preprocessor 再実行用）。"""
-    rows = [
-        (
-            s["idx"],
-            s["image_path"],
-            s.get("face_index", 0),
-            s["part_name"],
-            s["sub_key"],
-            s["point_index"],
-            float(s["px"]),
-            float(s["py"]),
-            float(s["qx"]),
-            float(s["qy"]),
-            s.get("t"),
-            int(bool(s.get("skip_flag", False))),
-        )
-        for s in samples
-    ]
+    rows = [_sample_to_row(s) for s in samples]
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM samples")
         conn.executemany(
-            """INSERT INTO samples
-               (idx, image_path, face_index, part_name, sub_key, point_index,
-                px, py, qx, qy, t, skip_flag)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            f"INSERT INTO samples ({_INSERT_COLUMNS}) VALUES ({_INSERT_PLACEHOLDERS})",
             rows,
         )
 
@@ -222,29 +259,11 @@ def upsert_samples(
     samples: List[Dict[str, Any]], db_path: Path = DB_PATH
 ) -> None:
     """サンプルを INSERT OR REPLACE する（バッチ）。"""
-    rows = [
-        (
-            s["idx"],
-            s["image_path"],
-            s.get("face_index", 0),
-            s["part_name"],
-            s["sub_key"],
-            s["point_index"],
-            float(s["px"]),
-            float(s["py"]),
-            float(s["qx"]),
-            float(s["qy"]),
-            s.get("t"),
-            int(bool(s.get("skip_flag", False))),
-        )
-        for s in samples
-    ]
+    rows = [_sample_to_row(s) for s in samples]
     with _connect(db_path) as conn:
         conn.executemany(
-            """INSERT OR REPLACE INTO samples
-               (idx, image_path, face_index, part_name, sub_key, point_index,
-                px, py, qx, qy, t, skip_flag)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            f"INSERT OR REPLACE INTO samples ({_INSERT_COLUMNS}) "
+            f"VALUES ({_INSERT_PLACEHOLDERS})",
             rows,
         )
 
