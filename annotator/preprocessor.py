@@ -7,20 +7,23 @@
         --db data/samples.db
 
 既存の DB が存在する場合、t / skip_flag 値を保持してマージします（再実行しても上書きしません）。
+face_index は既存 DB の PQ 重心と最近傍マッチングにより揃えます。
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from annotator import db as _db  # noqa: E402
+from annotator.face_pose import compute_face_orientation  # noqa: E402
 from eyeliner.data.eyeliner_landmarks import EYELINER_CORRECTION_MAP  # noqa: E402
 
 logger = logging.getLogger(__name__)
@@ -36,14 +39,100 @@ def _normalize_path(p: str) -> str:
 EYELINER_SAMPLES_MAP = EYELINER_CORRECTION_MAP
 
 
+def _landmark_centroid(coords: np.ndarray) -> Tuple[float, float]:
+    """ランドマーク配列 (N, 2) の重心を返す。"""
+    return float(np.mean(coords[:, 0])), float(np.mean(coords[:, 1]))
+
+
+def _match_face_order(
+    face_coords_list: List[np.ndarray],
+    existing_centroids: Dict[int, Tuple[float, float]],
+) -> List[int]:
+    """検出された顔を既存 DB の face_index に最近傍マッチングで対応付ける。
+
+    Args:
+        face_coords_list: MediaPipe が返した顔ごとの (N, 2) ランドマーク配列リスト。
+        existing_centroids: 既存 DB の {face_index: (cx, cy)} マップ。
+
+    Returns:
+        detect_to_face_index[i] = 検出順 i の顔に割り当てる face_index。
+        既存データがない画像は x 座標昇順で 0, 1, 2, … を割り当てる（安定正準順序）。
+    """
+    n = len(face_coords_list)
+    new_centroids = [_landmark_centroid(c) for c in face_coords_list]
+
+    if not existing_centroids:
+        order = sorted(range(n), key=lambda i: (new_centroids[i][0], new_centroids[i][1]))
+        result = [0] * n
+        for rank, det_i in enumerate(order):
+            result[det_i] = rank
+        return result
+
+    # 既存 face_index -> 最近傍の検出顔 をグリーディに割り当て
+    detect_to_face: Dict[int, int] = {}
+    used_detect: set = set()
+
+    for ex_idx in sorted(existing_centroids.keys()):
+        ex_c = existing_centroids[ex_idx]
+        best_i: Optional[int] = None
+        best_dist = float("inf")
+        for det_i, nc in enumerate(new_centroids):
+            if det_i in used_detect:
+                continue
+            d = (nc[0] - ex_c[0]) ** 2 + (nc[1] - ex_c[1]) ** 2
+            if d < best_dist:
+                best_dist = d
+                best_i = det_i
+        if best_i is not None:
+            detect_to_face[best_i] = ex_idx
+            used_detect.add(best_i)
+
+    # マッチしなかった新顔には既存最大 + 1 以降を割り当て
+    next_idx = max(existing_centroids.keys(), default=-1) + 1
+    result = []
+    for i in range(n):
+        if i in detect_to_face:
+            result.append(detect_to_face[i])
+        else:
+            result.append(next_idx)
+            next_idx += 1
+    return result
+
+
+def _build_existing_centroids(
+    image_path_posix: str,
+    existing: List[Dict[str, Any]],
+) -> Dict[int, Tuple[float, float]]:
+    """既存 DB レコードから image_path ごとの {face_index: (cx, cy)} を構築する。
+
+    cx, cy は同一 face の全 PQ 中点の平均。
+    """
+    face_points: Dict[int, List[Tuple[float, float]]] = defaultdict(list)
+    for s in existing:
+        if _normalize_path(s["image_path"]) != image_path_posix:
+            continue
+        fi = s.get("face_index", 0)
+        face_points[fi].append(((s["px"] + s["qx"]) / 2, (s["py"] + s["qy"]) / 2))
+
+    centroids: Dict[int, Tuple[float, float]] = {}
+    for fi, pts in face_points.items():
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        centroids[fi] = (sum(xs) / len(xs), sum(ys) / len(ys))
+    return centroids
+
+
 def _extract_samples_from_image(
     image_path: Path,
+    existing_centroids: Dict[int, Tuple[float, float]],
 ) -> Optional[List[Dict[str, Any]]]:
     """
     1枚の画像から全アイライン (P, Q) ペアを抽出する。
 
     Args:
         image_path: 顔画像のパス。
+        existing_centroids: 既存 DB の {face_index: (cx, cy)}。
+            空の場合は x 座標昇順で face_index を割り当てる。
 
     Returns:
         サンプルのリスト、またはランドマーク取得失敗時は None。
@@ -77,21 +166,41 @@ def _extract_samples_from_image(
 
     logger.info("  %d 人の顔を検出: %s", len(results.multi_face_landmarks), image_path.name)
 
-    samples: List[Dict[str, Any]] = []
-    for face_index, face_landmarks in enumerate(results.multi_face_landmarks):
+    # 全顔の 2D ランドマークを収集
+    all_coords: List[np.ndarray] = []
+    all_coords_xyz: List[np.ndarray] = []
+    for face_landmarks in results.multi_face_landmarks:
         coords = np.array(
             [[lm.x * w, lm.y * h] for lm in face_landmarks.landmark],
             dtype=np.float32,
         )
+        coords_xyz = np.array(
+            [[lm.x * w, lm.y * h, lm.z * w] for lm in face_landmarks.landmark],
+            dtype=np.float64,
+        )
+        all_coords.append(coords)
+        all_coords_xyz.append(coords_xyz)
+
+    # 既存 DB の face_index に合わせた順序を決定
+    face_index_list = _match_face_order(all_coords, existing_centroids)
+
+    samples: List[Dict[str, Any]] = []
+    for det_i, (coords, coords_xyz) in enumerate(zip(all_coords, all_coords_xyz)):
+        face_index = face_index_list[det_i]
+
+        pose = compute_face_orientation(coords_xyz, w, h)
+        if pose is not None:
+            face_yaw, face_pitch, face_roll = pose
+        else:
+            face_yaw = face_pitch = face_roll = None
+
         for part_name, sub_map in EYELINER_SAMPLES_MAP.items():
             for sub_key, index_list in sub_map.items():
-                # index_list の各要素は int（アンカー点）か ('edge', p, q) タプル（P-Q ペア）
-                # アノテーションが必要なのは ('edge', p, q) のみ
                 point_index = 0
                 for entry in index_list:
                     if not isinstance(entry, tuple):
-                        continue  # アンカー点はスキップ
-                    _, p_idx, q_idx = entry  # ('edge', p, q)
+                        continue
+                    _, p_idx, q_idx = entry
                     px, py = coords[p_idx]
                     qx, qy = coords[q_idx]
                     samples.append({
@@ -104,6 +213,9 @@ def _extract_samples_from_image(
                         "qx": float(qx), "qy": float(qy),
                         "t": None,
                         "skip_flag": False,
+                        "face_yaw": face_yaw,
+                        "face_pitch": face_pitch,
+                        "face_roll": face_roll,
                     })
                     point_index += 1
 
@@ -118,6 +230,7 @@ def generate_samples(
     images_dir 内の全画像からサンプルを生成し db_path (SQLite) に保存する。
 
     既存の DB が存在する場合、t / skip_flag 値を保持してマージする。
+    face_index は既存 DB の PQ 重心との最近傍マッチングにより揃える。
     """
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     image_paths = sorted(
@@ -131,13 +244,15 @@ def generate_samples(
 
     logger.info("%d 枚の画像を処理します...", len(image_paths))
 
-    # 既存の t / skip_flag 値を保持するためのインデックスを構築
+    # 既存の t / skip_flag 値と face_index 対応を保持するため全サンプルを読み込む
+    existing_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
     existing_annotations: Dict[tuple, Dict[str, Any]] = {}
     _db.init_db(db_path)
     try:
         existing = _db.load_all_samples(db_path)
         for entry in existing:
             normalized_path = _normalize_path(entry["image_path"])
+            existing_by_image[normalized_path].append(entry)
             key = (
                 normalized_path,
                 entry.get("face_index", 0),
@@ -156,7 +271,11 @@ def generate_samples(
     all_samples: List[Dict[str, Any]] = []
     for image_path in image_paths:
         logger.info("処理中: %s", image_path.name)
-        samples = _extract_samples_from_image(image_path)
+        image_path_posix = _normalize_path(str(image_path))
+        existing_centroids = _build_existing_centroids(
+            image_path_posix, existing_by_image.get(image_path_posix, [])
+        )
+        samples = _extract_samples_from_image(image_path, existing_centroids)
         if samples:
             all_samples.extend(samples)
 

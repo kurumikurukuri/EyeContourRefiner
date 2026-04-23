@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import AUG_ALL, augment
+from eyeliner.data.augmentation import AUG_ALL, augment, augment_endpoints
 from utils.patch_utils import (
     PATCH_SIZE, T_MIN, T_MAX, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch,
@@ -87,7 +87,7 @@ class EyelinerPatchDataset(Dataset):
         augment_data: bool = False,
         aug_flags: int = AUG_ALL,
         preload_images: bool = True,
-        round_t: int | None = None,
+        t_quant_step: float | None = None,
         norm_mean: list | None = None,
         norm_std: list | None = None,
         patch_t_min: float = T_MIN,
@@ -101,7 +101,7 @@ class EyelinerPatchDataset(Dataset):
         self.records = records
         self.augment_data = augment_data
         self.aug_flags = aug_flags
-        self.round_t = round_t
+        self.t_quant_step = t_quant_step
         self.patch_t_min = patch_t_min
         self.patch_t_max = patch_t_max
         # label 範囲: None のときは crop 範囲と同じ（後方互換）
@@ -143,12 +143,23 @@ class EyelinerPatchDataset(Dataset):
         # manifest の t は生の物理 t 値（PQ 座標系）。
         # label 範囲でクランプして正規化する（crop 範囲とは独立）。
         t_actual = float(rec["t"])
-        if self.round_t is not None:
-            t_actual = round(t_actual, self.round_t)
+        if self.t_quant_step is not None and self.t_quant_step > 0:
+            t_actual = round(t_actual / self.t_quant_step) * self.t_quant_step
         if t_actual < self._label_t_min:
             t_actual = self._label_t_min
         elif t_actual > self._label_t_max:
             t_actual = self._label_t_max
+
+        # 端点ブレンド augmentation（画素 augment よりも前、extract_patch よりも前に適用）。
+        # t' が [label_t_min, label_t_max] 外になった場合は identity にフォールバックする。
+        if self.augment_data:
+            px, py, qx, qy, t_actual = augment_endpoints(
+                px, py, qx, qy, t_actual,
+                label_t_min=self._label_t_min,
+                label_t_max=self._label_t_max,
+                aug_flags=self.aug_flags,
+            )
+
         if self.use_t_norm:
             t = (t_actual - self._label_t_min) / (self._label_t_max - self._label_t_min)
         else:

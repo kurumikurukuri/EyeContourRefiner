@@ -84,7 +84,7 @@ def build_experiment_record(
             "freeze_epochs": args.freeze_epochs,
             "epochs": args.epochs,
             "patience": args.patience,
-            "round_t": args.round_t,
+            "t_quant_step": args.t_quant_step,
             "norm_type": args.norm_type,
             "use_pq_ratio": args.use_pq_ratio,
             "use_sigmoid": args.use_sigmoid,
@@ -143,7 +143,7 @@ def _save_prediction_train_csv(
 
     ds = EyelinerPatchDataset(
         train_records, augment_data=False,
-        round_t=args.round_t, norm_mean=norm_mean, norm_std=norm_std,
+        t_quant_step=args.t_quant_step, norm_mean=norm_mean, norm_std=norm_std,
         patch_t_min=args.patch_t_min,
         patch_t_max=args.patch_t_max,
         patch_perp_scale=args.patch_perp_scale,
@@ -226,7 +226,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         epochs=args.epochs,
         patience=args.patience,
         seed=args.seed,
-        round_t=args.round_t,
+        t_quant_step=args.t_quant_step,
         pretrained=not args.no_pretrained,
         norm_mean=norm_mean,
         norm_std=norm_std,
@@ -296,7 +296,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
             from torch.utils.data import DataLoader
             holdout_ds = EyelinerPatchDataset(
                 holdout_records, augment_data=False,
-                round_t=args.round_t, norm_mean=norm_mean, norm_std=norm_std,
+                t_quant_step=args.t_quant_step, norm_mean=norm_mean, norm_std=norm_std,
                 patch_t_min=args.patch_t_min,
                 patch_t_max=args.patch_t_max,
                 patch_perp_scale=args.patch_perp_scale,
@@ -385,7 +385,14 @@ def main() -> None:
     parser.add_argument("--weight_decay", default=1e-4, type=float)
     parser.add_argument("--seed", default=42, type=int)
     parser.add_argument("--models_dir", type=Path, default=None, help="ensemble モード用")
-    parser.add_argument("--round_t", type=int, default=None)
+    parser.add_argument(
+        "--t_quant_step", type=float, default=None,
+        help="生の物理 t 値の量子化ステップ（例: 0.1 / 0.02 / 0.01）。None で量子化なし",
+    )
+    parser.add_argument(
+        "--round_t", type=int, default=None,
+        help="(後方互換) --t_quant_step = 10**(-round_t) に翻訳される。新規実験では --t_quant_step を使うこと",
+    )
     parser.add_argument(
         "--loss_fn", choices=LOSS_FN_CHOICES, default="normalized_pixel",
         dest="loss_fn",
@@ -501,6 +508,16 @@ def main() -> None:
     # --loss_space が指定された場合は --loss_fn として扱う（後方互換）
     if args.loss_space is not None:
         args.loss_fn = args.loss_space
+
+    # --round_t エイリアス: 新規実装では --t_quant_step を使用する
+    if args.round_t is not None:
+        if args.t_quant_step is not None:
+            parser.error("--round_t と --t_quant_step は同時指定できません。--t_quant_step を使ってください。")
+        args.t_quant_step = 10.0 ** (-args.round_t)
+        logger.warning(
+            "--round_t=%d は非推奨です。--t_quant_step=%g に翻訳しました。",
+            args.round_t, args.t_quant_step,
+        )
 
     args.use_t_norm = not args.no_t_norm
 
