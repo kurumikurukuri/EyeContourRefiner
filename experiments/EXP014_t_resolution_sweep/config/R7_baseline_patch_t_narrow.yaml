@@ -1,0 +1,28 @@
+# R7_baseline_patch_t_narrow: R2 ベース + patch_t を label_t と一致させた条件
+# 目的: 二重幅誤検出の主因③（patch_t=(-2,3) で外周 40% が無関係領域、本体特徴が潰れる）
+# を切り分け検証する。R2 から patch_t_min/max のみ (-1, 2) に変更。
+# 比較対象: R2_baseline_t_perturbation（patch_t=(-2, 3)）
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 64
+label_t_min: -1
+label_t_max: 2
+t_quant_step: null

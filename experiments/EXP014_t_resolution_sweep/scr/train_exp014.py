@@ -1,0 +1,175 @@
+"""EXP014: raw t 分解能 sweep（Q10 ベース）
+
+EXP013 の最良条件 Q10_lr3_label_wide_scale をベースラインに、
+生の物理 t 値を一定分解能に量子化して学習させ、
+ラベリング誤差吸収の効果を検証する。
+
+条件:
+    t_quant_step（量子化解像度）× aug_flags（augmentation 強度）の2軸グリッド。
+    実際の条件一覧は config/*.yaml（R0_baseline 〜
+    R8_baseline_t_perturbation_wo_grayscale）を参照。
+
+前提:
+    experiments/EXP014_t_resolution_sweep/manifests/ に
+    manifest_train.csv / manifest_test.csv が存在すること。
+    （EXP013 の manifest を流用）
+
+使い方:
+    # 全条件を実行
+    python scripts/sweep.py --exp 014
+
+    # 特定条件のみ実行
+    python experiments/EXP014_t_resolution_sweep/scr/train_exp014.py --configs R0_baseline R3_res_010
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).parent.parent.parent.parent  # リポジトリルート
+EXP_DIR = Path(__file__).parent.parent             # EXP014_t_resolution_sweep/
+CONFIG_DIR = EXP_DIR / "config"
+MANIFEST_DIR = EXP_DIR / "manifests"
+OUTPUT_DIR = EXP_DIR / "outputs"
+LOG_PATH = EXP_DIR / "log.txt"
+
+MANIFEST_TRAIN = MANIFEST_DIR / "manifest_train.csv"
+MANIFEST_TEST  = MANIFEST_DIR / "manifest_test.csv"
+
+sys.path.insert(0, str(ROOT))
+from scripts.exp_utils import run_with_log  # noqa: E402
+
+
+def load_config(config_name: str) -> dict:
+    path = CONFIG_DIR / f"{config_name}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(f"設定ファイルが見つかりません: {path}")
+    with open(path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def build_train_cmd(config_name: str, cfg: dict) -> list[str]:
+    """config dict から train.py 呼び出しコマンドを構築する。"""
+    output_dir = OUTPUT_DIR / config_name
+    cmd = [
+        sys.executable,
+        str(ROOT / "scripts" / "train.py"),
+        "--manifest",        str(MANIFEST_TRAIN),
+        "--holdout",         str(MANIFEST_TEST),
+        "--output_dir",      str(output_dir),
+        "--exp_name",        config_name,
+        "--backbone",        cfg["backbone"],
+        "--loss_fn",         cfg["loss_fn"],
+        "--lr",              str(cfg["lr"]),
+        "--weight_decay",    str(cfg["weight_decay"]),
+        "--epochs",          str(cfg["epochs"]),
+        "--batch",           str(cfg["batch"]),
+        "--k",               str(cfg["k"]),
+        "--patience",        str(cfg["patience"]),
+        "--seed",            str(cfg["seed"]),
+        "--num_conv_layers", str(cfg.get("num_conv_layers", 4)),
+        "--dropout_rate",    str(cfg.get("dropout_rate", 0.3)),
+        "--freeze_epochs",   str(cfg.get("freeze_epochs", 0)),
+        "--aug_flags",       str(cfg.get("aug_flags", 79)),
+        "--patch_t_min",     str(cfg["patch_t_min"]),
+        "--patch_t_max",     str(cfg["patch_t_max"]),
+        "--patch_perp_scale", str(cfg["patch_perp_scale"]),
+        "--patch_h",         str(cfg["patch_h"]),
+        "--patch_w",         str(cfg["patch_w"]),
+    ]
+
+    label_t_min = cfg.get("label_t_min")
+    label_t_max = cfg.get("label_t_max")
+    if label_t_min is not None:
+        cmd += ["--label_t_min", str(label_t_min)]
+    if label_t_max is not None:
+        cmd += ["--label_t_max", str(label_t_max)]
+
+    if cfg["loss_fn"] == "t_weighted":
+        cmd += ["--t_loss_alpha", str(cfg.get("t_loss_alpha", 3.0))]
+    if cfg["loss_fn"] == "dead_zone":
+        cmd += ["--loss_epsilon", str(cfg.get("loss_epsilon", 0.01))]
+        cmd += ["--loss_delta",   str(cfg.get("loss_delta",   0.05))]
+
+    if cfg.get("use_pq_ratio"):
+        cmd.append("--use_pq_ratio")
+    if cfg.get("use_norm_eye_scale"):
+        cmd.append("--use_norm_eye_scale")
+    if cfg.get("use_sigmoid"):
+        cmd.append("--use_sigmoid")
+    if not cfg.get("use_batchnorm", True):
+        cmd.append("--no_batchnorm")
+    if cfg.get("use_t_weighted_sampler"):
+        cmd.append("--use_t_weighted_sampler")
+        cmd += ["--t_weight_alpha", str(cfg.get("t_weight_alpha", 3.0))]
+
+    # t 分解能（EXP014 の主軸パラメータ）
+    t_quant_step = cfg.get("t_quant_step")
+    if t_quant_step is not None:
+        cmd += ["--t_quant_step", str(t_quant_step)]
+
+    return cmd
+
+
+def run_experiment(config_name: str) -> int:
+    print(f"\n{'='*60}")
+    print(f"  実行: {config_name}")
+    print(f"{'='*60}")
+
+    cfg = load_config(config_name)
+    cmd = build_train_cmd(config_name, cfg)
+
+    output_dir = OUTPUT_DIR / config_name
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    print(f"  コマンド: {' '.join(cmd)}")
+    return run_with_log(cmd, LOG_PATH, cwd=ROOT)
+
+
+def main() -> None:
+    all_configs = sorted(p.stem for p in CONFIG_DIR.glob("*.yaml"))
+
+    parser = argparse.ArgumentParser(description="EXP014 raw t 分解能 sweep")
+    parser.add_argument(
+        "--configs", nargs="+", default=all_configs,
+        help=f"実行する設定名（デフォルト: 全条件 {all_configs}）",
+    )
+    args = parser.parse_args()
+
+    for manifest, label in [(MANIFEST_TRAIN, "manifest_train.csv"),
+                            (MANIFEST_TEST,  "manifest_test.csv")]:
+        if not manifest.exists():
+            print(f"\n[ERROR] {label} が見つかりません: {manifest}")
+            print("EXP013 の manifest を流用してください:")
+            print("  cp experiments/EXP013_hparam_combo/manifests/*.csv \\")
+            print("     experiments/EXP014_t_resolution_sweep/manifests/")
+            sys.exit(1)
+
+    print(f"\nEXP014 sweep 開始: {len(args.configs)} 条件")
+    print(f"  manifest_train: {MANIFEST_TRAIN}")
+    print(f"  manifest_test:  {MANIFEST_TEST}")
+    print(f"  output_dir:     {OUTPUT_DIR}")
+    print(f"  log:            {LOG_PATH}")
+
+    failed = []
+    for config_name in args.configs:
+        rc = run_experiment(config_name)
+        if rc != 0:
+            print(f"\n[WARN] {config_name} が終了コード {rc} で失敗")
+            failed.append(config_name)
+
+    print(f"\n{'='*60}")
+    print(f"  EXP014 sweep 完了: {len(args.configs) - len(failed)}/{len(args.configs)} 成功")
+    if failed:
+        print(f"  失敗: {failed}")
+    print(f"{'='*60}")
+
+    if failed:
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
