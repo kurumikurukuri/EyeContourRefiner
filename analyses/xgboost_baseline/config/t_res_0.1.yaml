@@ -1,0 +1,63 @@
+# xgboost_baseline 変種: t を 0.1 に丸めて回帰（8 クラスの離散ラベル相当）
+#
+# baseline.yaml と target.t_resolution / outputs_dir 以外は同じ。
+
+# --- データ入出力 ---
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_baseline/manifests"
+  outputs_dir: "analyses/xgboost_baseline/outputs/exp15_t_res_0.1"
+
+# --- 目標変数の前処理 ---
+target:
+  t_resolution: 0.1
+
+# --- 分割 ---
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  exclude_skip_flag: true
+  seed: 42
+
+# --- 特徴量 ---
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+
+# --- XGBoost ---
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+
+# --- Quantile Regression ---
+quantile:
+  q_lo: 0.1
+  q_hi: 0.9
+
+# --- IsolationForest ---
+iforest:
+  n_estimators: 200
+  contamination: "auto"
+  max_samples: "auto"
+  random_state: 42
+
+# --- 外れ値統合スコア ---
+outlier:
+  top_k: 500
+  weight_uncertainty: 0.4
+  weight_range_violation: 0.3
+  weight_iforest: 0.3
+  t_valid_min: 0.0
+  t_valid_max: 1.5
