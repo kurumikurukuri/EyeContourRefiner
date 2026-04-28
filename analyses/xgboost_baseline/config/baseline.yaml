@@ -1,0 +1,68 @@
+# xgboost_baseline: XGBoost で true_t_raw を回帰 + IsolationForest で未アノテ外れ値検出
+#
+# ハイパーパラメータと分割ルールを一括管理。train / infer の両方で参照する。
+
+# --- データ入出力 ---
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_baseline/manifests"
+  outputs_dir: "analyses/xgboost_baseline/outputs/exp15_baseline"
+
+# --- 目標変数の前処理 ---
+target:
+  # true_t_raw をそのまま回帰する（連続値）。0.1 などを指定すると学習前に丸める。
+  t_resolution: null
+
+# --- 分割 ---
+split:
+  # image_path でグループ化した train/val/test 比。合計 1.0 でなくてよい（正規化される）。
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  # ラベル無効として除外するフラグ
+  exclude_skip_flag: true
+  seed: 42
+
+# --- 特徴量 ---
+features:
+  # CSV 内で全 NULL のカラムは自動除外される
+  use_geometry: true       # pq_dist, pq_angle, pq_ratio, dist_from_center
+  use_eye_scale: true      # eye_scale, norm_eye_scale, eye_bbox_w/h, eye_aspect
+  use_face_pose: true      # face_yaw, face_pitch, face_roll（NULL 全件なら自動 skip）
+  use_categorical: true    # is_upper, is_left_eye
+  use_point_index: true
+
+# --- XGBoost ---
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+
+# --- Quantile Regression（不確実性推定用）---
+quantile:
+  q_lo: 0.1
+  q_hi: 0.9
+
+# --- IsolationForest（特徴空間異常度）---
+iforest:
+  n_estimators: 200
+  contamination: "auto"
+  max_samples: "auto"
+  random_state: 42
+
+# --- 外れ値統合スコア ---
+outlier:
+  top_k: 500
+  weight_uncertainty: 0.4   # pred_q90 - pred_q10 の rank-normalize 重み
+  weight_range_violation: 0.3  # pred が [0, 1.5] 外れの rank-normalize 重み
+  weight_iforest: 0.3       # IsolationForest の rank-normalize 重み
+  # range_violation 判定の物理妥当範囲
+  t_valid_min: 0.0
+  t_valid_max: 1.5
