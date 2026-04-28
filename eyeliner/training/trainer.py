@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 from eyeliner.evaluation.loss import get_loss_fn
-from utils.patch_utils import IMAGENET_MEAN, IMAGENET_STD
+from eyeliner.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD
 
 logger = logging.getLogger(__name__)
 

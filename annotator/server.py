@@ -32,7 +32,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     PATCH_SIZE,

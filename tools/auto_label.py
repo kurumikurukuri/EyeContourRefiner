@@ -29,7 +29,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from annotator import db as _db  # noqa: E402
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     IMAGENET_MEAN,
     IMAGENET_STD,
     T_MIN,

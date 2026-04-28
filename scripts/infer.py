@@ -48,7 +48,7 @@ except ImportError as exc:
 from eyeliner.models.eyeliner_cnn import EyelinerCNN
 from eyeliner.models.ensemble import EnsembleModel, create_ensemble_from_dir
 from eyeliner.models.ensemble import load_model as _load_model_from_ckpt
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     T_MIN, T_MAX, PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, reconstruct_point,
 )

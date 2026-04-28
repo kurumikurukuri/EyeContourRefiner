@@ -23,7 +23,7 @@ import torch
 # プロジェクトルートを sys.path に追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.patch_utils import NORM_TYPE_CHOICES, get_norm_stats
+from eyeliner.data.patch_utils import NORM_TYPE_CHOICES, get_norm_stats
 from eyeliner.data.dataset import get_manifest_version, load_manifest
 from eyeliner.data.weights import compute_eye_meta
 from eyeliner.models.ensemble import (
