@@ -1,17 +1,17 @@
 """デバッグ用：CNNへの入力パッチと元画像クロップを数件保存するスクリプト。
 
 使い方:
-    python tools/debug_patches.py --manifest data/manifest.csv
+    python tools/debug_patches.py --manifest experiments/EXP014_xxx/manifests/manifest_train.csv
 
     # 件数・出力先を指定
     python tools/debug_patches.py \\
-        --manifest data/manifest.csv \\
+        --manifest experiments/EXP014_xxx/manifests/manifest_train.csv \\
         --n 8 \\
         --output_dir debug_patches
 
     # パッチオプションを合わせる（実験設定と揃える場合）
     python tools/debug_patches.py \\
-        --manifest data/manifest.csv \\
+        --manifest experiments/EXP014_xxx/manifests/manifest_train.csv \\
         --patch_t_min -0.5 --patch_t_max 1.5 \\
         --patch_h 64 --patch_w 128 \\
         --norm_type imagenet

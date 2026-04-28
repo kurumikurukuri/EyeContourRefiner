@@ -5,7 +5,7 @@
     # manifest.csv の全サンプルに対して推論
     python scripts/infer.py \\
         --model   models/eyeliner_detection.pt \\
-        --manifest data/manifest.csv \\
+        --manifest experiments/EXP014_xxx/manifests/manifest_test.csv \\
         --output  data/predictions.csv
 
     # 単一画像・座標を直接指定

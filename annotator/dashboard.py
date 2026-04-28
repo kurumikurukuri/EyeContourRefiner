@@ -15,12 +15,14 @@ from fastapi.responses import Response
 # プロジェクトルートを sys.path に追加
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from annotator import db as _db  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
 _PROJECT_ROOT    = Path(__file__).parent.parent.resolve()
-MANIFEST_PATH    = Path("data/manifest.csv")
+DB_PATH          = Path("data/samples.db")
 PREDICTIONS_PATH = Path("data/predictions.csv")
 EXPERIMENTS_ROOT = _PROJECT_ROOT / "experiments"
 
@@ -41,28 +43,33 @@ def _cached(path: Path, compute):
 
 
 def _load_manifest() -> List[Dict[str, Any]]:
-    if not MANIFEST_PATH.exists():
+    """samples.db からダッシュボード用にサンプルを読み込む。"""
+    if not DB_PATH.exists():
         return []
     rows: List[Dict[str, Any]] = []
-    with open(MANIFEST_PATH, newline="", encoding="utf-8") as f:
-        for row in csv.DictReader(f):
-            try:
-                t_raw   = row.get("t", "").strip()
-                t_float: Optional[float] = float(t_raw) if t_raw else None
-                px = float(row.get("px", 0))
-                py = float(row.get("py", 0))
-                qx = float(row.get("qx", 0))
-                qy = float(row.get("qy", 0))
-                rows.append({
-                    **row,
-                    "t_float":     t_float,
-                    "px": px, "py": py,
-                    "qx": qx, "qy": qy,
-                    "point_index": int(row.get("point_index", 0)),
-                    "pq_dist":     math.hypot(qx - px, qy - py),
-                })
-            except (ValueError, KeyError):
-                continue
+    for s in _db.load_all_samples(DB_PATH):
+        try:
+            t_val      = s.get("t")
+            t_float: Optional[float] = float(t_val) if t_val is not None else None
+            px = float(s.get("px", 0))
+            py = float(s.get("py", 0))
+            qx = float(s.get("qx", 0))
+            qy = float(s.get("qy", 0))
+            rows.append({
+                "idx":         s["idx"],
+                "image_path":  s["image_path"].replace("\\", "/"),
+                "face_index":  s.get("face_index", 0),
+                "part_name":   s.get("part_name", ""),
+                "sub_key":     s.get("sub_key", ""),
+                "point_index": int(s.get("point_index", 0)),
+                "px": px, "py": py,
+                "qx": qx, "qy": qy,
+                "t":           "" if t_val is None else str(t_val),
+                "t_float":     t_float,
+                "pq_dist":     math.hypot(qx - px, qy - py),
+            })
+        except (ValueError, KeyError, TypeError):
+            continue
     return rows
 
 
@@ -100,9 +107,9 @@ def _stats(values: List[float]) -> Dict[str, Any]:
 
 @router.get("/overview")
 def get_overview() -> Dict[str, Any]:
-    rows = _cached(MANIFEST_PATH, _load_manifest)
+    rows = _cached(DB_PATH, _load_manifest)
     if not rows:
-        return {"error": "manifest.csv が見つかりません"}
+        return {"error": "samples.db が見つかりません"}
 
     total          = len(rows)
     annotated      = sum(1 for r in rows if r["t_float"] is not None)
@@ -134,7 +141,7 @@ def get_overview() -> Dict[str, Any]:
 
 @router.get("/t_distribution")
 def get_t_distribution() -> Dict[str, Any]:
-    rows      = _cached(MANIFEST_PATH, _load_manifest)
+    rows      = _cached(DB_PATH, _load_manifest)
     annotated = [r for r in rows if r["t_float"] is not None]
     all_t     = [r["t_float"] for r in annotated]
 
@@ -164,7 +171,7 @@ def get_t_distribution() -> Dict[str, Any]:
 
 @router.get("/quality")
 def get_quality() -> Dict[str, Any]:
-    rows      = _cached(MANIFEST_PATH, _load_manifest)
+    rows      = _cached(DB_PATH, _load_manifest)
     annotated = [r for r in rows if r["t_float"] is not None]
     pq_dists  = [r["pq_dist"] for r in rows if r["pq_dist"] > 0]
 
