@@ -35,7 +35,7 @@ def export(model_path: Path, output_path: Path) -> None:
 
     from eyeliner.models.eyeliner_cnn import EyelinerCNN
     from eyeliner.models.ensemble import build_model, EnsembleModel
-    from utils.patch_utils import PATCH_SIZE
+    from eyeliner.data.patch_utils import PATCH_SIZE
 
     logger.info("モデルを読み込み中: %s", model_path)
     checkpoint = torch.load(str(model_path), map_location="cpu", weights_only=True)

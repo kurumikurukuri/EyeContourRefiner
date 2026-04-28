@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     PATCH_SIZE,
     T_MIN,
     T_MAX,

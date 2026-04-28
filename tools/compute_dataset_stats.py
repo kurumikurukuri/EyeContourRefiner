@@ -22,7 +22,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from utils.patch_utils import IMAGENET_MEAN, IMAGENET_STD, extract_patch
+from eyeliner.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD, extract_patch
 
 
 def load_manifest(path: Path) -> List[dict]:

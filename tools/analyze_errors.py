@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     PATCH_SIZE,
     extract_patch,
     reconstruct_point,

@@ -14,7 +14,7 @@ import torch
 from torch.utils.data import Dataset
 
 from eyeliner.data.augmentation import AUG_ALL, augment, augment_endpoints
-from utils.patch_utils import (
+from eyeliner.data.patch_utils import (
     PATCH_SIZE, T_MIN, T_MAX, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch,
 )
