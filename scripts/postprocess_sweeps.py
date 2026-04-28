@@ -8,10 +8,10 @@
   4. 誤差分析 (error_analysis.csv, error_report.html)
 
 使い方:
-    python scripts/postprocess_sweeps.py
-    python scripts/postprocess_sweeps.py --models_dir models --manifest data/manifest.csv
-    python scripts/postprocess_sweeps.py --skip_existing  # 既存ファイルをスキップ
-    python scripts/postprocess_sweeps.py --filter sweep1  # 名前にsweep1を含むディレクトリのみ
+    python scripts/postprocess_sweeps.py --manifest experiments/EXP014_xxx/manifests/manifest_test.csv
+    python scripts/postprocess_sweeps.py --models_dir models --manifest path/to/manifest.csv
+    python scripts/postprocess_sweeps.py --manifest <csv> --skip_existing
+    python scripts/postprocess_sweeps.py --manifest <csv> --filter sweep1
 """
 from __future__ import annotations
 
@@ -155,8 +155,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="スイープ結果のポストプロセス")
     parser.add_argument("--models_dir", type=Path, default=Path("models"),
                         help="スイープモデルが入った親ディレクトリ (default: models)")
-    parser.add_argument("--manifest", type=Path, default=Path("data/manifest.csv"),
-                        help="manifest.csv のパス (default: data/manifest.csv)")
+    parser.add_argument("--manifest", type=Path, required=True,
+                        help="manifest.csv のパス（例: experiments/EXP014_xxx/manifests/manifest_test.csv）")
     parser.add_argument("--skip_existing", action="store_true",
                         help="既存の出力ファイルがあればそのステップをスキップする")
     parser.add_argument("--filter", type=str, default="",

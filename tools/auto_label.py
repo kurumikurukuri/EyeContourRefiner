@@ -7,18 +7,17 @@
   - 各フォールドの予測値 [0,1] の標準偏差が 0 → confidence=1.0（完全一致）
   - 標準偏差が 0.5（最大）→ confidence=0.0
 
-高信頼度サンプル（>= threshold）は t と label_source を samples.json に書き込む。
+高信頼度サンプル（>= threshold）は t を samples.db に書き込む。
 低信頼度サンプルは t=null のまま維持（annotator でのレビューキュー）。
 
 使用方法:
-    python scripts/auto_label.py
-    python scripts/auto_label.py --threshold 0.90 --model-version 2
-    python scripts/auto_label.py --dry-run --verbose
+    python tools/auto_label.py
+    python tools/auto_label.py --threshold 0.90 --model-version 2
+    python tools/auto_label.py --dry-run --verbose
 """
 from __future__ import annotations
 
 import argparse
-import csv
 import logging
 import sys
 from pathlib import Path
@@ -40,11 +39,6 @@ from eyeliner.data.patch_utils import (
 logger = logging.getLogger(__name__)
 
 DB_PATH = Path("data/samples.db")
-MANIFEST_PATH = Path("data/manifest.csv")
-MANIFEST_FIELDNAMES = [
-    "idx", "image_path", "part_name", "sub_key", "point_index",
-    "px", "py", "qx", "qy", "t",
-]
 
 
 # ---------------------------------------------------------------------------
@@ -209,45 +203,14 @@ def auto_label(
     )
 
     if dry_run:
-        logger.info("[DRY RUN] DB / manifest.csv への書き込みをスキップしました。")
+        logger.info("[DRY RUN] DB への書き込みをスキップしました。")
         return stats
 
     # ---- DB 更新 ----
     _db.batch_update_t(list(accepted.items()), DB_PATH)
     logger.info("DB を更新しました。")
 
-    # ---- manifest.csv 再生成 ----
-    _update_manifest()
-
     return stats
-
-
-def _update_manifest() -> None:
-    """DB のアノテーション済みサンプルから manifest.csv を再生成する。"""
-    annotated = _db.get_annotated_samples(DB_PATH)
-    rows = sorted(
-        [
-            {
-                "idx": s["idx"],
-                "image_path": s["image_path"],
-                "part_name": s["part_name"],
-                "sub_key": s["sub_key"],
-                "point_index": s["point_index"],
-                "px": s["px"],
-                "py": s["py"],
-                "qx": s["qx"],
-                "qy": s["qy"],
-                "t": s["t"],
-            }
-            for s in annotated
-        ],
-        key=lambda r: int(r["idx"]),
-    )
-    with MANIFEST_PATH.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=MANIFEST_FIELDNAMES)
-        writer.writeheader()
-        writer.writerows(rows)
-    logger.info("manifest.csv を更新しました: %d 件", len(rows))
 
 
 # ---------------------------------------------------------------------------
