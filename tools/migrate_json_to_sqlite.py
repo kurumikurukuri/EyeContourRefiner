@@ -1,8 +1,8 @@
 """data/samples.json を data/samples.db (SQLite) へ移行するスクリプト。
 
 使い方:
-    python scripts/migrate_json_to_sqlite.py
-    python scripts/migrate_json_to_sqlite.py --json data/samples.json --db data/samples.db
+    python tools/migrate_json_to_sqlite.py
+    python tools/migrate_json_to_sqlite.py --json data/samples.json --db data/samples.db
 """
 from __future__ import annotations
 
