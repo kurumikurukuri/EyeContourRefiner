@@ -1,0 +1,44 @@
+# xgboost_predskip: XGBoost binary classification for skip_flag prediction
+#
+# 非画像特徴量のみで skip_flag (0/1) を予測する基本条件。
+
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_predskip/manifests"
+  outputs_dir: "analyses/xgboost_predskip/outputs/baseline"
+
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42
+
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: false
+  use_interactions: false
+
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+  scale_pos_weight: 0.72   # n_neg / n_pos ≈ 88368 / 122864
+
+analysis:
+  top_k_misclassified: 500
+  subgroup_columns:
+    - part_name
+    - sub_key
+    - point_index
