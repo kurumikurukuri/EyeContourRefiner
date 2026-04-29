@@ -342,6 +342,7 @@ def _feature_cfg_from(d: Dict[str, Any]) -> FeatureConfig:
         use_point_index=bool(d.get("use_point_index", True)),
         use_cyclical_angle=bool(d.get("use_cyclical_angle", False)),
         use_interactions=bool(d.get("use_interactions", False)),
+        use_niqe_score=bool(d.get("use_niqe_score", False)),
     )
 
 
@@ -471,6 +472,8 @@ def main() -> None:
     # --- train 特徴量（median 統計量を固定）---
     train_feat, feat_cols = build_feature_matrix(manifests["train"], feat_cfg)
     train_medians = train_feat.median(numeric_only=True)
+    if feat_cfg.use_niqe_score and "niqe_score" in feat_cols:
+        train_medians["niqe_score"] = manifests["train"]["niqe_score"].max()
     y_tr_raw = manifests["train"]["true_t_raw"].astype(float).to_numpy()
     y_tr = apply_t_resolution(y_tr_raw, target_cfg.t_resolution)
 

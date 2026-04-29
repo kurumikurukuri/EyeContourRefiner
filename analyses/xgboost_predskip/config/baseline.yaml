@@ -21,6 +21,7 @@ features:
   use_point_index: true
   use_cyclical_angle: false
   use_interactions: false
+  use_niqe_score: true
 
 xgboost:
   n_estimators: 2000
