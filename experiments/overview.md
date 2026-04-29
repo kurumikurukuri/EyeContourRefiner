@@ -18,3 +18,4 @@
 | [EXP012](EXP012_patch_grid_sweep/summary.md) | パッチサイズ格子 sweep（patch_t_min/max × perp_scale × h × w） | 108 | 完了・考察済 | **A_p10_h064_w064**: CV 0.056557 / Holdout **0.056123**（patch_w=64・perp_scale=1.0・t_min=-1.0/t_max=2.0 推奨） |
 | [EXP013](EXP013_hparam_combo/summary.md) | ハイパーパラメータ組み合わせ検証（L7 ベース × lr/conv/twl/正則化 × label範囲） | 11 | 完了・考察済 | **Q10_lr3_label_wide_scale**: CV(生t) 0.1133 / Holdout(生t) 0.1019（Q1 baseline 0.1041 比 `-0.0022`、単体効果の加算性なし） |
 | [EXP014](EXP014_t_resolution_sweep/summary.md) | 生 t 分解能 sweep（ラベル量子化 step=0.1 × aug 強化: GRAYSCALE / ENDPOINT_BLEND）＋R6 long-train | 7 | 完了・考察済 | **R2_baseline_t_perturbation**: CV(norm) 0.0348 / Holdout(norm) 0.0333 / **Test(生t) 0.1000**（ENDPOINT_BLEND 有効・量子化悪化。R6 long-train=test 0.1007 で改善なし） |
+| [EXP015](EXP015_interior_corner_model/summary.md) | interior / corner 分離モデル（point_index 0,6 vs 1–5 を専用モデルで学習） | 5 | 実行待ち | - |
