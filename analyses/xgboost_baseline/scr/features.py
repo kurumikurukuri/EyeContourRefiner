@@ -22,6 +22,7 @@ class FeatureConfig:
     use_point_index: bool = True
     use_cyclical_angle: bool = False   # pq_angle を sin/cos に分解して ±π 不連続を解消
     use_interactions: bool = False      # is_upper × 幾何量 のインタラクション特徴
+    use_niqe_score: bool = False        # niqe_score (画質スコア)
 
 
 def add_geometry_features(df: pd.DataFrame) -> pd.DataFrame:
@@ -101,6 +102,8 @@ def select_feature_columns(
         )
     if cfg.use_face_pose:
         candidates.extend(["face_yaw", "face_pitch", "face_roll"])
+    if cfg.use_niqe_score:
+        candidates.append("niqe_score")
     if cfg.use_interactions:
         candidates.extend(["is_upper_x_pq_ratio", "is_upper_x_dist_from_center"])
 
@@ -125,8 +128,10 @@ def build_feature_matrix(
     if not cols:
         raise ValueError("使用可能な特徴量カラムが見つかりません（全て欠落または全 NULL）。")
     feat = enriched[cols].astype(float)
-    medians = feat.median(numeric_only=True)
-    feat = feat.fillna(medians)
+    fill_values = feat.median(numeric_only=True)
+    if cfg.use_niqe_score and "niqe_score" in cols:
+        fill_values["niqe_score"] = feat["niqe_score"].max()
+    feat = feat.fillna(fill_values)
     return feat, cols
 
 

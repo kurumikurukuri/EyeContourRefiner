@@ -1,11 +1,11 @@
-"""学習済みモデルで train/val/test の予測を出し分類分析を行う。
+"""学習済みモデルで train/val/test/unlabeled の予測を出し分類分析を行う。
 
 出力:
-  predictions_{train,val,test}.csv   行毎予測結果
-  analysis_subgroup.csv              サブグループ別メトリクス
-  analysis_feature_importance.csv    特徴量重要度ランキング
-  analysis_confusion_matrix.json     val/test 混同行列
-  misclassified_topk.csv             高確信度誤分類 top-K
+  predictions_{train,val,test,unlabeled}.csv   行毎予測結果
+  analysis_subgroup.csv                        サブグループ別メトリクス
+  analysis_feature_importance.csv              特徴量重要度ランキング
+  analysis_confusion_matrix.json               val/test 混同行列
+  misclassified_topk.csv                       高確信度誤分類 top-K
 """
 from __future__ import annotations
 
@@ -52,7 +52,10 @@ class AnalysisConfig:
 def _analysis_cfg_from(d: Dict[str, Any]) -> AnalysisConfig:
     return AnalysisConfig(
         top_k_misclassified=int(d.get("top_k_misclassified", 500)),
-        subgroup_columns=d.get("subgroup_columns", ["part_name", "sub_key", "point_index"]),
+        subgroup_columns=d.get(
+            "subgroup_columns",
+            ["part_name", "sub_key", "point_index"],
+        ),
     )
 
 
@@ -79,9 +82,19 @@ def prepare_features(
 # ---------------------------------------------------------------------------
 def _identity_cols(df: pd.DataFrame) -> List[str]:
     candidates = [
-        "idx", "image_path", "face_index", "part_name",
-        "sub_key", "point_index", "px", "py", "qx", "qy",
-        "true_t_raw", "skip_flag",
+        "idx",
+        "image_path",
+        "face_index",
+        "part_name",
+        "sub_key",
+        "point_index",
+        "px",
+        "py",
+        "qx",
+        "qy",
+        "true_t_raw",
+        "raw_t",
+        "skip_flag",
     ]
     return [c for c in candidates if c in df.columns]
 
@@ -100,11 +113,19 @@ def infer_split(
     pred = (prob >= 0.5).astype(int)
     id_cols = _identity_cols(df)
     out = pd.concat(
-        [df[id_cols].reset_index(drop=True),
-         pd.DataFrame({"pred_prob": prob, "pred_label": pred}).reset_index(drop=True)],
+        [
+            df[id_cols].reset_index(drop=True),
+            pd.DataFrame(
+                {
+                    "pred_prob": prob,
+                    "pred_label": pred,
+                }
+            ).reset_index(drop=True),
+        ],
         axis=1,
     )
-    out["correct"] = out["pred_label"] == out["skip_flag"]
+    if "skip_flag" in out.columns:
+        out["correct"] = out["pred_label"] == out["skip_flag"]
     return out
 
 
@@ -129,17 +150,23 @@ def compute_subgroup_metrics(
                 auc = float("nan")
             else:
                 auc = float(roc_auc_score(y_true, y_prob))
-            rows.append({
-                "subgroup_type": col,
-                "subgroup_value": val,
-                "n": n_total,
-                "n_pos": n_pos,
-                "accuracy": float(accuracy_score(y_true, y_pred)),
-                "precision": float(precision_score(y_true, y_pred, zero_division=0)),
-                "recall": float(recall_score(y_true, y_pred, zero_division=0)),
-                "f1": float(f1_score(y_true, y_pred, zero_division=0)),
-                "roc_auc": auc,
-            })
+            rows.append(
+                {
+                    "subgroup_type": col,
+                    "subgroup_value": val,
+                    "n": n_total,
+                    "n_pos": n_pos,
+                    "accuracy": float(accuracy_score(y_true, y_pred)),
+                    "precision": float(
+                        precision_score(y_true, y_pred, zero_division=0)
+                    ),
+                    "recall": float(
+                        recall_score(y_true, y_pred, zero_division=0)
+                    ),
+                    "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+                    "roc_auc": auc,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -148,9 +175,14 @@ def extract_misclassified_topk(
     top_k: int,
 ) -> pd.DataFrame:
     pred_df = pred_df.copy()
-    pred_df["confidence"] = np.abs(pred_df["pred_prob"] - pred_df["skip_flag"])
+    pred_df["confidence"] = np.abs(
+        pred_df["pred_prob"] - pred_df["skip_flag"]
+    )
     wrong = pred_df[~pred_df["correct"]]
-    return wrong.sort_values("confidence", ascending=False).head(top_k)
+    return wrong.sort_values(
+        "confidence",
+        ascending=False,
+    ).head(top_k)
 
 
 # ---------------------------------------------------------------------------
@@ -163,8 +195,13 @@ def _load_model(outputs_dir: Path) -> Any:
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    parser = argparse.ArgumentParser(description="xgboost_predskip 推論 + 分析")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+    parser = argparse.ArgumentParser(
+        description="xgboost_predskip 推論 + 分析"
+    )
     parser.add_argument(
         "--config",
         type=Path,
@@ -173,7 +210,10 @@ def main() -> None:
     args = parser.parse_args()
 
     if not args.config.exists():
-        print(f"[ERROR] config が見つかりません: {args.config}", file=sys.stderr)
+        print(
+            f"[ERROR] config が見つかりません: {args.config}",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     with open(args.config, encoding="utf-8") as f:
@@ -187,33 +227,50 @@ def main() -> None:
     medians_path = outputs_dir / "train_medians.csv"
     if not feat_cols_path.exists() or not medians_path.exists():
         print(
-            f"[ERROR] train 成果物がありません: {feat_cols_path}, {medians_path}",
+            f"[ERROR] train 成果物がありません: "
+            f"{feat_cols_path}, {medians_path}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    feat_cols: List[str] = json.loads(feat_cols_path.read_text(encoding="utf-8"))
-    train_medians = pd.read_csv(medians_path, index_col=0).iloc[:, 0]
+    feat_cols: List[str] = json.loads(
+        feat_cols_path.read_text(encoding="utf-8")
+    )
+    train_medians = pd.read_csv(
+        medians_path,
+        index_col=0,
+    ).iloc[:, 0]
     model = _load_model(outputs_dir)
 
     # --- split 毎の推論 ---
     all_preds: Dict[str, pd.DataFrame] = {}
     confusion: Dict[str, Any] = {}
-    for split_name in ["train", "val", "test"]:
+    for split_name in ["train", "val", "test", "unlabeled"]:
         manifest_path = manifests_dir / f"manifest_{split_name}.csv"
         if not manifest_path.exists():
             logger.warning("manifest が見つかりません: %s", manifest_path)
             continue
         df = pd.read_csv(manifest_path)
-        logger.info("inferring %s (%d rows)", split_name, len(df))
-        pred_df = infer_split(df, feat_cols, train_medians, model)
+        logger.info(
+            "inferring %s (%d rows)",
+            split_name,
+            len(df),
+        )
+        pred_df = infer_split(
+            df,
+            feat_cols,
+            train_medians,
+            model,
+        )
+
         all_preds[split_name] = pred_df
 
         out_path = outputs_dir / f"predictions_{split_name}.csv"
         pred_df.to_csv(out_path, index=False)
         logger.info("wrote %s", out_path)
 
-        if split_name in ("val", "test"):
+        # confusion matrix は labeled split のみ
+        if split_name in ("val", "test") and "skip_flag" in pred_df.columns:
             cm = confusion_matrix(
                 pred_df["skip_flag"].astype(int),
                 pred_df["pred_label"].astype(int),
@@ -221,36 +278,80 @@ def main() -> None:
             )
             tn, fp, fn, tp = cm.ravel()
             confusion[split_name] = {
-                "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
+                "tn": int(tn),
+                "fp": int(fp),
+                "fn": int(fn),
+                "tp": int(tp),
             }
+    labeled_splits = [
+        all_preds[s]
+        for s in ["train", "val", "test"]
+        if s in all_preds
+    ]
+    if labeled_splits:
+        combined = pd.concat(labeled_splits, ignore_index=True)
 
-    # --- サブグループ分析 ---
-    combined = pd.concat(all_preds.values(), ignore_index=True)
-    subgroup_df = compute_subgroup_metrics(combined, analysis_cfg.subgroup_columns)
-    subgroup_df.to_csv(outputs_dir / "analysis_subgroup.csv", index=False)
-    logger.info("wrote analysis_subgroup.csv")
+        # --- サブグループ分析 ---
+        subgroup_df = compute_subgroup_metrics(
+            combined,
+            analysis_cfg.subgroup_columns,
+        )
 
-    # --- 特徴量重要度コピー（CSV 形式）---
+        subgroup_df.to_csv(
+            outputs_dir / "analysis_subgroup.csv",
+            index=False,
+        )
+
+        logger.info("wrote analysis_subgroup.csv")
+
+        # --- 誤分類 top-K ---
+        topk = extract_misclassified_topk(
+            combined,
+            analysis_cfg.top_k_misclassified,
+        )
+
+        topk.to_csv(
+            outputs_dir / "misclassified_topk.csv",
+            index=False,
+        )
+
+        logger.info(
+            "wrote misclassified_topk.csv (%d rows)",
+            len(topk),
+        )
+
+    # --- 特徴量重要度コピー ---
     fi_path = outputs_dir / "feature_importance.json"
+
     if fi_path.exists():
         fi = json.loads(fi_path.read_text(encoding="utf-8"))
+
         fi_df = pd.DataFrame(
-            [{"feature": k, "importance": v} for k, v in fi.items()]
+            [
+                {
+                    "feature": k,
+                    "importance": v,
+                }
+                for k, v in fi.items()
+            ]
         ).sort_values("importance", ascending=False)
-        fi_df.to_csv(outputs_dir / "analysis_feature_importance.csv", index=False)
+        fi_df.to_csv(
+            outputs_dir / "analysis_feature_importance.csv",
+            index=False,
+        )
         logger.info("wrote analysis_feature_importance.csv")
 
     # --- 混同行列 ---
     if confusion:
         (outputs_dir / "analysis_confusion_matrix.json").write_text(
-            json.dumps(confusion, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(
+                confusion,
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
         )
         logger.info("wrote analysis_confusion_matrix.json")
-
-    # --- 誤分類 top-K ---
-    topk = extract_misclassified_topk(combined, analysis_cfg.top_k_misclassified)
-    topk.to_csv(outputs_dir / "misclassified_topk.csv", index=False)
-    logger.info("wrote misclassified_topk.csv (%d rows)", len(topk))
 
     print("[OK] infer 完了:", outputs_dir)
 

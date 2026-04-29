@@ -1,7 +1,15 @@
-"""samples.csv を train/val/test の 3 つの manifest に分割する。
+"""samples.csv を train/val/test/unlabeled の 4 つの manifest に分割する。
 
-分類用: 全データ（skip_flag=0/1 両方）を使用し unlabeled 分割なし。
-同一 image_path のサンプルが異なる split に混在しないよう image_path 単位で分割する。
+分類用:
+- train/val/test:
+    skip_flag=1
+    または
+    skip_flag=0 かつ true_t_raw が null でない
+- unlabeled:
+    skip_flag=0 かつ true_t_raw が null
+
+同一 image_path のサンプルが異なる split に混在しないよう、
+image_path 単位で分割する。
 """
 from __future__ import annotations
 
@@ -42,18 +50,58 @@ def split_by_image_path(
     df: pd.DataFrame,
     cfg: SplitConfig,
 ) -> Dict[str, pd.DataFrame]:
-    """全データを image_path 単位で train/val/test に分割する。
+    """samples.csv を image_path 単位で
+    train/val/test/unlabeled に分割する。
 
     Returns:
-        {"train": df, "val": df, "test": df}
+        {
+            "train": df,
+            "val": df,
+            "test": df,
+            "unlabeled": df,
+        }
     """
-    if "skip_flag" not in df.columns:
-        raise ValueError("CSV に skip_flag カラムがありません。")
+    required_cols = {"image_path", "skip_flag", "true_t_raw"}
+    missing = required_cols - set(df.columns)
+    if missing:
+        raise ValueError(f"CSV に必要なカラムがありません: {sorted(missing)}")
 
-    unique_images = np.array(sorted(df["image_path"].unique()))
+    # unlabeled:
+    row_unlabeled_mask = (df["skip_flag"] == 0) & (df["true_t_raw"].isna())
+    row_labeled_mask = (df["skip_flag"] == 1) | (
+        (df["skip_flag"] == 0) & (~df["true_t_raw"].isna())
+    )
+
+    # image_path 単位で「1つでも labeled 行がある画像」は全て labeled 側へ寄せる
+    labeled_image_paths = set(
+        df.loc[row_labeled_mask, "image_path"].dropna().unique()
+    )
+
+    # labeled画像:
+    #   画像内に1つでも labeled 条件行が存在する image_path 全体
+    labeled_df = df[df["image_path"].isin(labeled_image_paths)].copy()
+
+    # unlabeled画像:
+    #   image_path 全体が完全に unlabeled 条件のみ
+    #   (= labeled_image_paths に含まれず、かつ自身は unlabeled 条件)
+    unlabeled_df = df[
+        (~df["image_path"].isin(labeled_image_paths)) & row_unlabeled_mask
+    ].copy()
+
+    # 想定外行チェック:
+    # unlabeled 側画像なのに unlabeled 条件を満たさない行が存在したら不整合
+    remaining_df = df[~df["image_path"].isin(labeled_image_paths)]
+    invalid_remaining = remaining_df[~row_unlabeled_mask.loc[remaining_df.index]]
+
+    if len(invalid_remaining) > 0:
+        raise ValueError(
+            "labeled 条件にも unlabeled 条件にも一致しない行があります。"
+        )
+
+    unique_images = np.array(sorted(labeled_df["image_path"].unique()))
     if len(unique_images) < 3:
         raise ValueError(
-            f"画像数が少なすぎます（{len(unique_images)}）。"
+            f"labeled 側の画像数が少なすぎます（{len(unique_images)}）。"
             "train/val/test 分割できません。"
         )
 
@@ -72,38 +120,44 @@ def split_by_image_path(
         n_val = max(1, n_total - n_train - 1)
 
     train_imgs = set(shuffled[:n_train])
-    val_imgs = set(shuffled[n_train : n_train + n_val])
-    test_imgs = set(shuffled[n_train + n_val :])
+    val_imgs = set(shuffled[n_train:n_train + n_val])
+    test_imgs = set(shuffled[n_train + n_val:])
 
-    def _pick(imgs: set) -> pd.DataFrame:
-        return df[df["image_path"].isin(imgs)].copy()
+    def _pick(src_df: pd.DataFrame, imgs: set[str]) -> pd.DataFrame:
+        return src_df[src_df["image_path"].isin(imgs)].copy()
 
     result = {
-        "train": _pick(train_imgs),
-        "val": _pick(val_imgs),
-        "test": _pick(test_imgs),
+        "train": _pick(labeled_df, train_imgs),
+        "val": _pick(labeled_df, val_imgs),
+        "test": _pick(labeled_df, test_imgs),
+        "unlabeled": unlabeled_df,
     }
 
+    # image_path 漏洩チェック
     train_set = set(result["train"]["image_path"].unique())
     val_set = set(result["val"]["image_path"].unique())
     test_set = set(result["test"]["image_path"].unique())
+    unlabeled_set = set(result["unlabeled"]["image_path"].unique())
     assert train_set.isdisjoint(val_set), "train/val 間で image_path 漏洩"
     assert train_set.isdisjoint(test_set), "train/test 間で image_path 漏洩"
     assert val_set.isdisjoint(test_set), "val/test 間で image_path 漏洩"
+    assert unlabeled_set.isdisjoint(train_set), "unlabeled/train 間で image_path 漏洩"
+    assert unlabeled_set.isdisjoint(val_set), "unlabeled/val 間で image_path 漏洩"
+    assert unlabeled_set.isdisjoint(test_set), "unlabeled/test 間で image_path 漏洩"
 
     return result
 
 
 def write_manifests(splits: Dict[str, pd.DataFrame], out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    for name, df in splits.items():
+    for name, split_df in splits.items():
         path = out_dir / f"manifest_{name}.csv"
-        df.to_csv(path, index=False)
+        split_df.to_csv(path, index=False)
         logger.info(
             "wrote %s: %d rows, %d images",
             path,
-            len(df),
-            df["image_path"].nunique(),
+            len(split_df),
+            split_df["image_path"].nunique(),
         )
 
 

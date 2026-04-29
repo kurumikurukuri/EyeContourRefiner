@@ -289,6 +289,7 @@ def _feature_cfg_from(d: Dict[str, Any]) -> FeatureConfig:
         use_point_index=bool(d.get("use_point_index", True)),
         use_cyclical_angle=bool(d.get("use_cyclical_angle", False)),
         use_interactions=bool(d.get("use_interactions", False)),
+        use_niqe_score=bool(d.get("use_niqe_score", False)),
     )
 
 
@@ -333,11 +334,35 @@ def _optuna_cfg_from(d: Dict[str, Any]) -> OptunaConfig:
 def _load_manifests(manifests_dir: Path) -> Dict[str, pd.DataFrame]:
     names = ["train", "val", "test"]
     out: Dict[str, pd.DataFrame] = {}
+
     for n in names:
         path = manifests_dir / f"manifest_{n}.csv"
+
         if not path.exists():
             raise FileNotFoundError(f"manifest が見つかりません: {path}")
-        out[n] = pd.read_csv(path)
+
+        df = pd.read_csv(path)
+
+        # 学習評価対象:
+        #   skip=1
+        #   or
+        #   skip=0 & true_t_raw notnull
+        valid_mask = (df["skip_flag"] == 1) | (
+            (df["skip_flag"] == 0) & (~df["true_t_raw"].isna())
+        )
+
+        removed = int((~valid_mask).sum())
+
+        if removed > 0:
+            logger.info(
+                "%s: removed %d unlabeled-like rows "
+                "(skip=0 & true_t_raw=null)",
+                n,
+                removed,
+            )
+
+        out[n] = df[valid_mask].copy()
+
     return out
 
 
@@ -346,6 +371,7 @@ def _save_model(model: Any, path: Path) -> None:
 
     path.parent.mkdir(parents=True, exist_ok=True)
     joblib.dump(model, path)
+
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +413,8 @@ def main() -> None:
     # --- train 特徴量（median 統計量を固定）---
     train_feat, feat_cols = build_feature_matrix(manifests["train"], feat_cfg)
     train_medians = train_feat.median(numeric_only=True)
+    if feat_cfg.use_niqe_score and "niqe_score" in feat_cols:
+        train_medians["niqe_score"] = manifests["train"]["niqe_score"].max()
     y_tr = manifests["train"]["skip_flag"].astype(int).to_numpy()
 
     def _prepare(name: str) -> pd.DataFrame:
