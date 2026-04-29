@@ -1,0 +1,26 @@
+# EXP015 grouped: interior model (point_index 1-5)
+# EXP014 R2 baseline capacity restored (4 conv layers, batch 32)
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 5
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -1.0
+patch_t_max: 2.0
+patch_perp_scale: 1.0
+patch_h: 96
+patch_w: 192
+label_t_min: -0.5
+label_t_max: 1.5
+t_quant_step: null
