@@ -1,4 +1,4 @@
-# EXP015 grouped: interior model (point_index 1-5)
+# EXP015 baseline: all points (全点一括)
 # EXP014 R2 baseline capacity restored (4 conv layers, batch 32)
 backbone: custom
 loss_fn: t

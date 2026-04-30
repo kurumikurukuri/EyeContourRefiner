@@ -10,7 +10,7 @@ dropout_rate: 0.3
 use_t_weighted_sampler: false
 lr: 1.0e-3
 weight_decay: 1.0e-4
-epochs: 200
+epochs: 300
 batch: 32
 k: 5
 patience: 50
@@ -18,9 +18,9 @@ seed: 42
 aug_flags: 127
 patch_t_min: -1.0
 patch_t_max: 2.0
-patch_perp_scale: 1.0
-patch_h: 96
-patch_w: 192
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 64
 label_t_min: -0.5
 label_t_max: 1.5
 t_quant_step: null
