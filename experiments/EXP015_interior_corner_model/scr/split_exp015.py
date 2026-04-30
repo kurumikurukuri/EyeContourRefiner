@@ -109,6 +109,12 @@ def generate_manifests(
 
     results: dict[str, int] = {}
     for split_name, split_rows in [("train", train_rows), ("test", test_rows)]:
+        # baseline: 全点（point_index フィルタなし）
+        out_path = manifest_dir / f"manifest_{split_name}_baseline.csv"
+        _write_manifest(split_rows, out_path)
+        key = f"manifest_{split_name}_baseline.csv"
+        results[key] = len(split_rows)
+
         for group_name, indices in groups.items():
             filtered = [r for r in split_rows if r["point_index"] in indices]
             out_path = manifest_dir / f"manifest_{split_name}_{group_name}.csv"
@@ -152,9 +158,11 @@ def main() -> None:
     for filename, n in sorted(counts.items()):
         print(f"  {n:>6} サンプル → {MANIFEST_DIR / filename}")
 
+    total_baseline = counts["manifest_train_baseline.csv"]  + counts["manifest_test_baseline.csv"]
     total_corner   = counts["manifest_train_corner.csv"]   + counts["manifest_test_corner.csv"]
     total_interior = counts["manifest_train_interior.csv"] + counts["manifest_test_interior.csv"]
     print()
+    print(f"  baseline (全点):            {total_baseline} サンプル合計")
     print(f"  corner   (point_index 0,6): {total_corner} サンプル合計")
     print(f"  interior (point_index 1–5): {total_interior} サンプル合計")
     print()

@@ -8,18 +8,19 @@ point_index を「corner（0, 6）」と「interior（1–5）」に二分割し
     interior : point_index 1–5（中間点）→ manifest_*_interior.csv
 
 条件:
-    corner          : corner デフォルト（patch_t -2.0〜3.0 / label_t -1〜2 / perp 2.0）
-    corner_long     : corner × 長期学習（epochs=1000 / patience=250 / batch=16）
-    corner_wide     : corner × ワイドパッチ（patch_t -2.5〜3.5 / label_t -2〜3 / perp 2.5）
-    interior        : interior デフォルト（patch_t -2.0〜3.0 / perp 2.0）
-    interior_narrow : interior × ナローパッチ（h=96 w=192 / perp 1.0 / label_t -0.5〜1.5）
+    S1_baseline        : 全点一括ベースライン（interior と同じパラメータ）
+    S2_corner          : corner デフォルト（patch_t -2.0〜3.0 / label_t -1〜2 / perp 2.0）
+    S3_corner_wide     : corner × ワイドパッチ（patch_t -2.5〜3.5 / label_t -2〜3 / perp 2.5）
+    S4_corner_long     : corner × 長期学習（epochs=500 / patience=100 / batch=16）
+    S5_interior        : interior デフォルト（patch_t -2.0〜3.0 / label_t -1〜2 / perp 2.0）
+    S6_interior_narrow : interior × ナローパッチ（h=96 w=192 / perp 1.0 / label_t -0.5〜1.5）
 
 使い方:
     # 全条件を実行
     python scripts/sweep.py --exp 015
 
     # 特定条件のみ実行
-    python experiments/EXP015_interior_corner_model/scr/train_exp015.py --configs corner interior
+    python experiments/EXP015_interior_corner_model/scr/train_exp015.py --configs S2_corner S5_interior
 """
 from __future__ import annotations
 
@@ -36,6 +37,8 @@ MANIFEST_DIR = EXP_DIR / "manifests"
 OUTPUT_DIR = EXP_DIR / "outputs"
 LOG_PATH = EXP_DIR / "log.txt"
 
+MANIFEST_TRAIN_BASELINE  = MANIFEST_DIR / "manifest_train_baseline.csv"
+MANIFEST_TEST_BASELINE   = MANIFEST_DIR / "manifest_test_baseline.csv"
 MANIFEST_TRAIN_CORNER   = MANIFEST_DIR / "manifest_train_corner.csv"
 MANIFEST_TEST_CORNER    = MANIFEST_DIR / "manifest_test_corner.csv"
 MANIFEST_TRAIN_INTERIOR = MANIFEST_DIR / "manifest_train_interior.csv"
@@ -46,13 +49,15 @@ from scripts.exp_utils import run_with_log  # noqa: E402
 
 
 def get_manifests(config_name: str) -> tuple[Path, Path]:
-    """config 名のプレフィックスから (manifest_train, manifest_test) を返す。"""
-    if config_name.startswith("corner"):
+    """config 名から (manifest_train, manifest_test) を返す。"""
+    if "baseline" in config_name:
+        return MANIFEST_TRAIN_BASELINE, MANIFEST_TEST_BASELINE
+    if "corner" in config_name:
         return MANIFEST_TRAIN_CORNER, MANIFEST_TEST_CORNER
-    if config_name.startswith("interior"):
+    if "interior" in config_name:
         return MANIFEST_TRAIN_INTERIOR, MANIFEST_TEST_INTERIOR
     raise ValueError(
-        f"config 名 '{config_name}' が 'corner' / 'interior' で始まっていません"
+        f"config 名 '{config_name}' に 'baseline' / 'corner' / 'interior' が含まれていません"
     )
 
 

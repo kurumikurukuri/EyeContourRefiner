@@ -13,7 +13,7 @@ train_predictions.csv / test_predictions.csv を outputs/{条件名}/{条件名}
     python experiments/EXP015_interior_corner_model/scr/infer_exp015.py
 
     # 特定条件のみ
-    python experiments/EXP015_interior_corner_model/scr/infer_exp015.py --configs corner interior
+    python experiments/EXP015_interior_corner_model/scr/infer_exp015.py --configs S2_corner S5_interior
 """
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ MANIFEST_DIR = EXP_DIR / "manifests"
 OUTPUT_DIR = EXP_DIR / "outputs"
 LOG_PATH = EXP_DIR / "log.txt"
 
+MANIFEST_TRAIN_BASELINE  = MANIFEST_DIR / "manifest_train_baseline.csv"
+MANIFEST_TEST_BASELINE   = MANIFEST_DIR / "manifest_test_baseline.csv"
 MANIFEST_TRAIN_CORNER   = MANIFEST_DIR / "manifest_train_corner.csv"
 MANIFEST_TEST_CORNER    = MANIFEST_DIR / "manifest_test_corner.csv"
 MANIFEST_TRAIN_INTERIOR = MANIFEST_DIR / "manifest_train_interior.csv"
@@ -40,13 +42,15 @@ from scripts.exp_utils import run_with_log  # noqa: E402
 
 
 def get_manifests(config_name: str) -> tuple[Path, Path]:
-    """config 名のプレフィックスから (manifest_train, manifest_test) を返す。"""
-    if config_name.startswith("corner"):
+    """config 名から (manifest_train, manifest_test) を返す。"""
+    if "baseline" in config_name:
+        return MANIFEST_TRAIN_BASELINE, MANIFEST_TEST_BASELINE
+    if "corner" in config_name:
         return MANIFEST_TRAIN_CORNER, MANIFEST_TEST_CORNER
-    if config_name.startswith("interior"):
+    if "interior" in config_name:
         return MANIFEST_TRAIN_INTERIOR, MANIFEST_TEST_INTERIOR
     raise ValueError(
-        f"config 名 '{config_name}' が 'corner' / 'interior' で始まっていません"
+        f"config 名 '{config_name}' に 'baseline' / 'corner' / 'interior' が含まれていません"
     )
 
 
