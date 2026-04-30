@@ -361,6 +361,37 @@ def get_eye_scale_per_image(db_path: Path = DB_PATH) -> Dict[str, float]:
     return eye_scale_per_image
 
 
+def get_max_eye_scale_per_image(db_path: Path = DB_PATH) -> Dict[str, float]:
+    """image_path ごとの eye_scale（全 (face_index, part_name) の最大値）を返す。
+
+    最大値が閾値未満 = その画像の全ての目が小さい（解像度不足）を判定するために使用する。
+    """
+    import math
+    from collections import defaultdict
+
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT image_path, face_index, part_name, px, py, qx, qy FROM samples"
+        ).fetchall()
+
+    eye_points: dict = defaultdict(list)
+    for row in rows:
+        key = (row["image_path"], row["face_index"], row["part_name"])
+        eye_points[key].append((float(row["px"]), float(row["py"])))
+        eye_points[key].append((float(row["qx"]), float(row["qy"])))
+
+    eye_scale_per_image: Dict[str, float] = {}
+    for (image_path, _face_index, _part_name), pts in eye_points.items():
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        scale = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2)
+        scale = max(scale, 1.0)
+        if image_path not in eye_scale_per_image or scale > eye_scale_per_image[image_path]:
+            eye_scale_per_image[image_path] = scale
+
+    return eye_scale_per_image
+
+
 def get_annotated_samples(db_path: Path = DB_PATH) -> List[Dict[str, Any]]:
     """t IS NOT NULL のサンプルを idx 順で返す。"""
     with _connect(db_path) as conn:
