@@ -44,13 +44,13 @@ from eyeliner.data.patch_utils import (
     reconstruct_point,
 )
 
+
 logger = logging.getLogger(__name__)
 
 DISPLAY_SCALE = 6  # ROIパッチの表示倍率
 STATIC_DIR = Path(__file__).parent / "static"
 MODEL_PATH = Path("models/eyeliner_detection.pt")
 KFOLD_MODEL_DIR = Path("models_kfold")
-
 # パストラバーサル防止: 許可するモデルディレクトリ（プロジェクトルートからの絶対パス）
 _PROJECT_ROOT = Path(__file__).parent.parent.resolve()
 _ALLOWED_MODEL_DIRS = [

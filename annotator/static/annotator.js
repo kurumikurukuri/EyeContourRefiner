@@ -17,7 +17,7 @@ function toPhysicalT(tNorm) {
 const state = {
   currentIdx: 0,
   total: 0,
-  sampleMeta: [],  // index → {image_path, part_name}
+  sampleMeta: {},  // idx → {image_path, part_name}
   annotated: 0,
   patchW: 384,   // display width  (updated from API)
   patchH: 192,   // display height (updated from API)
@@ -30,8 +30,8 @@ const state = {
   imageB64: null,
   faceB64: null,
   patchB64: null,
-  annotationStatus: [],  // index → true/false (アノテーション済みか)
-  skipFlags: [],          // index → true/false (skip_flag)
+  annotationStatus: {},  // idx → true/false (アノテーション済みか)
+  skipFlags: {},          // idx → true/false (skip_flag)
   skipFlag: false,        // 現在のサンプルの skip_flag
   imageKey: null,          // 現在表示中の画像ファイル名
   // ギャラリーページネーション
@@ -119,12 +119,17 @@ async function apiFetch(url, options) {
 async function loadSamplesSummary() {
   try {
     const data = await apiFetch("/api/samples");
-    state.annotationStatus = data.samples.map(s => s.t !== null);
-    state.skipFlags = data.samples.map(s => s.skip_flag === true);
-    state.sampleMeta = data.samples.map(s => ({
-      image_path: s.image_path,
-      part_name: s.part_name,
-    }));
+    const annotationStatus = {};
+    const skipFlags = {};
+    const sampleMeta = {};
+    data.samples.forEach(s => {
+      annotationStatus[s.idx] = s.t !== null;
+      skipFlags[s.idx] = s.skip_flag === true;
+      sampleMeta[s.idx] = { image_path: s.image_path, part_name: s.part_name };
+    });
+    state.annotationStatus = annotationStatus;
+    state.skipFlags = skipFlags;
+    state.sampleMeta = sampleMeta;
   } catch (err) {
     // サマリー取得失敗は非致命的（未アノテーションジャンプ機能のみ無効化）
   }
@@ -169,7 +174,7 @@ function _eyeGroupStart(idx) {
 
 function jumpToNextEye() {
   const meta = state.sampleMeta;
-  if (!meta.length) { advance(14); return; }
+  if (!state.sortedIdxList) { advance(14); return; }
   const { image_path, part_name } = meta[state.currentIdx];
 
   if (state.sortedIdxList) {
@@ -200,7 +205,7 @@ function jumpToNextEye() {
 
 function jumpToPrevEye() {
   const meta = state.sampleMeta;
-  if (!meta.length) { advance(-14); return; }
+  if (!state.sortedIdxList) { advance(-14); return; }
 
   if (state.sortedIdxList) {
     const list = state.sortedIdxList;
@@ -441,7 +446,8 @@ btnSkipImage.addEventListener("click", async () => {
     // 同画像の全サンプルの skipFlags を更新
     const currentMeta = state.sampleMeta[state.currentIdx];
     if (currentMeta) {
-      for (let i = 0; i < state.total; i++) {
+      const keys = state.sortedIdxList || Object.keys(state.sampleMeta).map(Number);
+      for (const i of keys) {
         if (state.sampleMeta[i] && state.sampleMeta[i].image_path === currentMeta.image_path) {
           state.skipFlags[i] = newSkip;
         }
@@ -1042,6 +1048,12 @@ fullImg.addEventListener("click", async () => {
 // Boot
 // ---------------------------------------------------------------------------
 loadSamplesSummary().then(async () => {
+  // 削除後のidx欠番でナビゲーションが壊れないよう、常に有効idxリストを取得する
+  try {
+    const orderData = await apiFetch("/api/sample_order?sort_by=idx");
+    state.sortedIdxList = orderData.order;
+  } catch (err) { /* non-fatal */ }
+
   const params = new URLSearchParams(window.location.search);
   const idxParam = params.get("idx");
   if (idxParam !== null) {
@@ -1052,12 +1064,14 @@ loadSamplesSummary().then(async () => {
         loadSample(data.array_position);
         return;
       } catch {
-        // idx フィールドが見つからない場合は配列位置として扱う（後方互換）
         loadSample(fieldIdx);
         return;
       }
     }
   }
-  loadSample(0);
+  const startIdx = (state.sortedIdxList && state.sortedIdxList.length > 0)
+    ? state.sortedIdxList[0]
+    : 0;
+  loadSample(startIdx);
 });
 loadModelList();
