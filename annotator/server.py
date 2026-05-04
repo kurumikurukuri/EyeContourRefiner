@@ -693,6 +693,9 @@ def get_sample(idx: int):
         "image_path": sample["image_path"],
         "skip_flag": sample.get("skip_flag", False),
         **_build_eye_scale_fields(sample),
+        "image_metadata": _db.get_image_labels(
+            _db.DB_PATH, Path(sample["image_path"]).stem
+        ),
     }
 
 

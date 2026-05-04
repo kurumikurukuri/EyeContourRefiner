@@ -260,6 +260,36 @@
     #info-box .val { color: #a8dadc; font-weight: bold; }
     #info-box .key { color: #888; }
 
+    #metadata-box {
+      display: none;
+      background: #16213e;
+      border: 1px solid #0f3460;
+      border-radius: 6px;
+      padding: 8px 12px;
+      font-size: 0.8rem;
+      margin-top: 4px;
+    }
+    #metadata-box .meta-row { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 4px; }
+    #metadata-box .meta-row:last-child { margin-bottom: 0; }
+    #metadata-box .meta-key { color: #888; min-width: 40px; flex-shrink: 0; }
+    #metadata-box .meta-val { display: flex; flex-wrap: wrap; gap: 3px; }
+    .meta-badge {
+      background: #1a3a5c;
+      color: #a8dadc;
+      border-radius: 10px;
+      padding: 1px 8px;
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+    .meta-badge.highlight {
+      background: #5c1a1a;
+      color: #ff8a80;
+    }
+    .meta-badge.face {
+      background: #1a4a2a;
+      color: #69f0ae;
+    }
+
     #t-display {
       font-size: 1.5rem;
       font-weight: bold;
@@ -669,10 +699,11 @@
       <div><span class="key">R:    </span><span class="val" id="info-r">--</span></div>
       <div><span class="key" style="color:#ff9800;">予測 t: </span><span class="val" style="color:#ff9800;" id="info-pred">--</span></div>
       <div><span class="key">eye_scale: </span><span class="val" id="info-eye-scale">--</span><span class="key" style="margin-left:12px;">norm: </span><span class="val" id="info-norm-eye-scale">--</span></div>
-      <div style="margin-top:6px; display:none;">
-        <span id="label-source-badge"></span>
-        <span id="label-confidence"></span>
-      </div>
+    </div>
+
+    <div id="metadata-box">
+      <div class="meta-row"><span class="meta-key">Labels:</span><span class="meta-val" id="metadata-labels"></span></div>
+      <div class="meta-row"><span class="meta-key">Flags:</span><span class="meta-val" id="metadata-flags"></span></div>
     </div>
 
     <div id="eyeliner-section">
