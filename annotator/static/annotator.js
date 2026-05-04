@@ -65,6 +65,10 @@ const elInfoNormEyeScale = document.getElementById("info-norm-eye-scale");
 const elStatus    = document.getElementById("status-msg");
 const elBanner    = document.getElementById("complete-banner");
 
+const metaBox     = document.getElementById("metadata-box");
+const metaLabels  = document.getElementById("metadata-labels");
+const metaFlags   = document.getElementById("metadata-flags");
+
 const btnPrevEyes        = document.getElementById("btn-prev-eyes");
 const btnNextEyes        = document.getElementById("btn-next-eyes");
 
@@ -291,6 +295,22 @@ async function loadSample(idx) {
     elInfoQ.textContent    = `(${data.qx.toFixed(1)}, ${data.qy.toFixed(1)})`;
     elInfoEyeScale.textContent     = data.eye_scale != null ? `${Math.round(data.eye_scale)}px` : "--";
     elInfoNormEyeScale.textContent = data.norm_eye_scale != null ? data.norm_eye_scale.toFixed(4) : "--";
+
+    // Open Images metadata
+    if (data.image_metadata && (data.image_metadata.labels.length > 0 || Object.keys(data.image_metadata.face_flags).length > 0)) {
+      metaBox.style.display = "block";
+      metaLabels.innerHTML = data.image_metadata.labels
+        .map(l => `<span class="meta-badge ${l === 'Human face' ? 'face' : ''}">${l}</span>`)
+        .join("");
+      const flags = data.image_metadata.face_flags;
+      const flagHtml = Object.entries(flags)
+        .filter(([, v]) => v === 1)
+        .map(([k]) => `<span class="meta-badge highlight">${k}</span>`)
+        .join("");
+      metaFlags.innerHTML = flagHtml || '<span style="color:#69f0ae;">all clear</span>';
+    } else {
+      metaBox.style.display = "none";
+    }
 
     updateProgress();
     updateLabelSourceBadge();

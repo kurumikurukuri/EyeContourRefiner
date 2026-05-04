@@ -1,6 +1,7 @@
 """SQLite データアクセス層。samples テーブルの CRUD を提供する。"""
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -33,6 +34,14 @@ _CREATE_IDX_IMAGE_PATH = (
 _CREATE_IDX_T = (
     "CREATE INDEX IF NOT EXISTS idx_t_annotated ON samples(t)"
 )
+
+_CREATE_IMAGE_LABELS = """
+CREATE TABLE IF NOT EXISTS image_labels (
+    image_id   TEXT PRIMARY KEY,
+    labels     TEXT NOT NULL,
+    face_flags TEXT NOT NULL DEFAULT '{}'
+)
+"""
 
 # 追加カラム（後方互換のため ALTER TABLE ADD COLUMN で冪等に付与）。
 _ADDITIONAL_COLUMNS: Tuple[Tuple[str, str], ...] = (
@@ -72,6 +81,7 @@ def init_db(db_path: Path = DB_PATH) -> None:
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_IDX_IMAGE_PATH)
         conn.execute(_CREATE_IDX_T)
+        conn.execute(_CREATE_IMAGE_LABELS)
         _ensure_columns(conn)
 
 
@@ -408,3 +418,37 @@ def image_path_exists(image_path: str, db_path: Path = DB_PATH) -> bool:
             "SELECT 1 FROM samples WHERE image_path = ? LIMIT 1", (image_path,)
         ).fetchone()
     return row is not None
+
+
+# ---------------------------------------------------------------------------
+# image_labels (Open Images metadata)
+# ---------------------------------------------------------------------------
+
+def get_image_labels(db_path: Path, image_id: str) -> Optional[Dict[str, Any]]:
+    """image_id のメタデータを返す。なければ None。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT labels, face_flags FROM image_labels WHERE image_id = ?",
+            (image_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "labels": row["labels"].split(",") if row["labels"] else [],
+        "face_flags": json.loads(row["face_flags"]),
+    }
+
+
+def upsert_image_labels(
+    db_path: Path,
+    image_id: str,
+    labels: str,
+    face_flags: str,
+) -> None:
+    """image_labels を upsert する。"""
+    with _connect(db_path) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO image_labels (image_id, labels, face_flags) "
+            "VALUES (?, ?, ?)",
+            (image_id, labels, face_flags),
+        )

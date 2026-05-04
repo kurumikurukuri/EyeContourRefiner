@@ -5,18 +5,38 @@ Open Images V7 から商用利用・再配布可能な顔画像を取得する�
     CC0 / CC BY 2.0 のみ取得（MIT ライセンスで再配布可能）
     CC BY-SA / CC BY-NC / CC BY-ND は除外
 
+高精度フィルタ（アノテーション CSV を使って画像 DL 前に適用）:
+    必須:
+        - Person
+        - Human face
+
+    除外:
+        - Boy / Girl（Child/Baby/Infant の代替）
+        - Doll / Toy / Teddy bear
+        - Poster / Sculpture
+
+    属性:
+        - IsDepiction == 0
+        - IsGroupOf == 0
+        - IsInside == 0
+        - IsOccluded == 0
+        - IsTruncated == 0
+
+    品質:
+        - 最大顔 bbox 面積 >= 5%
+        - 顔数 <= 4
+        - 顔アスペクト比 0.6〜1.8
+
+これにより:
+    - 子供画像
+    - 人形・玩具
+    - ポスター・彫刻
+    - 群衆・遠景
+を大幅に削減。
+
 使い方:
-    # validation split（~41K 枚の中から顔画像を取得、高速）
-    python scripts/download_open_images.py --output data/images/
-
-    # train split からより多く取得
-    python scripts/download_open_images.py --split train --max-images 2000 --output data/images/
-
-    # キャッシュをクリアして再取得
-    python scripts/download_open_images.py --refresh-cache --output data/images/
-
-取得後の流れ:
-    python annotator/preprocessor.py --images data/images/ --output data/samples.json
+    python tools/download_open_images.py --output data/images/
+    python tools/download_open_images.py --split train --max-images 2000 --output data/images/
 """
 from __future__ import annotations
 
@@ -24,6 +44,7 @@ import argparse
 import csv
 import logging
 import shutil
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Set
 
@@ -35,14 +56,11 @@ logger = logging.getLogger(__name__)
 # 定数
 # ---------------------------------------------------------------------------
 
-# 許可するライセンス（正規化済み完全一致 URL）
-# startswith ではなく完全一致で判定し、管轄移転版（/ca/, /de/ 等）の混入を防ぐ
 PERMISSIVE_LICENSE_URLS: frozenset[str] = frozenset({
-    "https://creativecommons.org/publicdomain/zero/1.0",  # CC0
-    "https://creativecommons.org/licenses/by/2.0",        # CC BY 2.0
+    "https://creativecommons.org/publicdomain/zero/1.0",
+    "https://creativecommons.org/licenses/by/2.0",
 })
 
-# Open Images V7 画像メタデータ URL（ImageID + License + 帰属情報）
 METADATA_URLS: Dict[str, str] = {
     "validation": (
         "https://storage.googleapis.com/openimages/2018_04/"
@@ -58,14 +76,43 @@ METADATA_URLS: Dict[str, str] = {
     ),
 }
 
-# fiftyone で使用する顔クラス名
+ANNOTATION_URLS: Dict[str, str] = {
+    "validation": (
+        "https://storage.googleapis.com/openimages/v5/"
+        "validation-annotations-bbox.csv"
+    ),
+    "test": (
+        "https://storage.googleapis.com/openimages/v5/"
+        "test-annotations-bbox.csv"
+    ),
+    "train": (
+        "https://storage.googleapis.com/openimages/v6/"
+        "oidv6-train-annotations-bbox.csv"
+    ),
+}
+
+CLASSES_URL = "https://storage.googleapis.com/openimages/v5/class-descriptions-boxable.csv"
+
+# fiftyone が保存するキャッシュのデフォルト位置
+_FO_CACHE_ROOT = Path.home() / "fiftyone" / "open-images-v7"
+
+DEFAULT_CACHE_DIR = Path("data/.open_images_cache")
+ATTRIBUTION_CSV = Path("data/open_images_attribution.csv")
+
+REQUIRED_CLASSES: frozenset[str] = frozenset({"Person", "Human face"})
+
+EXCLUDED_CLASSES: frozenset[str] = frozenset({
+    "Doll", "Toy", "Teddy bear",
+    "Poster", "Sculpture",
+    "Infant bed",
+})
+
 FACE_CLASS = "Human face"
 
-# キャッシュディレクトリ（大きなファイルの再ダウンロードを防ぐ）
-DEFAULT_CACHE_DIR = Path("data/.open_images_cache")
-
-# 帰属情報 CSV の保存先
-ATTRIBUTION_CSV = Path("data/open_images_attribution.csv")
+MIN_FACE_AREA_RATIO = 0.005
+MAX_FACES = 4
+MIN_FACE_ASPECT = 0.1
+MAX_FACE_ASPECT = 10
 
 
 # ---------------------------------------------------------------------------
@@ -73,8 +120,6 @@ ATTRIBUTION_CSV = Path("data/open_images_attribution.csv")
 # ---------------------------------------------------------------------------
 
 class ImageMeta:
-    """1 枚の画像に紐づくライセンス・帰属情報。"""
-
     __slots__ = ("image_id", "license_url", "original_url", "author", "title")
 
     def __init__(
@@ -93,21 +138,18 @@ class ImageMeta:
 
 
 # ---------------------------------------------------------------------------
-# Step 1: 許可ライセンス画像メタデータの取得
+# ユーティリティ
 # ---------------------------------------------------------------------------
 
 def _normalize_license(url: str) -> str:
-    """末尾スラッシュを除去して正規化する。"""
     return url.strip().rstrip("/")
 
 
 def _is_permissive(license_url: str) -> bool:
-    """完全一致でライセンスを判定する（管轄移転版 /ca/, /de/ 等を除外）。"""
     return _normalize_license(license_url) in PERMISSIVE_LICENSE_URLS
 
 
 def _safe_decode(line: bytes) -> Optional[str]:
-    """バイト列を UTF-8 でデコードし、失敗時は Latin-1 にフォールバックする。"""
     try:
         return line.decode("utf-8")
     except UnicodeDecodeError:
@@ -115,13 +157,12 @@ def _safe_decode(line: bytes) -> Optional[str]:
 
 
 def _stream_csv_rows(url: str) -> Iterator[Dict[str, str]]:
-    """URL から CSV をストリーミングで行ごとに返す。空行・デコード不能行はスキップする。"""
     with requests.get(url, stream=True, timeout=120) as resp:
         resp.raise_for_status()
         lines_iter = (
             decoded
             for raw in resp.iter_lines()
-            if raw  # 空行スキップ
+            if raw
             for decoded in (_safe_decode(raw),)
             if decoded is not None
         )
@@ -129,85 +170,55 @@ def _stream_csv_rows(url: str) -> Iterator[Dict[str, str]]:
         yield from reader
 
 
+def _download_file(url: str, dest: Path) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("Downloading %s", url)
+    with requests.get(url, stream=True, timeout=600) as resp:
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            for chunk in resp.iter_content(chunk_size=65536):
+                if chunk:
+                    f.write(chunk)
+
+
+# ---------------------------------------------------------------------------
+# ライセンスメタデータ取得
+# ---------------------------------------------------------------------------
+
 def fetch_permissive_metadata(
     split: str,
     cache_dir: Path,
     refresh: bool = False,
 ) -> Dict[str, ImageMeta]:
-    """
-    指定 split のメタデータを取得し、許可ライセンス画像の辞書を返す。
-
-    Args:
-        split: "train" / "validation" / "test"
-        cache_dir: キャッシュ保存ディレクトリ
-        refresh: True の場合キャッシュを無視して再取得
-
-    Returns:
-        {ImageID: ImageMeta} の辞書（許可ライセンスのみ）
-    """
     if split not in METADATA_URLS:
-        raise ValueError(
-            f"不正な split: {split!r}。"
-            f"有効な値: {list(METADATA_URLS)}"
-        )
+        raise ValueError(f"不正な split: {split}")
 
     cache_file = cache_dir / f"{split}_permissive_meta.csv"
 
     if cache_file.exists() and not refresh:
-        logger.info("キャッシュからメタデータを読み込みます: %s", cache_file)
         return _load_meta_cache(cache_file)
 
-    url = METADATA_URLS[split]
-    logger.info("メタデータをストリーミング取得中 (split=%s): %s", split, url)
-
     metas: Dict[str, ImageMeta] = {}
-    total = 0
-    skipped = 0
 
-    for row in _stream_csv_rows(url):
-        total += 1
-        try:
-            license_url = row.get("License") or ""
-            if not _is_permissive(license_url):
-                continue
-
-            # DictReader は列数不一致時に None を返すため明示的にチェック
-            image_id_raw = row.get("ImageID")
-            if image_id_raw is None:
-                skipped += 1
-                continue
-            image_id = image_id_raw.strip()
-            if not image_id:
-                skipped += 1
-                continue
-
-            metas[image_id] = ImageMeta(
-                image_id=image_id,
-                license_url=license_url.strip(),
-                original_url=row.get("OriginalURL") or "",
-                author=row.get("Author") or "",
-                title=row.get("Title") or "",
-            )
-        except Exception as exc:
-            skipped += 1
-            logger.debug("行をスキップ (row=%d): %s", total, exc)
+    for row in _stream_csv_rows(METADATA_URLS[split]):
+        license_url = row.get("License") or ""
+        if not _is_permissive(license_url):
             continue
 
-        if total % 100_000 == 0:
-            logger.info(
-                "  %d 件処理済み（許可: %d 件, スキップ: %d 件）...",
-                total, len(metas), skipped,
-            )
+        image_id = (row.get("ImageID") or "").strip()
+        if not image_id:
+            continue
 
-    logger.info(
-        "完了: %d 件中 %d 件が許可ライセンス (%.1f%%)",
-        total, len(metas),
-        100.0 * len(metas) / max(total, 1),
-    )
+        metas[image_id] = ImageMeta(
+            image_id=image_id,
+            license_url=license_url.strip(),
+            original_url=row.get("OriginalURL") or "",
+            author=row.get("Author") or "",
+            title=row.get("Title") or "",
+        )
 
     cache_dir.mkdir(parents=True, exist_ok=True)
     _save_meta_cache(metas, cache_file)
-    logger.info("キャッシュ保存: %s", cache_file)
 
     return metas
 
@@ -222,6 +233,7 @@ def _save_meta_cache(metas: Dict[str, ImageMeta], path: Path) -> None:
 
 def _load_meta_cache(path: Path) -> Dict[str, ImageMeta]:
     metas: Dict[str, ImageMeta] = {}
+
     with open(path, newline="", encoding="utf-8") as f:
         for row in csv.DictReader(f):
             m = ImageMeta(
@@ -232,94 +244,183 @@ def _load_meta_cache(path: Path) -> Dict[str, ImageMeta]:
                 title=row["title"],
             )
             metas[m.image_id] = m
-    logger.info("  %d 件", len(metas))
+
     return metas
 
 
 # ---------------------------------------------------------------------------
-# Step 2: fiftyone で顔画像をダウンロード
+# アノテーション CSV 事前フィルタリング
+# ---------------------------------------------------------------------------
+
+def _resolve_classes_csv(split: str, cache_dir: Path, refresh: bool) -> Path:
+    """fiftyone キャッシュを優先し、なければ独自にダウンロード"""
+    fo_cache = _FO_CACHE_ROOT / split / "metadata" / "classes.csv"
+    if fo_cache.exists() and not refresh:
+        return fo_cache
+    our_cache = cache_dir / "classes.csv"
+    if not our_cache.exists() or refresh:
+        _download_file(CLASSES_URL, our_cache)
+    return our_cache
+
+
+def _resolve_annotations_csv(split: str, cache_dir: Path, refresh: bool) -> Path:
+    """fiftyone キャッシュを優先し、なければ独自にダウンロード"""
+    fo_cache = _FO_CACHE_ROOT / split / "labels" / "detections.csv"
+    if fo_cache.exists() and not refresh:
+        return fo_cache
+    our_cache = cache_dir / f"{split}_annotations_bbox.csv"
+    if not our_cache.exists() or refresh:
+        _download_file(ANNOTATION_URLS[split], our_cache)
+    return our_cache
+
+
+def _load_label_maps(classes_csv: Path) -> tuple[Dict[str, str], Dict[str, str]]:
+    """classes.csv から (name→id, id→name) マップを返す"""
+    name_to_id: Dict[str, str] = {}
+    id_to_name: Dict[str, str] = {}
+    with open(classes_csv, newline="", encoding="utf-8") as f:
+        for row in csv.reader(f):
+            if len(row) >= 2:
+                id_to_name[row[0]] = row[1]
+                name_to_id[row[1]] = row[0]
+    return name_to_id, id_to_name
+
+
+def _valid_face_row(row: Dict[str, str]) -> bool:
+    """bbox CSV 行から顔の品質チェック（属性・面積・アスペクト比）"""
+    for flag in ("IsDepiction", "IsGroupOf", "IsInside", "IsOccluded", "IsTruncated"):
+        if int(row.get(flag, 0)):
+            return False
+
+    x_min, x_max = float(row["XMin"]), float(row["XMax"])
+    y_min, y_max = float(row["YMin"]), float(row["YMax"])
+    w = x_max - x_min
+    h = y_max - y_min
+
+    if w * h < MIN_FACE_AREA_RATIO:
+        return False
+
+    aspect = w / h if h > 0 else 999.0
+    return MIN_FACE_ASPECT <= aspect <= MAX_FACE_ASPECT
+
+
+def prefilter_image_ids(
+    permissive_ids: Set[str],
+    split: str,
+    cache_dir: Path,
+    refresh: bool = False,
+) -> Set[str]:
+    """アノテーション CSV だけで画像 DL 前に ID を絞り込む。
+
+    画像本体のダウンロードが始まる前に全フィルタを適用するため、
+    不要な画像転送が発生しない。
+    """
+    classes_csv = _resolve_classes_csv(split, cache_dir, refresh)
+    annotations_csv = _resolve_annotations_csv(split, cache_dir, refresh)
+
+    name_to_id, _ = _load_label_maps(classes_csv)
+
+    required_ids = frozenset(name_to_id[c] for c in REQUIRED_CLASSES if c in name_to_id)
+    excluded_ids = frozenset(name_to_id[c] for c in EXCLUDED_CLASSES if c in name_to_id)
+    face_label_id = name_to_id.get(FACE_CLASS)
+
+    missing_required = REQUIRED_CLASSES - set(name_to_id)
+    if missing_required:
+        raise ValueError(f"Required classes not in Open Images classes.csv: {missing_required}")
+
+    missing_excluded = EXCLUDED_CLASSES - set(name_to_id)
+    if missing_excluded:
+        logger.warning("EXCLUDED_CLASSES に不明クラスあり（スキップ）: %s", missing_excluded)
+
+    image_labels: Dict[str, Set[str]] = defaultdict(set)
+    image_faces: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+
+    logger.info("アノテーション CSV を解析中: %s", annotations_csv)
+    with open(annotations_csv, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            img_id = row["ImageID"]
+            if img_id not in permissive_ids:
+                continue
+            label = row["LabelName"]
+            image_labels[img_id].add(label)
+            if label == face_label_id:
+                image_faces[img_id].append(row)
+
+    valid_ids: Set[str] = set()
+    for img_id, labels in image_labels.items():
+        if not required_ids.issubset(labels):
+            continue
+        if labels & excluded_ids:
+            continue
+        valid_faces = [r for r in image_faces[img_id] if _valid_face_row(r)]
+        if not valid_faces or len(valid_faces) > MAX_FACES:
+            continue
+        valid_ids.add(img_id)
+
+    logger.info("事前フィルタ結果: %d / %d 枚", len(valid_ids), len(permissive_ids))
+    return valid_ids
+
+
+# ---------------------------------------------------------------------------
+# fiftyone ダウンロード
 # ---------------------------------------------------------------------------
 
 def download_face_images(
-    permissive_ids: Set[str],
+    filtered_ids: Set[str],
     split: str,
     output_dir: Path,
     max_images: int,
 ) -> Dict[str, Path]:
-    """
-    fiftyone を使って顔画像をダウンロードし、output_dir にコピーする。
+    """事前フィルタ済みの ID のみ画像ダウンロードする。
 
-    Open Images のファイル名は常に ImageID.jpg 形式（fiftyone zoo dataset の仕様）。
-    stem から ImageID を取得し、permissive_ids との一致を確認して返す。
-
-    Args:
-        permissive_ids: 許可ライセンスの ImageID セット
-        split: "train" / "validation" / "test"
-        output_dir: 画像の保存先ディレクトリ
-        max_images: 最大取得枚数
-
-    Returns:
-        {ImageID: ローカルパス} の辞書
+    classes フィルタは使わない（事前フィルタ済みのため不要）。
     """
     try:
         import fiftyone.zoo as foz
         import fiftyone as fo
     except ImportError as exc:
-        raise ImportError(
-            "fiftyone が見つかりません。`pip install fiftyone` でインストールしてください。"
-        ) from exc
+        raise ImportError("fiftyone が必要です: pip install fiftyone") from exc
 
-    logger.info(
-        "fiftyone で顔画像をダウンロード中 (split=%s, max=%d, 許可ID=%d 件)...",
-        split, max_images, len(permissive_ids),
-    )
+    target_ids = sorted(filtered_ids)[:max_images]
+    if not target_ids:
+        logger.warning("ダウンロード対象 ID がありません")
+        return {}
 
-    # 許可 ID を候補として渡す（十分な候補を渡して max_images を満たす）
-    sampled_ids = sorted(permissive_ids)[:max_images * 10]
+    logger.info("fiftyone で %d 枚をダウンロード中...", len(target_ids))
 
     dataset_name = f"open_images_faces_{split}"
+
     dataset = foz.load_zoo_dataset(
         "open-images-v7",
         split=split,
         label_types=["detections"],
-        classes=[FACE_CLASS],
-        image_ids=sampled_ids,
-        max_samples=max_images,
+        image_ids=target_ids,
+        max_samples=len(target_ids),
         dataset_name=dataset_name,
         overwrite=True,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    # {ImageID: ローカルパス} — 帰属情報の正確な照合のために ImageID をキーにする
     downloaded: Dict[str, Path] = {}
 
     for sample in dataset:
         src = Path(sample.filepath)
         if not src.exists():
-            logger.warning("ファイルが見つかりません: %s", src)
             continue
-
-        # fiftyone の Open Images zoo dataset はファイル名が必ず <ImageID>.<ext> 形式
         image_id = src.stem
-        if image_id not in permissive_ids:
-            # 万が一 ID が一致しない場合はコピーしない
-            logger.debug("許可IDリストに存在しないサンプルをスキップ: %s", image_id)
-            continue
-
         dst = output_dir / src.name
         if not dst.exists():
             shutil.copy2(src, dst)
         downloaded[image_id] = dst
 
-    # fiftyone のデータセットを削除（ローカルキャッシュは保持）
     fo.delete_dataset(dataset_name, verbose=False)
-
-    logger.info("%d 枚を %s にコピーしました。", len(downloaded), output_dir)
+    logger.info("保存枚数: %d", len(downloaded))
     return downloaded
 
 
 # ---------------------------------------------------------------------------
-# Step 3: 帰属情報の保存
+# 帰属情報
 # ---------------------------------------------------------------------------
 
 def save_attribution(
@@ -327,22 +428,8 @@ def save_attribution(
     downloaded: Dict[str, Path],
     output_path: Path,
 ) -> None:
-    """
-    ダウンロードした画像の帰属情報を CSV に保存する。
-
-    downloaded のキーは ImageID（download_face_images が確定したもの）であり、
-    ファイル名のステムから推測しないため確実に一致する。
-
-    CC BY 2.0 画像を再配布する際に README 等で参照する。
-    """
     rows = [metas[iid] for iid in downloaded if iid in metas]
-
     if not rows:
-        logger.warning(
-            "帰属情報が見つかりませんでした。"
-            "ダウンロード済み %d 件のうち metas に一致する ImageID がありません。",
-            len(downloaded),
-        )
         return
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -355,11 +442,9 @@ def save_attribution(
         for m in rows:
             writer.writerow([m.image_id, m.license_url, m.original_url, m.author, m.title])
 
-    logger.info("帰属情報を保存しました: %s (%d 件)", output_path, len(rows))
-
 
 # ---------------------------------------------------------------------------
-# メインエントリポイント
+# 実行
 # ---------------------------------------------------------------------------
 
 def run(
@@ -370,35 +455,24 @@ def run(
     refresh_cache: bool,
     attribution_path: Path,
 ) -> None:
-    """ダウンロードパイプライン全体を実行する。"""
-    logger.info("=== Step 1: 許可ライセンスのメタデータ取得 ===")
     metas = fetch_permissive_metadata(split, cache_dir, refresh=refresh_cache)
-    permissive_ids = set(metas.keys())
-    logger.info("許可ライセンス画像: %d 件", len(permissive_ids))
 
-    logger.info("=== Step 2: 顔画像のダウンロード ===")
+    filtered_ids = prefilter_image_ids(
+        permissive_ids=set(metas.keys()),
+        split=split,
+        cache_dir=cache_dir,
+        refresh=refresh_cache,
+    )
+
     downloaded = download_face_images(
-        permissive_ids=permissive_ids,
+        filtered_ids=filtered_ids,
         split=split,
         output_dir=output_dir,
         max_images=max_images,
     )
 
-    logger.info("=== Step 3: 帰属情報の保存 ===")
     save_attribution(metas, downloaded, attribution_path)
-
-    n_downloaded = len(downloaded)
-
-    logger.info("=== 完了 ===")
-    logger.info("  ダウンロード枚数: %d", n_downloaded)
-    logger.info("  保存先: %s", output_dir)
-    logger.info("  帰属情報: %s", attribution_path)
-    logger.info("")
-    logger.info("次のステップ:")
-    logger.info(
-        "  python annotator/preprocessor.py --images %s --output data/samples.json",
-        output_dir,
-    )
+    logger.info("完了: %d 枚", len(downloaded))
 
 
 def main() -> None:
@@ -409,48 +483,17 @@ def main() -> None:
     )
 
     parser = argparse.ArgumentParser(
-        description=(
-            "Open Images V7 から CC0 / CC BY 2.0 ライセンスの顔画像を取得します。"
-        ),
+        description="Open Images V7 顔画像取得",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--split",
-        default="validation",
-        choices=["train", "validation", "test"],
-        help="使用する split（default: validation）",
-    )
-    parser.add_argument(
-        "--max-images",
-        default=500,
-        type=int,
-        metavar="N",
-        help="最大取得枚数（default: 500）",
-    )
-    parser.add_argument(
-        "--output",
-        default="data/images",
-        type=Path,
-        help="画像の保存先ディレクトリ（default: data/images）",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=str(DEFAULT_CACHE_DIR),
-        type=Path,
-        help=f"メタデータキャッシュ先（default: {DEFAULT_CACHE_DIR}）",
-    )
-    parser.add_argument(
-        "--attribution-csv",
-        default=str(ATTRIBUTION_CSV),
-        type=Path,
-        help=f"帰属情報 CSV の保存先（default: {ATTRIBUTION_CSV}）",
-    )
-    parser.add_argument(
-        "--refresh-cache",
-        action="store_true",
-        help="メタデータキャッシュを無視して再取得する",
-    )
+
+    parser.add_argument("--split", default="validation", choices=["train", "validation", "test"])
+    parser.add_argument("--max-images", type=int, default=500)
+    parser.add_argument("--output", type=Path, default="data/images")
+    parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
+    parser.add_argument("--attribution-csv", type=Path, default=ATTRIBUTION_CSV)
+    parser.add_argument("--refresh-cache", action="store_true")
 
     args = parser.parse_args()
 
