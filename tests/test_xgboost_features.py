@@ -257,7 +257,7 @@ class TestSelectFeatureColumns:
 class TestBuildFeatureMatrix:
     def test_returns_dataframe_and_columns(self):
         df = pd.DataFrame([_base_row() for _ in range(5)])
-        feat, cols = build_feature_matrix(df, FeatureConfig())
+        feat, cols, _ = build_feature_matrix(df, FeatureConfig())
         assert isinstance(feat, pd.DataFrame)
         assert len(feat) == 5
         assert set(feat.columns) == set(cols)
@@ -266,7 +266,7 @@ class TestBuildFeatureMatrix:
         rows = [_base_row() for _ in range(5)]
         rows[0]["eye_scale"] = np.nan
         df = pd.DataFrame(rows)
-        feat, _ = build_feature_matrix(df, FeatureConfig())
+        feat, _, _ = build_feature_matrix(df, FeatureConfig())
         assert not feat.isna().any().any()
 
     def test_raises_when_no_features_available(self):
@@ -284,7 +284,7 @@ class TestBuildFeatureMatrix:
     def test_cyclical_and_interactions_enabled(self):
         df = pd.DataFrame([_base_row() for _ in range(5)])
         cfg = FeatureConfig(use_cyclical_angle=True, use_interactions=True)
-        feat, cols = build_feature_matrix(df, cfg)
+        feat, cols, _ = build_feature_matrix(df, cfg)
         assert "pq_angle_sin" in cols
         assert "pq_angle_cos" in cols
         assert "pq_angle" not in cols

@@ -695,7 +695,9 @@ async function loadModelList() {
 function renderModelPanel(data) {
   const { folders, active_dir, loaded_count, infer_mode } = data;
 
-  if (loaded_count > 0) {
+  if (infer_mode === "dummy_t1") {
+    modelStatus.textContent = "ダミーモデル t=1 (baseline)";
+  } else if (loaded_count > 0) {
     const modeLabel = infer_mode === "exp_native" ? " [EXP-native]" : "";
     modelStatus.textContent = `${loaded_count} モデル読み込み中 (アンサンブル)${modeLabel}`;
   } else {
@@ -713,7 +715,9 @@ function renderModelPanel(data) {
     const isSelected = f.path === _selectedFolder;
 
     let badgeText = "";
-    if (f.fold_count > 0) {
+    if (f.is_dummy) {
+      badgeText = "baseline";
+    } else if (f.fold_count > 0) {
       badgeText = `fold×${f.fold_count}`;
     } else if (f.has_ensemble) {
       badgeText = "ensemble";
@@ -725,11 +729,12 @@ function renderModelPanel(data) {
       ? '<span style="font-size:10px;background:#1565c0;color:#fff;border-radius:3px;padding:1px 4px;margin-left:4px;">EXP-native</span>'
       : "";
 
+    const folderIcon = f.is_dummy ? "🎯" : "📁";
     const item = document.createElement("div");
     item.className = "folder-item" + (isSelected ? " selected" : "");
     item.dataset.path = f.path;
     item.innerHTML = `
-      <span class="folder-icon">📁</span>
+      <span class="folder-icon">${folderIcon}</span>
       <div style="flex:1; min-width:0;">
         <div class="folder-name">${f.name}${nativeBadge}</div>
         <div class="folder-path">${f.path}</div>
@@ -772,10 +777,10 @@ btnModelApply.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ exp_dir: _selectedFolder }),
     });
-    const modeLabel = result.infer_mode === "exp_native" ? " [EXP-native]" : "";
+    const modeLabel = result.infer_mode === "exp_native" ? " [EXP-native]" : (result.infer_mode === "dummy_t1" ? " [t=1 baseline]" : "");
     _folderData = { ..._folderData, active_dir: _selectedFolder, loaded_count: result.loaded_count, infer_mode: result.infer_mode };
     renderModelPanel(_folderData);
-    setStatus(`モデルを更新しました (${result.loaded_count} 個)${modeLabel}`);
+    setStatus(`モデルを更新しました${result.infer_mode === "dummy_t1" ? " (t=1 baseline)" : ` (${result.loaded_count} 個)${modeLabel}`}`);
     // 現在サンプルの予測を更新
     await loadSample(state.currentIdx);
   } catch (err) {

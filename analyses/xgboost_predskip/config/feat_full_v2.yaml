@@ -1,0 +1,48 @@
+# feat_full_v2: feat_full + extended aggregate features
+# Phase 2B: 新規集約特徴量 10 個を追加
+#
+# 追加: pq_dist_eye_range, eye_scale_face_{min,max,range}, niqe_in_img_{std,min,max,range},
+#       eye_bbox_w_norm_face, eye_aspect_face_range
+# 計 47 + 10 = 57 特徴量
+
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_predskip/manifests"
+  outputs_dir: "analyses/xgboost_predskip/outputs/feat_full_v2"
+  image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
+
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: false
+  use_interactions: false
+  use_niqe_score: true
+  use_aggregate_features: true
+  use_extended_aggregate: true
+  use_pose_composite: true
+  use_dataset_percentile: true
+  use_image_features: true
+
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+  scale_pos_weight: 0.72
+
+analysis:
+  top_k_misclassified: 500
+  subgroup_columns:
+    - part_name
+    - sub_key
+    - point_index

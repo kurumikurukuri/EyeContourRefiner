@@ -470,7 +470,7 @@ def main() -> None:
     )
 
     # --- train 特徴量（median 統計量を固定）---
-    train_feat, feat_cols = build_feature_matrix(manifests["train"], feat_cfg)
+    train_feat, feat_cols, _ = build_feature_matrix(manifests["train"], feat_cfg)
     train_medians = train_feat.median(numeric_only=True)
     if feat_cfg.use_niqe_score and "niqe_score" in feat_cols:
         train_medians["niqe_score"] = manifests["train"]["niqe_score"].max()
