@@ -19,8 +19,6 @@ Open Images V7 から商用利用・再配布可能な顔画像を取得する�
         - IsDepiction == 0
         - IsGroupOf == 0
         - IsInside == 0
-        - IsOccluded == 0
-        - IsTruncated == 0
 
     品質:
         - 最大顔 bbox 面積 >= 5%
@@ -99,7 +97,7 @@ _FO_CACHE_ROOT = Path.home() / "fiftyone" / "open-images-v7"
 DEFAULT_CACHE_DIR = Path("data/.open_images_cache")
 ATTRIBUTION_CSV = Path("data/open_images_attribution.csv")
 
-REQUIRED_CLASSES: frozenset[str] = frozenset({"Person", "Human face"})
+REQUIRED_CLASSES: frozenset[str] = frozenset({"Human face"})
 
 EXCLUDED_CLASSES: frozenset[str] = frozenset({
     "Doll", "Toy", "Teddy bear",
@@ -109,10 +107,10 @@ EXCLUDED_CLASSES: frozenset[str] = frozenset({
 
 FACE_CLASS = "Human face"
 
-MIN_FACE_AREA_RATIO = 0.005
+MIN_FACE_AREA_RATIO = 0.01
 MAX_FACES = 4
-MIN_FACE_ASPECT = 0.1
-MAX_FACE_ASPECT = 10
+MIN_FACE_ASPECT = 0.2
+MAX_FACE_ASPECT = 2
 
 
 # ---------------------------------------------------------------------------
@@ -288,7 +286,7 @@ def _load_label_maps(classes_csv: Path) -> tuple[Dict[str, str], Dict[str, str]]
 
 def _valid_face_row(row: Dict[str, str]) -> bool:
     """bbox CSV 行から顔の品質チェック（属性・面積・アスペクト比）"""
-    for flag in ("IsDepiction", "IsGroupOf", "IsInside", "IsOccluded", "IsTruncated"):
+    for flag in ("IsDepiction", "IsGroupOf", "IsInside"):
         if int(row.get(flag, 0)):
             return False
 

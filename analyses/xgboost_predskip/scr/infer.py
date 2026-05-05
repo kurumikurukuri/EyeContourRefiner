@@ -32,8 +32,13 @@ from sklearn.metrics import (
 from analyses.xgboost_baseline.scr.features import (
     add_categorical_features,
     add_cyclical_features,
+    add_dataset_percentile_features,
+    add_extended_aggregate_features,
     add_geometry_features,
+    add_image_features,
     add_interaction_features,
+    add_aggregate_features,
+    add_pose_composite_features,
 )
 from analyses.xgboost_predskip.scr.train import KFoldEnsemble
 
@@ -66,11 +71,20 @@ def prepare_features(
     df: pd.DataFrame,
     feature_columns: List[str],
     train_medians: pd.Series,
+    percentile_refs: dict | None = None,
+    image_cache_path: str | None = None,
 ) -> pd.DataFrame:
     enriched = add_geometry_features(df)
     enriched = add_categorical_features(enriched)
+    if image_cache_path:
+        enriched = add_image_features(enriched, cache_path=image_cache_path)
     enriched = add_cyclical_features(enriched)
     enriched = add_interaction_features(enriched)
+    enriched = add_pose_composite_features(enriched)
+    enriched = add_aggregate_features(enriched)
+    enriched = add_extended_aggregate_features(enriched)
+    if percentile_refs:
+        enriched, _ = add_dataset_percentile_features(enriched, percentile_refs)
     for c in feature_columns:
         if c not in enriched.columns:
             enriched[c] = np.nan
@@ -104,8 +118,12 @@ def infer_split(
     feat_cols: List[str],
     train_medians: pd.Series,
     model: Any,
+    percentile_refs: dict | None = None,
+    image_cache_path: str | None = None,
 ) -> pd.DataFrame:
-    feat = prepare_features(df, feat_cols, train_medians)
+    feat = prepare_features(
+        df, feat_cols, train_medians, percentile_refs, image_cache_path,
+    )
     if isinstance(model, KFoldEnsemble):
         prob = model.predict_proba(feat)
     else:
@@ -242,6 +260,20 @@ def main() -> None:
     ).iloc[:, 0]
     model = _load_model(outputs_dir)
 
+    # --- percentile 参照分布のロード ---
+    percentile_refs: dict = {}
+    pct_refs_path = outputs_dir / "percentile_refs.json"
+    if pct_refs_path.exists():
+        raw = json.loads(pct_refs_path.read_text(encoding="utf-8"))
+        percentile_refs = {k: np.array(v) for k, v in raw.items()}
+        logger.info("loaded percentile_refs: %s", list(percentile_refs.keys()))
+
+    # --- image cache path ---
+    image_cache_path = cfg.get("data", {}).get(
+        "image_cache_path",
+        "analyses/xgboost_predskip/outputs/image_features.parquet",
+    )
+
     # --- split 毎の推論 ---
     all_preds: Dict[str, pd.DataFrame] = {}
     confusion: Dict[str, Any] = {}
@@ -261,6 +293,8 @@ def main() -> None:
             feat_cols,
             train_medians,
             model,
+            percentile_refs,
+            image_cache_path,
         )
 
         all_preds[split_name] = pred_df

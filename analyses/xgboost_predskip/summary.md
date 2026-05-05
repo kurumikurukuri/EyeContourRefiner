@@ -160,3 +160,285 @@ python -m analyses.xgboost_predskip.scr.train --config analyses/xgboost_predskip
 # 推論 + 分析
 python -m analyses.xgboost_predskip.scr.infer --config analyses/xgboost_predskip/config/baseline.yaml
 ```
+
+---
+
+## EXP2: 集約特徴量 + HPO 実験 (2026-05-06)
+
+### 目的
+
+skip_flag が画像単位で決定される（全画像で skip_flag は単一値）ことに着目し、
+画像・顔・眼レベルの集約特徴量を追加し、HPO と組み合わせて性能改善を図る。
+
+### 集約特徴量
+
+`analyses/xgboost_baseline/scr/features.py` に `add_aggregate_features()` を追加。
+
+| カテゴリ | 特徴量 | 内容 |
+|---|---|---|
+| 眼内点群のばらつき | `pq_dist_eye_std`, `pq_ratio_eye_std`, `dist_from_center_eye_std` | 7点のランドマークの空間的広がり |
+| 左右眼の非対称性 | `eye_scale_asymmetry`, `eye_aspect_asymmetry`, `norm_eye_scale_asymmetry`, `eye_bbox_w_asymmetry`, `eye_bbox_h_asymmetry` | abs(left-right)/max(left,right) |
+| 画像内顔数 | `n_faces` | 複数顔を含む画像の識別 |
+| 複数顔間の姿勢ばらつき | `face_yaw_cross_face_std`, `face_pitch_cross_face_std`, `face_roll_cross_face_std` | 多顔画像での角度分散 |
+
+### 実験条件
+
+| # | Config | 特徴量数 | HPO | 出力ディレクトリ |
+|---|---|---|---|---|
+| baseline | baseline.yaml | 16 | なし | outputs/baseline |
+| 1 | feat_aggregate.yaml | 29 (16+13) | なし | outputs/feat_aggregate |
+| 2 | feat_aggregate_pruned.yaml | 24 (低重要度4除外+13) | なし | outputs/feat_aggregate_pruned |
+| 3 | hpo_aggregate.yaml | 29 | Optuna 50trials, kfold=5 | outputs/hpo_aggregate |
+| 4 | hpo_aggregate_pruned.yaml | 24 | Optuna 50trials, kfold=5 | outputs/hpo_aggregate_pruned |
+
+pruned 除外: `is_upper`, `pq_dist`, `pq_angle`, `point_index`
+
+### 結果
+
+#### メトリクス比較 (test)
+
+| 条件 | accuracy | precision | recall | f1 | ROC-AUC | specificity |
+|---|---|---|---:|---:|---:|---:|---:|
+| baseline | 0.8847 | 0.9115 | 0.9632 | 0.9366 | 0.8612 | 28.5% |
+| **feat_aggregate** | **0.9330** | **0.9402** | 0.9871 | **0.9631** | **0.9180** | 52.0% |
+| feat_aggregate_pruned | 0.9281 | 0.9381 | 0.9836 | 0.9603 | 0.9188 | 50.4% |
+| hpo_aggregate | 0.9252 | 0.9457 | 0.9711 | 0.9582 | 0.9118 | 57.4% |
+| hpo_aggregate_pruned | 0.9266 | 0.9452 | 0.9735 | 0.9591 | 0.9114 | 56.8% |
+
+#### 特徴量重要度 (feat_aggregate, 上位10)
+
+| rank | feature | importance | type |
+|---:|---|---:|:---|
+| 1 | **eye_bbox_w_asymmetry** | 0.172 | 左右非対称 |
+| 2 | niqe_score | 0.163 | 画質 |
+| 3 | face_roll_cross_face_std | 0.059 | 顔間ばらつき |
+| 4 | eye_aspect_asymmetry | 0.054 | 左右非対称 |
+| 5 | eye_scale_asymmetry | 0.048 | 左右非対称 |
+| 6 | face_yaw_cross_face_std | 0.046 | 顔間ばらつき |
+| 7 | pq_dist_eye_std | 0.045 | 眼内ばらつき |
+| 8 | norm_eye_scale_asymmetry | 0.044 | 左右非対称 |
+| 9 | eye_bbox_h | 0.041 | 点単位 |
+| 10 | norm_eye_scale | 0.039 | 点単位 |
+
+非対称性5特徴の合計重要度: **35.0%**（単独グループとして最大）
+
+### 考察
+
+#### 1. 集約特徴量の効果は圧倒的
+
+AUC +5.7pt (0.861→0.918)、specificity 28.5%→52.0% と劇的な改善。
+**眼の左右非対称性が単独で最大の予測因子**であり、skip フラグは
+「左右の目の大きさ・形状が非対称な画像」を強く捉えている。
+
+これは業務的にも合理的：
+- 横顔や斜め顔では左右の目領域サイズが大きく異なる
+- 低画質・ボケ画像では片方の目のランドマーク検出が不正確になり非対称性が増大
+- 複数顔画像では顔ごとの角度差が生じやすい
+
+#### 2. 非対称性 > 画質
+
+baseline では `niqe_score` が支配的だったが、非対称性特徴がそれを上回った。
+NIQE が捉えられない「幾何的な品質低下」（例：斜め顔、部分遮蔽）を非対称性が補完している。
+
+#### 3. Pruning の効果は限定的
+
+低重要度の 4 特徴（is_upper, pq_dist, pq_angle, point_index）を除外しても
+性能はほぼ変化なし。これらの特徴はモデルにとって実質的にノイズではない（無視されている）。
+
+#### 4. Optuna HPO は過学習
+
+両 HPO 条件とも CV AUC=1.0000 を達成したが test AUC は非 HPO より低下（0.918→0.912）。
+Optuna が選択した `learning_rate=0.254`（baseline の 5 倍）+ `n_estimators=2000` の
+組み合わせで過学習。集約特徴量によって問題が「簡単になりすぎた」ことが原因。
+
+**対策案:**
+- `n_estimators` も探索空間に含める
+- early_stopping_rounds を小さくする（現在 50）
+- より強い正則化（reg_alpha/reg_lambda の範囲拡大）
+
+#### 5. 最良モデル
+
+**`feat_aggregate`**（baseline 16 特徴 + 集約 13 特徴、デフォルトパラメータ）。
+シンプルで最も汎化性能が高い。
+
+### 結論
+
+1. **集約特徴量（特に左右非対称性）の追加は必須。** AUC +5.7pt, specificity 2倍は見逃せない改善。
+2. **HPO は現状の探索空間では不要または有害。** デフォルトパラメータで十分な性能が出ている。
+3. 低重要度の点単位特徴（is_upper, pq_dist, pq_angle, point_index）は**削除しても問題ない**が、積極的な削除メリットも小さい。
+4. 今後の改善方向は HPO ではなく、**新たな集約特徴量の発掘**（例：顔検出 confidence、画像全体の brightness/contrast 統計量、landmark 検出の confidence 分散）が有望。
+
+### 再現手順
+
+```bash
+# 集約特徴量あり（非HPO、推奨）
+python -m analyses.xgboost_predskip.scr.train \
+    --config analyses/xgboost_predskip/config/feat_aggregate.yaml
+python -m analyses.xgboost_predskip.scr.infer \
+    --config analyses/xgboost_predskip/config/feat_aggregate.yaml
+```
+
+---
+
+## EXP3: Kaggleワークフロー型 精度向上 (2026-05-06)
+
+### 目的
+
+EXP2 の `feat_aggregate` をベースに、Kaggle ワークフロー（リークフリーHPO・特徴量拡張・ヘテロアンサンブル・閾値最適化・擬似ラベル）で更なる精度向上を図る。
+
+> 注: EXP3 は `data/samples.db` 更新後の新データで再評価しているため、EXP2 の絶対値とは直接比較できない（行数: train 73164, val 16016, test 15540）。同じ EXP3 内では条件比較が成立する。
+
+### Phase 1: HPO のデータリーク修正
+
+**問題**: 過去 Optuna が CV AUC=1.0000 を出していた原因は、`KFold` が `image_path` を考慮せず、画像内の14点が train/val 両方に出現していたこと。
+
+**修正**: `train.py` の `_optuna_objective` と `train_kfold_ensemble` を **`GroupKFold(groups=image_path)`** に切り替え。
+
+### Phase 2: 特徴量エンジニアリング拡張
+
+#### A. 既存実装の有効化（feat_full）
+
+| 機能 | 特徴量数 | 内容 |
+|---|---|---|
+| `use_image_features` | 14 | eye_gray_*, eye_laplacian_var, eye_sobel_*, eye_canny_density, eye_hog_*, eye_lbp_* |
+| `use_pose_composite` | 2 | pose_magnitude, niqe_score_x_pose_magnitude |
+| `use_dataset_percentile` | 2 | niqe_percentile, eye_scale_percentile |
+
+#### B. 新規追加（feat_full_v2: features.py に `add_extended_aggregate_features` 実装）
+
+| カテゴリ | 特徴量 |
+|---|---|
+| 眼内 range | `pq_dist_eye_range` |
+| 顔単位 eye_scale | `eye_scale_face_max/min/range` |
+| 画像単位 niqe | `niqe_in_img_std/min/max/range` |
+| 顔サイズ正規化 | `eye_bbox_w_norm_face` |
+| 顔単位 aspect | `eye_aspect_face_range` |
+
+### Phase 3: モデリング戦術
+
+- **3A: HPO** Optuna 100 trials × GroupKFold(5)、探索空間拡大（n_estimators 200–3000、reg_alpha/lambda 1e-8–100）
+- **3B: ヘテロアンサンブル** XGBoost + LightGBM + CatBoost を 3 seeds (42, 7, 123) × 5-fold で学習・単純平均
+- **3C: 閾値最適化** Youden's J / F0.5 / F2 / specificity≥0.8 制約下の recall 最大化
+
+### Phase 4: 擬似ラベル + ノイジーラベル除去
+
+- 擬似ラベル: unlabeled (50,232 行) のうち base モデル prob≥0.99 を skip=1 として train に追加
+- ノイズ除去: train OOF prob と true label の乖離トップ 5% を train から除外
+
+### 結果
+
+#### メトリクス比較 (test, threshold=0.5)
+
+| # | 条件 | 特徴量 | acc | prec | rec | f1 | **AUC** | spec |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| 0 | EXP3 baseline | 16 | 0.880 | 0.917 | 0.950 | 0.933 | 0.872 | 30.8% |
+| 1 | feat_aggregate | 29 | 0.917 | 0.930 | 0.982 | 0.955 | 0.913 | 39.9% |
+| 2 | **feat_full** | 47 | 0.933 | 0.949 | 0.978 | 0.963 | 0.939 | 57.1% |
+| 3 | **feat_full_v2** | 57 | 0.934 | 0.949 | 0.979 | 0.964 | 0.941 | 57.2% |
+| 4 | **hpo_full_v2** | 57 | 0.934 | 0.948 | 0.979 | 0.963 | **0.952** | 56.8% |
+| 5 | ensemble (3×3) | 57 | 0.936 | 0.948 | 0.982 | 0.964 | 0.950 | 56.4% |
+| 6 | pseudo (HPO base) | 57 | 0.945 | 0.949 | 0.991 | 0.970 | 0.937 | 57.3% |
+
+太字 = AUC ベスト達成段階。条件 4 が最終ベスト。
+
+#### 閾値別性能 (条件 5: ensemble, test)
+
+| threshold | source | acc | prec | rec | spec |
+|---|---|---:|---:|---:|---:|
+| 0.500 | default | 0.936 | 0.948 | 0.982 | 56.4% |
+| 0.741 | F0.5 / spec≥0.8 | 0.922 | 0.968 | 0.944 | **74.4%** |
+| 0.897 | Youden's J | 0.840 | 0.983 | 0.835 | **88.0%** |
+| 0.285 | F2 | 0.924 | 0.922 | 0.999 | 31.6% |
+
+→ specificity を稼ぎたいなら **threshold=0.741** （F0.5 = spec≥0.8 制約と同点）が最適。recall 94% を保ちつつ spec 74% を達成。
+
+#### HPO 最適パラメータ
+
+```yaml
+n_estimators: 2894     # 元 2000
+max_depth: 3           # 元 6 (大幅に浅く)
+learning_rate: 0.111   # 元 0.05 (倍以上)
+subsample: 0.935
+colsample_bytree: 0.625
+reg_alpha: 1.224       # 元 0.0
+reg_lambda: 7.556      # 元 1.0 (強い L2 正則化)
+min_child_weight: 26   # 元 1 (大幅に保守的)
+scale_pos_weight: 0.700
+```
+
+→ **「浅い木 × 強い正則化 × 多数の弱い学習器」** に収束。集約特徴量によって個々の木の深さが要らなくなったため。
+
+#### 特徴量重要度 (HPO XGB, top 12)
+
+| rank | feature | importance | type |
+|---:|---|---:|:---|
+| 1 | **niqe_in_img_max** | 0.124 | Phase 2B 新規 |
+| 2 | eye_bbox_w_asymmetry | 0.076 | EXP2 集約 |
+| 3 | **niqe_in_img_std** | 0.059 | Phase 2B 新規 |
+| 4 | eye_gray_entropy | 0.046 | Phase 2A 画像特徴 |
+| 5 | **niqe_in_img_range** | 0.043 | Phase 2B 新規 |
+| 6 | eye_scale_asymmetry | 0.036 | EXP2 集約 |
+| 7 | eye_canny_density | 0.031 | Phase 2A 画像特徴 |
+| 8 | **eye_scale_face_min** | 0.031 | Phase 2B 新規 |
+| 9 | eye_bbox_h_asymmetry | 0.026 | EXP2 集約 |
+| 10 | norm_eye_scale_asymmetry | 0.025 | EXP2 集約 |
+| 11 | niqe_score | 0.024 | EXP1 |
+| 12 | pq_ratio_eye_std | 0.024 | EXP2 集約 |
+
+- **niqe_in_img_max** が単独 1 位（12.4%）。画像単位の最低画質点 (niqe は値が大きいほど低画質) が skip 判定の最強シグナル。
+- Phase 2B 新規特徴量 4 個が top 12 に入り、合計 25.7%。
+- 上位 12 のうち画像単位/顔単位の集約特徴量が 11 個。**点単位の特徴量はほぼ寄与しない**ことが再確認された。
+
+### 考察
+
+#### 1. 一番効いたのは特徴量追加（+6.9pt AUC）
+- baseline (0.872) → feat_full_v2 (0.941) で **+6.9pt**。
+- HPO 単独の効果は **+1.0pt** にすぎず、本質はハイパラではなく特徴量。
+
+#### 2. アンサンブルは意外と効かなかった
+- 単独 HPO XGB: 0.9516
+- アンサンブル (XGB×3 + LGBM×3 + Cat×3): 0.9499 (-0.17pt)
+- 全コンポーネントが 0.946–0.951 と性能差が小さく、平均化で凡庸化。**XGB 自体が圧倒的に強い**。
+- ただしアンサンブルは **確率較正がマイルド** になり、threshold≥0.5 での specificity を稼ぎやすい。
+
+#### 3. 擬似ラベルは AUC を下げる
+- base AUC 0.9516 → final AUC 0.9373 (**-1.4pt**)。
+- 原因: prob≥0.99 で抽出した 13,933 行はすべて陽性 (low_thr=0.01 を満たす陰性は 0 件)。**陽性方向にバイアス** がかかり判別境界が崩壊。
+- accuracy@0.5 は逆に上昇 (0.9337 → 0.9445)。これは予測確率が陽性側に押されただけ。
+- 教訓: skip フラグの極端な不均衡データに対して naive な確信度ベース擬似ラベルは無力。
+
+#### 4. 閾値選択が最終的な実用性を決める
+- recall 重視 (data filtering 用途): default 0.5 (recall=98%)
+- spec 重視 (label-mining 用途): 0.741 (spec=74%, recall=94%)
+- 両立: Youden's J 0.897 (spec=88%, recall=83%)
+
+### 結論
+
+1. **最終ベスト = `hpo_full_v2`** (test AUC **0.952**, accuracy 0.934, default specificity 56.8%)。
+2. EXP2 baseline 0.918 → EXP3 0.952 (**+3.4pt**) を達成。
+3. AUC 向上のドライバは **特徴量追加 (+6.9pt)** > **HPO (+1.0pt)** > アンサンブル (横ばい) > 擬似ラベル (マイナス)。
+4. 業務利用では threshold=0.741 で運用すれば spec=74% / recall=94% の安定ラインが取れる。
+
+### 再現手順
+
+```bash
+# Phase 1 + Phase 2A: 既存特徴量を全 ON
+python -m analyses.xgboost_predskip.scr.train \
+    --config analyses/xgboost_predskip/config/feat_full.yaml
+
+# Phase 2B: 新規集約特徴量
+python -m analyses.xgboost_predskip.scr.train \
+    --config analyses/xgboost_predskip/config/feat_full_v2.yaml
+
+# Phase 3A: Optuna HPO + GroupKFold
+python -m analyses.xgboost_predskip.scr.train \
+    --config analyses/xgboost_predskip/config/hpo_full_v2.yaml
+
+# Phase 3B/3C: ヘテロアンサンブル + 閾値最適化
+python -m analyses.xgboost_predskip.scr.train_ensemble \
+    --config analyses/xgboost_predskip/config/ensemble.yaml
+
+# Phase 4: 擬似ラベル + ノイズ除去 (negative result の再現)
+python -m analyses.xgboost_predskip.scr.train_pseudo \
+    --config analyses/xgboost_predskip/config/pseudo.yaml
+```

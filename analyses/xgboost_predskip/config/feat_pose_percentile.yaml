@@ -1,0 +1,42 @@
+# feat_pose_percentile: feat_aggregate (29特徴) + pose_composite + dataset_percentile = 33特徴
+# pose_magnitude, niqe_score_x_pose_magnitude, niqe_percentile, eye_scale_percentile を追加。
+# HPO なし。追加特徴量の単独効果を測定。
+
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_predskip/manifests"
+  outputs_dir: "analyses/xgboost_predskip/outputs/feat_pose_percentile"
+
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: false
+  use_interactions: false
+  use_niqe_score: true
+  use_aggregate_features: true
+  use_pose_composite: true
+  use_dataset_percentile: true
+
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+  scale_pos_weight: 0.72
+
+analysis:
+  top_k_misclassified: 500
+  subgroup_columns:
+    - part_name
+    - sub_key
+    - point_index

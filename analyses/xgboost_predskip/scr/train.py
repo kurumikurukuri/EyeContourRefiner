@@ -28,9 +28,11 @@ from sklearn.metrics import (
 
 from analyses.xgboost_baseline.scr.features import (
     FeatureConfig,
+    add_dataset_percentile_features,
     build_feature_matrix,
     enrich_all,
 )
+from analyses.xgboost_baseline.scr.image_features import build_image_features
 
 logger = logging.getLogger(__name__)
 
@@ -147,19 +149,30 @@ def train_kfold_ensemble(
     y_tv: np.ndarray,
     xgb_cfg: XGBConfig,
     kfold_cfg: KFoldConfig,
+    groups: Optional[np.ndarray] = None,
 ) -> tuple[KFoldEnsemble, np.ndarray]:
-    """train+val を k-fold で学習し KFoldEnsemble と OOF 確率を返す。"""
-    from sklearn.model_selection import KFold
+    """train+val を group-aware k-fold で学習し KFoldEnsemble と OOF 確率を返す。
 
-    kf = KFold(
-        n_splits=kfold_cfg.n_splits,
-        shuffle=kfold_cfg.shuffle,
-        random_state=kfold_cfg.seed,
-    )
+    groups が与えられた場合は GroupKFold を使い、画像単位リークを防ぐ。
+    """
+    from sklearn.model_selection import GroupKFold, KFold
+
+    if groups is not None:
+        kf = GroupKFold(n_splits=kfold_cfg.n_splits)
+        split_iter = kf.split(X_tv, y_tv, groups=groups)
+        logger.info("using GroupKFold (groups=image_path)")
+    else:
+        kf = KFold(
+            n_splits=kfold_cfg.n_splits,
+            shuffle=kfold_cfg.shuffle,
+            random_state=kfold_cfg.seed,
+        )
+        split_iter = kf.split(X_tv)
+
     models: list = []
     oof_probs = np.zeros(len(X_tv))
 
-    for fold_i, (tr_idx, val_idx) in enumerate(kf.split(X_tv)):
+    for fold_i, (tr_idx, val_idx) in enumerate(split_iter):
         logger.info("k-fold: fold %d/%d ...", fold_i + 1, kfold_cfg.n_splits)
         m = train_xgb_classifier(
             X_tv.iloc[tr_idx],
@@ -187,31 +200,37 @@ def _optuna_objective(
     y_tv: np.ndarray,
     base_cfg: XGBConfig,
     kfold_cfg: KFoldConfig,
+    groups: Optional[np.ndarray] = None,
 ) -> float:
-    """1 trial の k-fold CV AUC を返す Optuna 目的関数。"""
-    from sklearn.model_selection import KFold
+    """1 trial の (group-aware) k-fold CV AUC を返す Optuna 目的関数。"""
+    from sklearn.model_selection import GroupKFold, KFold
 
     trial_cfg = XGBConfig(
-        n_estimators=base_cfg.n_estimators,
-        max_depth=trial.suggest_int("max_depth", 3, 9),
-        learning_rate=trial.suggest_float("learning_rate", 0.01, 0.3, log=True),
+        n_estimators=trial.suggest_int("n_estimators", 200, 3000),
+        max_depth=trial.suggest_int("max_depth", 3, 10),
+        learning_rate=trial.suggest_float("learning_rate", 0.005, 0.2, log=True),
         subsample=trial.suggest_float("subsample", 0.5, 1.0),
         colsample_bytree=trial.suggest_float("colsample_bytree", 0.5, 1.0),
-        reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 10.0, log=True),
-        reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 10.0, log=True),
-        min_child_weight=trial.suggest_int("min_child_weight", 1, 20),
+        reg_alpha=trial.suggest_float("reg_alpha", 1e-8, 100.0, log=True),
+        reg_lambda=trial.suggest_float("reg_lambda", 1e-8, 100.0, log=True),
+        min_child_weight=trial.suggest_int("min_child_weight", 1, 50),
         early_stopping_rounds=base_cfg.early_stopping_rounds,
         random_state=base_cfg.random_state,
         verbosity=0,
-        scale_pos_weight=trial.suggest_float("scale_pos_weight", 0.5, 1.5),
+        scale_pos_weight=trial.suggest_float("scale_pos_weight", 0.3, 2.0),
     )
-    kf = KFold(
-        n_splits=kfold_cfg.n_splits,
-        shuffle=kfold_cfg.shuffle,
-        random_state=kfold_cfg.seed,
-    )
+    if groups is not None:
+        kf = GroupKFold(n_splits=kfold_cfg.n_splits)
+        split_iter = list(kf.split(X_tv, y_tv, groups=groups))
+    else:
+        kf = KFold(
+            n_splits=kfold_cfg.n_splits,
+            shuffle=kfold_cfg.shuffle,
+            random_state=kfold_cfg.seed,
+        )
+        split_iter = list(kf.split(X_tv))
     aucs: List[float] = []
-    for tr_idx, val_idx in kf.split(X_tv):
+    for tr_idx, val_idx in split_iter:
         m = train_xgb_classifier(
             X_tv.iloc[tr_idx],
             y_tv[tr_idx],
@@ -230,6 +249,7 @@ def run_optuna(
     base_cfg: XGBConfig,
     kfold_cfg: KFoldConfig,
     optuna_cfg: OptunaConfig,
+    groups: Optional[np.ndarray] = None,
 ) -> tuple[XGBConfig, Dict[str, Any]]:
     """Optuna で XGBoost ハイパーパラメータを AUC 最大化で探索する。"""
     import optuna
@@ -241,7 +261,9 @@ def run_optuna(
         sampler=optuna.samplers.TPESampler(seed=base_cfg.random_state),
     )
     study.optimize(
-        lambda trial: _optuna_objective(trial, X_tv, y_tv, base_cfg, kfold_cfg),
+        lambda trial: _optuna_objective(
+            trial, X_tv, y_tv, base_cfg, kfold_cfg, groups=groups,
+        ),
         n_trials=optuna_cfg.n_trials,
         timeout=optuna_cfg.timeout,
     )
@@ -251,7 +273,7 @@ def run_optuna(
     logger.info("Optuna best CV AUC: %.4f", study.best_value)
 
     best_cfg = XGBConfig(
-        n_estimators=base_cfg.n_estimators,
+        n_estimators=int(best.get("n_estimators", base_cfg.n_estimators)),
         max_depth=int(best["max_depth"]),
         learning_rate=float(best["learning_rate"]),
         subsample=float(best["subsample"]),
@@ -290,6 +312,12 @@ def _feature_cfg_from(d: Dict[str, Any]) -> FeatureConfig:
         use_cyclical_angle=bool(d.get("use_cyclical_angle", False)),
         use_interactions=bool(d.get("use_interactions", False)),
         use_niqe_score=bool(d.get("use_niqe_score", False)),
+        use_aggregate_features=bool(d.get("use_aggregate_features", False)),
+        use_extended_aggregate=bool(d.get("use_extended_aggregate", False)),
+        use_pose_composite=bool(d.get("use_pose_composite", False)),
+        use_dataset_percentile=bool(d.get("use_dataset_percentile", False)),
+        use_image_features=bool(d.get("use_image_features", False)),
+        exclude_features=tuple(d.get("exclude_features", [])),
     )
 
 
@@ -400,6 +428,10 @@ def main() -> None:
     xgb_cfg = _xgb_cfg_from(cfg["xgboost"])
     kfold_cfg = _kfold_cfg_from(cfg.get("kfold", {}))
     optuna_cfg = _optuna_cfg_from(cfg.get("optuna", {}))
+    image_cache_path = cfg.get("data", {}).get(
+        "image_cache_path",
+        "analyses/xgboost_predskip/outputs/image_features.parquet",
+    )
 
     # --- データ読み込み ---
     manifests = _load_manifests(manifests_dir)
@@ -410,8 +442,20 @@ def main() -> None:
         len(manifests["test"]),
     )
 
+    # --- 画像特徴量の事前計算（全マニフェスト結合 → キャッシュ）---
+    if feat_cfg.use_image_features:
+        mf_list = list(manifests.values())
+        unlabeled_path = manifests_dir / "manifest_unlabeled.csv"
+        if unlabeled_path.exists():
+            mf_list.append(pd.read_csv(unlabeled_path))
+        all_mf = pd.concat(mf_list, ignore_index=True)
+        logger.info("pre-computing image features on %d rows ...", len(all_mf))
+        build_image_features(all_mf, cache_path=image_cache_path)
+
     # --- train 特徴量（median 統計量を固定）---
-    train_feat, feat_cols = build_feature_matrix(manifests["train"], feat_cfg)
+    train_feat, feat_cols, percentile_refs = build_feature_matrix(
+        manifests["train"], feat_cfg, image_cache_path=image_cache_path,
+    )
     train_medians = train_feat.median(numeric_only=True)
     if feat_cfg.use_niqe_score and "niqe_score" in feat_cols:
         train_medians["niqe_score"] = manifests["train"]["niqe_score"].max()
@@ -419,7 +463,9 @@ def main() -> None:
 
     def _prepare(name: str) -> pd.DataFrame:
         df = manifests[name]
-        enriched = enrich_all(df, feat_cfg)
+        enriched = enrich_all(df, feat_cfg, image_cache_path=image_cache_path)
+        if feat_cfg.use_dataset_percentile and percentile_refs:
+            enriched, _ = add_dataset_percentile_features(enriched, percentile_refs)
         for c in feat_cols:
             if c not in enriched.columns:
                 enriched[c] = np.nan
@@ -430,22 +476,30 @@ def main() -> None:
     y_val = manifests["val"]["skip_flag"].astype(int).to_numpy()
     y_te = manifests["test"]["skip_flag"].astype(int).to_numpy()
 
-    # --- Optuna / k-fold 用に train+val をマージ ---
+    # --- Optuna / k-fold 用に train+val をマージ + image_path groups ---
     X_tv = pd.concat([train_feat, X_val], axis=0, ignore_index=True)
     y_tv = np.concatenate([y_tr, y_val])
+    groups_tv = np.concatenate([
+        manifests["train"]["image_path"].to_numpy(),
+        manifests["val"]["image_path"].to_numpy(),
+    ])
 
     # --- Optuna HPO ---
     optuna_summary: Dict[str, Any] = {}
     if optuna_cfg.enabled:
         logger.info("Optuna HPO 開始 (%d trials) ...", optuna_cfg.n_trials)
-        xgb_cfg, optuna_summary = run_optuna(X_tv, y_tv, xgb_cfg, kfold_cfg, optuna_cfg)
+        xgb_cfg, optuna_summary = run_optuna(
+            X_tv, y_tv, xgb_cfg, kfold_cfg, optuna_cfg, groups=groups_tv,
+        )
         logger.info("Optuna 完了: best_cv_auc=%.4f", optuna_summary["best_cv_auc"])
 
     # --- XGBoost 学習（k-fold or 通常）---
     oof_probs: Optional[np.ndarray] = None
     if kfold_cfg.enabled:
         logger.info("k-fold 学習 (%d splits) ...", kfold_cfg.n_splits)
-        model, oof_probs = train_kfold_ensemble(X_tv, y_tv, xgb_cfg, kfold_cfg)
+        model, oof_probs = train_kfold_ensemble(
+            X_tv, y_tv, xgb_cfg, kfold_cfg, groups=groups_tv,
+        )
     else:
         logger.info("通常学習 ...")
         model = train_xgb_classifier(train_feat, y_tr, X_val, y_val, xgb_cfg)
@@ -496,6 +550,14 @@ def main() -> None:
     # --- 保存 ---
     _save_model(model, outputs_dir / "xgb_classifier.joblib")
     train_medians.to_csv(outputs_dir / "train_medians.csv")
+    if percentile_refs:
+        (outputs_dir / "percentile_refs.json").write_text(
+            json.dumps(
+                {k: v.tolist() for k, v in percentile_refs.items()},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
     (outputs_dir / "feature_columns.json").write_text(
         json.dumps(feat_cols, ensure_ascii=False, indent=2), encoding="utf-8"
     )

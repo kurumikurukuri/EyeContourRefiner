@@ -394,10 +394,31 @@ def get_models():
     }
 
 
+DUMMY_T1_DIR = "__dummy_t1__"
+
+
+def _make_dummy_t1_predictor():
+    """常に t=1.0 を返すダミー予測器。"""
+    def predict(image_rgb, px, py, qx, qy, is_upper):
+        return 1.0
+    return predict
+
+
 @app.get("/api/models/folders")
 def get_model_folders():
     """モデル(.pt)が含まれるフォルダ一覧と現在アクティブなフォルダを返す。"""
     folders = []
+
+    # ダミーモデル: t=1 (常に内眼角を予測)
+    folders.append({
+        "path": DUMMY_T1_DIR,
+        "name": "t=1 (baseline)",
+        "fold_count": 0,
+        "has_ensemble": False,
+        "file_count": 0,
+        "has_infer_script": False,
+        "is_dummy": True,
+    })
 
     # models/, models_kfold/ (ルートレベルのフラットなディレクトリ)
     for d in [_PROJECT_ROOT / "models", _PROJECT_ROOT / "models_kfold"]:
@@ -437,7 +458,9 @@ def get_model_folders():
 
     # 現在アクティブなフォルダ (アクティブモデルの親ディレクトリ)
     active_dir = None
-    if _active_model_paths:
+    if _active_infer_mode == "dummy_t1":
+        active_dir = DUMMY_T1_DIR
+    elif _active_model_paths:
         parent = _active_model_paths[0].parent
         try:
             active_dir = str(parent.relative_to(_PROJECT_ROOT))
@@ -477,6 +500,16 @@ def select_models(body: ModelSelectRequest):
     resolved_dir = None
 
     if body.exp_dir:
+        # ダミーモデル: t=1 常に内眼角を返す
+        if body.exp_dir == DUMMY_T1_DIR:
+            _reload_models([], predictor=_make_dummy_t1_predictor(), infer_mode="dummy_t1")
+            return {
+                "ok": True,
+                "loaded_count": 0,
+                "active": [DUMMY_T1_DIR],
+                "infer_mode": "dummy_t1",
+            }
+
         exp_path = Path(body.exp_dir)
         if not _is_allowed_model_path(exp_path):
             raise HTTPException(
