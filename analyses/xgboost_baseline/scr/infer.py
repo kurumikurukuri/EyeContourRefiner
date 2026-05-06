@@ -31,7 +31,7 @@ from analyses.xgboost_baseline.scr.features import (
 # KFoldEnsemble を __main__ スコープに持ち込む。
 # train_exp015 を __main__ として実行したとき pickle は __main__.KFoldEnsemble として
 # クラスを記録するため、infer 側でも同名で参照できるよう import する。
-from analyses.xgboost_baseline.scr.train_exp015 import KFoldEnsemble  # noqa: F401
+from analyses.xgboost_baseline.scr.train import KFoldEnsemble  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

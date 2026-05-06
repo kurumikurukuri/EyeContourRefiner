@@ -1,0 +1,60 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eyeliner-detector"
+version = "0.1.0"
+description = "アイライン輪郭検出 CNN のモデル R&D パイプライン — face_makeup 向け ONNX モデル生成"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "kurumikurukuri" },
+]
+keywords = ["eyeliner", "makeup", "beauty-ai", "onnx", "cnn"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "mediapipe>=0.10",
+    "torch>=2.0,<3",
+    "torchvision>=0.15,<1",
+    "onnx>=1.14",
+    "onnxruntime>=1.14",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.23",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "scikit-learn>=1.3",
+    "tensorboard>=2.14",
+    "scikit-image==0.26",
+    "pyiqa==0.1.15",
+    "fiftyone>=0.23",
+    "requests>=2.31",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "black",
+    "isort",
+    "ruff",
+]
+
+[project.urls]
+Repository = "https://github.com/kurumikurukuri/EyelinerDetector"
+
+[tool.setuptools.packages.find]
+include = ["eyeliner*", "scripts*", "tools*", "annotator*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "requires_data: tests that require large data files (data/samples.db, Open Images downloads)",
+]

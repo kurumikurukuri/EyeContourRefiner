@@ -125,19 +125,21 @@ class TestEyelinerPatchDataset:
         """__getitem__ の出力 shape が正しい。"""
         records = self._make_dataset_records(3)
         ds = EyelinerPatchDataset(records, preload_images=False)
-        x, is_upper, pq_ratio, y, weight, val_weight = ds[0]
+        x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale = ds[0]
         assert x.shape == (3, 64, 128)       # CHW
         assert is_upper.shape == (1,)
         assert pq_ratio.shape == (1,)
         assert y.shape == (1,)
         assert weight.shape == (1,)
         assert val_weight.shape == (1,)
+        assert dist_from_center.shape == (1,)
+        assert norm_eye_scale.shape == (1,)
 
     def test_getitem_dtypes(self):
         """出力がすべて float32 テンソル。"""
         records = self._make_dataset_records(2)
         ds = EyelinerPatchDataset(records, preload_images=False)
-        x, is_upper, pq_ratio, y, weight, val_weight = ds[0]
+        x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale = ds[0]
         assert x.dtype == torch.float32
         assert is_upper.dtype == torch.float32
         assert pq_ratio.dtype == torch.float32
@@ -155,12 +157,12 @@ class TestEyelinerPatchDataset:
         assert is_upper_0.item() == 1.0
         assert is_upper_1.item() == 0.0
 
-    def test_round_t(self):
-        """round_t=1 のとき t が指定桁数に丸められる。"""
+    def test_t_quant_step(self):
+        """t_quant_step=0.1 のとき t が指定桁数に量子化される。"""
         rows = [_sample_rows(1)[0]]
         rows[0]["t"] = "0.567"
         compute_eye_meta(rows)
-        ds = EyelinerPatchDataset(rows, preload_images=False, round_t=1)
+        ds = EyelinerPatchDataset(rows, preload_images=False, t_quant_step=0.1, use_t_norm=False)
         _, _, _, y, *_ = ds[0]
         assert abs(y.item() - 0.6) < 1e-5
 
