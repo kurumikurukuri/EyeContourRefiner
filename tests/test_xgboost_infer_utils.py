@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analyses.xgboost_baseline.scr.infer_exp015 import (
+from analyses.xgboost_baseline.scr.infer import (
     OutlierConfig,
     _rank_normalize,
     compute_outlier_score,

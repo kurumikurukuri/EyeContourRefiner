@@ -124,7 +124,7 @@ class TestHoldoutMae:
     def test_perfect_prediction_is_zero(self):
         """完璧な予測のとき holdout_mae == 0。"""
         class PerfectModel(torch.nn.Module):
-            def forward(self, x, is_upper, pq_ratio=None):
+            def forward(self, x, is_upper, pq_ratio=None, dist_from_center=None, norm_eye_scale=None):
                 return torch.full((x.size(0), 1), 0.5)
 
         model = PerfectModel()
@@ -138,7 +138,9 @@ class TestHoldoutMae:
         y = torch.full((n, 1), 0.5)
         weight = torch.ones(n, 1)
         val_weight = torch.ones(n, 1)
-        ds = TensorDataset(x, is_upper, pq_ratio, y, weight, val_weight)
+        dist_from_center = torch.zeros(n, 1)
+        norm_eye_scale = torch.ones(n, 1) * 0.01
+        ds = TensorDataset(x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale)
         loader = DataLoader(ds, batch_size=4)
 
         mae = holdout_mae(model, loader, device)
@@ -147,7 +149,7 @@ class TestHoldoutMae:
     def test_constant_error(self):
         """一定の誤差 0.1 のとき holdout_mae == 0.1。"""
         class OffsetModel(torch.nn.Module):
-            def forward(self, x, is_upper, pq_ratio=None):
+            def forward(self, x, is_upper, pq_ratio=None, dist_from_center=None, norm_eye_scale=None):
                 return torch.full((x.size(0), 1), 0.6)  # y=0.5 に対して +0.1
 
         model = OffsetModel()
@@ -161,7 +163,9 @@ class TestHoldoutMae:
         y = torch.full((n, 1), 0.5)
         weight = torch.ones(n, 1)
         val_weight = torch.ones(n, 1)
-        ds = TensorDataset(x, is_upper, pq_ratio, y, weight, val_weight)
+        dist_from_center = torch.zeros(n, 1)
+        norm_eye_scale = torch.ones(n, 1) * 0.01
+        ds = TensorDataset(x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale)
         loader = DataLoader(ds, batch_size=4)
 
         mae = holdout_mae(model, loader, device)

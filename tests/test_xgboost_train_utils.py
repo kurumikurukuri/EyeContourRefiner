@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from analyses.xgboost_baseline.scr.train_exp015 import (
+from analyses.xgboost_baseline.scr.train import (
     KFoldEnsemble,
     KFoldConfig,
     OptunaConfig,

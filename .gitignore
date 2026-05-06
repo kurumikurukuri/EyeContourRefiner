@@ -1,8 +1,6 @@
 /data/*
-!/data/samples.json
 !/data/manifest.csv
 !/data/open_images_attribution.csv
-!/data/samples.db
 /models/
 
 # Experiment artifacts（モデルとTBログは除外、experiment.jsonは追跡）
@@ -27,6 +25,15 @@ build/
 .claude/
 tasks/
 CLAUDE.md
+
+# Analysis artifacts (再生成可能)
+*.joblib
+analyses/**/*_predictions*.csv
+analyses/**/manifest_*.csv
+pipeline_download_register.log.err
+
+# Database files
+*.db
 
 # Experiment logs (旧ルート)
 runs/
