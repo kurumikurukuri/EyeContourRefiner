@@ -34,6 +34,13 @@ _CREATE_IDX_IMAGE_PATH = (
 _CREATE_IDX_T = (
     "CREATE INDEX IF NOT EXISTS idx_t_annotated ON samples(t)"
 )
+_CREATE_IDX_EYE_GROUP = (
+    "CREATE INDEX IF NOT EXISTS idx_eye_group "
+    "ON samples(image_path, face_index, part_name)"
+)
+_CREATE_IDX_SKIP_FLAG = (
+    "CREATE INDEX IF NOT EXISTS idx_skip_flag ON samples(skip_flag, idx)"
+)
 
 _CREATE_IMAGE_LABELS = """
 CREATE TABLE IF NOT EXISTS image_labels (
@@ -45,9 +52,12 @@ CREATE TABLE IF NOT EXISTS image_labels (
 
 # 追加カラム（後方互換のため ALTER TABLE ADD COLUMN で冪等に付与）。
 _ADDITIONAL_COLUMNS: Tuple[Tuple[str, str], ...] = (
-    ("face_yaw", "REAL"),
-    ("face_pitch", "REAL"),
-    ("face_roll", "REAL"),
+    ("face_yaw",      "REAL"),
+    ("face_pitch",    "REAL"),
+    ("face_roll",     "REAL"),
+    ("eye_scale",     "REAL"),  # (image_path, face_index, part_name) のPQバウンディングボックス対角長
+    ("norm_eye_scale","REAL"),  # eye_scale / sqrt(img_w^2 + img_h^2)
+    ("lap_var",       "REAL"),  # 目領域のラプラシアン分散（ブレ指標）
 )
 
 
@@ -81,6 +91,8 @@ def init_db(db_path: Path = DB_PATH) -> None:
         conn.execute(_CREATE_TABLE)
         conn.execute(_CREATE_IDX_IMAGE_PATH)
         conn.execute(_CREATE_IDX_T)
+        conn.execute(_CREATE_IDX_EYE_GROUP)
+        conn.execute(_CREATE_IDX_SKIP_FLAG)
         conn.execute(_CREATE_IMAGE_LABELS)
         _ensure_columns(conn)
 
@@ -309,68 +321,6 @@ def get_image_index(
     return index, order
 
 
-def get_eye_scale_per_eye(db_path: Path = DB_PATH) -> Dict[Tuple[str, int, str], float]:
-    """(image_path, face_index, part_name) ごとの eye_scale を返す。
-
-    eye_scale = 同一 (image_path, face_index, part_name) の全 PQ 点群バウンディングボックス対角長。
-    サンプルナビゲーションのソート順計算に使用する。
-    """
-    import math
-    from collections import defaultdict
-
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT image_path, face_index, part_name, px, py, qx, qy FROM samples"
-        ).fetchall()
-
-    eye_points: dict = defaultdict(list)
-    for row in rows:
-        key = (row["image_path"], row["face_index"], row["part_name"])
-        eye_points[key].append((float(row["px"]), float(row["py"])))
-        eye_points[key].append((float(row["qx"]), float(row["qy"])))
-
-    result: Dict[Tuple[str, int, str], float] = {}
-    for key, pts in eye_points.items():
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        scale = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2)
-        result[key] = max(scale, 1.0)
-
-    return result
-
-
-def get_eye_scale_per_image(db_path: Path = DB_PATH) -> Dict[str, float]:
-    """image_path ごとの eye_scale（全 (face_index, part_name) の最小値）を返す。
-
-    eye_scale = 同一 (image_path, face_index, part_name) の全 PQ 点群バウンディングボックス対角長。
-    各画像の代表値として全 (face_index, part_name) の最小値を使用する（最小目スケールを基準にソート可能）。
-    """
-    import math
-    from collections import defaultdict
-
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT image_path, face_index, part_name, px, py, qx, qy FROM samples"
-        ).fetchall()
-
-    eye_points: dict = defaultdict(list)
-    for row in rows:
-        key = (row["image_path"], row["face_index"], row["part_name"])
-        eye_points[key].append((float(row["px"]), float(row["py"])))
-        eye_points[key].append((float(row["qx"]), float(row["qy"])))
-
-    eye_scale_per_image: Dict[str, float] = {}
-    for (image_path, face_index, part_name), pts in eye_points.items():
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        scale = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2)
-        scale = max(scale, 1.0)
-        if image_path not in eye_scale_per_image or scale < eye_scale_per_image[image_path]:
-            eye_scale_per_image[image_path] = scale
-
-    return eye_scale_per_image
-
-
 def get_max_eye_scale_per_image(db_path: Path = DB_PATH) -> Dict[str, float]:
     """image_path ごとの eye_scale（全 (face_index, part_name) の最大値）を返す。
 
@@ -452,3 +402,253 @@ def upsert_image_labels(
             "VALUES (?, ?, ?)",
             (image_id, labels, face_flags),
         )
+
+
+def get_annotation_status(db_path: Path = DB_PATH) -> Dict[int, Dict[str, Any]]:
+    """idx → {t, skip_flag, image_path, part_name} の軽量マップを返す（全行スキャン不要）。"""
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT idx, image_path, part_name, t, skip_flag FROM samples ORDER BY idx"
+        ).fetchall()
+    result: Dict[int, Dict[str, Any]] = {}
+    for row in rows:
+        result[row["idx"]] = {
+            "image_path": row["image_path"],
+            "part_name": row["part_name"],
+            "t": _optional_float(row["t"]),
+            "skip_flag": bool(row["skip_flag"]),
+        }
+    return result
+
+
+def get_sample_order_by_idx(db_path: Path = DB_PATH) -> List[int]:
+    """idx順のサンプル idx リストを返す（全カラムロードなし）。"""
+    with _connect(db_path) as conn:
+        rows = conn.execute("SELECT idx FROM samples ORDER BY idx").fetchall()
+    return [r["idx"] for r in rows]
+
+
+def get_sample_order_by_col(
+    col: str,
+    direction: str = "ASC",
+    db_path: Path = DB_PATH,
+) -> List[int]:
+    """eye_scale / norm_eye_scale / lap_var カラムでソートした idx リストを返す。
+    NULL は末尾。カラムが存在しない場合は idx 順にフォールバック。
+    """
+    _ALLOWED = {"eye_scale", "norm_eye_scale", "lap_var"}
+    if col not in _ALLOWED:
+        raise ValueError(f"sort column must be one of {_ALLOWED}")
+    if direction not in ("ASC", "DESC"):
+        raise ValueError("direction must be ASC or DESC")
+    with _connect(db_path) as conn:
+        # カラムの存在確認（後方互換）
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(samples)").fetchall()}
+        if col not in existing:
+            return get_sample_order_by_idx(db_path)
+        rows = conn.execute(
+            f"SELECT idx FROM samples "
+            f"ORDER BY {col} IS NULL, {col} {direction}, idx ASC"
+        ).fetchall()
+    return [r["idx"] for r in rows]
+
+
+def get_col_min_per_image(
+    col: str,
+    db_path: Path = DB_PATH,
+) -> Dict[str, float]:
+    """指定カラムの per-image MIN 値を返す（ギャラリーソート用）。"""
+    _ALLOWED = {"eye_scale", "norm_eye_scale", "lap_var"}
+    if col not in _ALLOWED:
+        raise ValueError(f"col must be one of {_ALLOWED}")
+    with _connect(db_path) as conn:
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(samples)").fetchall()}
+        if col not in existing:
+            return {}
+        rows = conn.execute(
+            f"SELECT image_path, MIN({col}) AS v FROM samples "
+            f"WHERE {col} IS NOT NULL GROUP BY image_path"
+        ).fetchall()
+    return {row["image_path"]: float(row["v"]) for row in rows}
+
+
+def get_annotated_and_skipped_idxs(db_path: Path = DB_PATH) -> Tuple[List[int], List[int]]:
+    """アノテーション済み idx と skip_flag=1 の idx を返す。"""
+    with _connect(db_path) as conn:
+        annotated = [
+            r["idx"] for r in conn.execute(
+                "SELECT idx FROM samples WHERE t IS NOT NULL ORDER BY idx"
+            ).fetchall()
+        ]
+        skipped = [
+            r["idx"] for r in conn.execute(
+                "SELECT idx FROM samples WHERE skip_flag = 1 ORDER BY idx"
+            ).fetchall()
+        ]
+    return annotated, skipped
+
+
+# ---------------------------------------------------------------------------
+# Server-side navigation (large-DB対応：クライアントに全idxを送らない)
+# ---------------------------------------------------------------------------
+
+def get_adjacent_idx(
+    current_idx: int,
+    delta: int,
+    db_path: Path = DB_PATH,
+) -> Optional[int]:
+    """current_idx から delta 方向の次の非スキップサンプルの idx を返す。"""
+    with _connect(db_path) as conn:
+        if delta > 0:
+            row = conn.execute(
+                "SELECT MIN(idx) AS adj FROM samples WHERE idx > ? AND skip_flag = 0",
+                (current_idx,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT MAX(idx) AS adj FROM samples WHERE idx < ? AND skip_flag = 0",
+                (current_idx,),
+            ).fetchone()
+    return int(row["adj"]) if row and row["adj"] is not None else None
+
+
+def get_next_eye_start_idx(
+    current_idx: int,
+    db_path: Path = DB_PATH,
+) -> Optional[int]:
+    """current_idx が属する目グループの次の（スキップなし）目グループ先頭 idx を返す。"""
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT image_path, face_index, part_name FROM samples WHERE idx = ?",
+            (current_idx,),
+        ).fetchone()
+        if not cur:
+            return None
+        row = conn.execute(
+            """SELECT MIN(idx) AS next_idx FROM samples
+               WHERE idx > ? AND skip_flag = 0
+                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)""",
+            (current_idx, cur["image_path"], cur["face_index"], cur["part_name"]),
+        ).fetchone()
+    return int(row["next_idx"]) if row and row["next_idx"] is not None else None
+
+
+def get_prev_eye_start_idx(
+    current_idx: int,
+    db_path: Path = DB_PATH,
+) -> Optional[int]:
+    """current_idx が属する目グループの前の（スキップなし）目グループ先頭 idx を返す。"""
+    with _connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT image_path, face_index, part_name FROM samples WHERE idx = ?",
+            (current_idx,),
+        ).fetchone()
+        if not cur:
+            return None
+        # 前の目グループの末尾 idx を取得
+        row = conn.execute(
+            """SELECT MAX(idx) AS prev_last FROM samples
+               WHERE idx < ? AND skip_flag = 0
+                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)""",
+            (current_idx, cur["image_path"], cur["face_index"], cur["part_name"]),
+        ).fetchone()
+        if not row or row["prev_last"] is None:
+            return None
+        prev_last = int(row["prev_last"])
+        # その目グループの先頭を取得
+        prev_grp = conn.execute(
+            "SELECT image_path, face_index, part_name FROM samples WHERE idx = ?",
+            (prev_last,),
+        ).fetchone()
+        if not prev_grp:
+            return None
+        row2 = conn.execute(
+            """SELECT MIN(idx) AS start_idx FROM samples
+               WHERE image_path = ? AND face_index = ? AND part_name = ?""",
+            (prev_grp["image_path"], prev_grp["face_index"], prev_grp["part_name"]),
+        ).fetchone()
+    return int(row2["start_idx"]) if row2 and row2["start_idx"] is not None else None
+
+
+def get_next_unannotated_idx(
+    current_idx: int,
+    db_path: Path = DB_PATH,
+) -> Optional[int]:
+    """current_idx より後の未アノテーション・非スキップの最初の idx を返す（末尾で折り返す）。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT MIN(idx) AS nxt FROM samples WHERE idx > ? AND t IS NULL AND skip_flag = 0",
+            (current_idx,),
+        ).fetchone()
+        if row and row["nxt"] is not None:
+            return int(row["nxt"])
+        row2 = conn.execute(
+            "SELECT MIN(idx) AS nxt FROM samples WHERE t IS NULL AND skip_flag = 0",
+        ).fetchone()
+    return int(row2["nxt"]) if row2 and row2["nxt"] is not None else None
+
+
+def get_random_unannotated_idx(db_path: Path = DB_PATH) -> Optional[int]:
+    """未アノテーション・非スキップのランダムなサンプル idx を返す。
+
+    ORDER BY RANDOM() は全表スキャンになるため、代わりに:
+    1. PRIMARY KEY の min/max を使ってランダム pivot を選ぶ (O(log n))
+    2. pivot 以降の最初の未アノテーション行を探す (PRIMARY KEY スキャン)
+    3. 見つからなければ先頭から探す
+    99.8% の行が未アノテーションなので pivot の直後に見つかる。
+    """
+    import random as _random
+    with _connect(db_path) as conn:
+        # ORDER BY idx LIMIT 1 でPRIMARY KEY B-treeの端だけ読む (MIN/MAX より高速)
+        lo_row = conn.execute("SELECT idx FROM samples ORDER BY idx ASC LIMIT 1").fetchone()
+        hi_row = conn.execute("SELECT idx FROM samples ORDER BY idx DESC LIMIT 1").fetchone()
+        if not lo_row:
+            return None
+        pivot = _random.randint(int(lo_row["idx"]), int(hi_row["idx"]))
+        row = conn.execute(
+            "SELECT idx FROM samples WHERE idx >= ? AND t IS NULL AND skip_flag = 0 LIMIT 1",
+            (pivot,)
+        ).fetchone()
+        if row:
+            return int(row["idx"])
+        # wrap: try from beginning
+        row = conn.execute(
+            "SELECT idx FROM samples WHERE idx < ? AND t IS NULL AND skip_flag = 0 LIMIT 1",
+            (pivot,)
+        ).fetchone()
+    return int(row["idx"]) if row else None
+
+
+def get_first_idx(db_path: Path = DB_PATH) -> Optional[int]:
+    """最初の非スキップサンプルの idx を返す。"""
+    with _connect(db_path) as conn:
+        row = conn.execute(
+            "SELECT MIN(idx) AS first_idx FROM samples WHERE skip_flag = 0"
+        ).fetchone()
+    return int(row["first_idx"]) if row and row["first_idx"] is not None else None
+
+
+def get_sample_groups(db_path: Path = DB_PATH) -> List[Dict[str, Any]]:
+    """(image_path, face_index, part_name) グループの idx 範囲を返す。
+
+    フロントエンドが sampleMeta を構築するために使用する。
+    5.1M 個別サンプルの代わりに ~370K グループを返す。
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute("""
+            SELECT image_path, face_index, part_name,
+                   MIN(idx) AS start_idx, COUNT(*) AS cnt
+            FROM samples
+            GROUP BY image_path, face_index, part_name
+            ORDER BY start_idx
+        """).fetchall()
+    return [
+        {
+            "image_path": r["image_path"],
+            "face_index": int(r["face_index"]),
+            "part_name": r["part_name"],
+            "start_idx": r["start_idx"],
+            "count": r["cnt"],
+        }
+        for r in rows
+    ]

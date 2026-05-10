@@ -35,6 +35,11 @@ Open Images V7 から商用利用・再配布可能な顔画像を取得する�
 使い方:
     python tools/download_open_images.py --output data/images/
     python tools/download_open_images.py --split train --max-images 2000 --output data/images/
+
+    # train 分割を3回に分けてダウンロード（アノテーション前処理は初回のみ）
+    python tools/download_open_images.py --split train --shard 0 --shard-count 3
+    python tools/download_open_images.py --split train --shard 1 --shard-count 3
+    python tools/download_open_images.py --split train --shard 2 --shard-count 3
 """
 from __future__ import annotations
 
@@ -247,6 +252,33 @@ def _load_meta_cache(path: Path) -> Dict[str, ImageMeta]:
 
 
 # ---------------------------------------------------------------------------
+# フィルタ済みIDキャッシュ
+# ---------------------------------------------------------------------------
+
+def _save_filtered_ids(ids: Set[str], path: Path) -> None:
+    """フィルタ済みの画像ID一覧をキャッシュファイルに保存する。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for image_id in sorted(ids):
+            f.write(image_id + "\n")
+
+
+def _load_filtered_ids(path: Path) -> Set[str]:
+    """キャッシュファイルからフィルタ済み画像ID一覧を読み込む。"""
+    ids: Set[str] = set()
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped:
+                ids.add(stripped)
+    return ids
+
+
+def _filtered_ids_cache_path(split: str, cache_dir: Path) -> Path:
+    return cache_dir / f"{split}_filtered_ids.txt"
+
+
+# ---------------------------------------------------------------------------
 # アノテーション CSV 事前フィルタリング
 # ---------------------------------------------------------------------------
 
@@ -409,7 +441,9 @@ def download_face_images(
         image_id = src.stem
         dst = output_dir / src.name
         if not dst.exists():
-            shutil.copy2(src, dst)
+            shutil.move(str(src), str(dst))
+        else:
+            src.unlink(missing_ok=True)
         downloaded[image_id] = dst
 
     fo.delete_dataset(dataset_name, verbose=False)
@@ -452,18 +486,47 @@ def run(
     cache_dir: Path,
     refresh_cache: bool,
     attribution_path: Path,
+    shard: int | None = None,
+    shard_count: int | None = None,
 ) -> None:
+    if (shard is None) != (shard_count is None):
+        raise ValueError("--shard と --shard-count は両方指定してください")
+    if shard is not None and (shard < 0 or shard >= shard_count):
+        raise ValueError(f"--shard は 0 以上 {shard_count - 1} 以下である必要があります")
+
     metas = fetch_permissive_metadata(split, cache_dir, refresh=refresh_cache)
 
-    filtered_ids = prefilter_image_ids(
-        permissive_ids=set(metas.keys()),
-        split=split,
-        cache_dir=cache_dir,
-        refresh=refresh_cache,
-    )
+    ids_cache_path = _filtered_ids_cache_path(split, cache_dir)
+
+    if ids_cache_path.exists() and not refresh_cache:
+        logger.info("フィルタ済みIDキャッシュを使用: %s", ids_cache_path)
+        filtered_ids = _load_filtered_ids(ids_cache_path)
+    else:
+        filtered_ids = prefilter_image_ids(
+            permissive_ids=set(metas.keys()),
+            split=split,
+            cache_dir=cache_dir,
+            refresh=refresh_cache,
+        )
+        _save_filtered_ids(filtered_ids, ids_cache_path)
+        logger.info("フィルタ済みIDキャッシュを保存: %s (%d 件)", ids_cache_path, len(filtered_ids))
+
+    sorted_ids = sorted(filtered_ids)
+
+    if shard is not None:
+        chunk_size = (len(sorted_ids) + shard_count - 1) // shard_count
+        start = shard * chunk_size
+        end = min(start + chunk_size, len(sorted_ids))
+        target_ids = set(sorted_ids[start:end])
+        logger.info(
+            "シャード %d/%d: 全 %d 件中 %d-%d 件目 (%d 件) をダウンロード",
+            shard + 1, shard_count, len(sorted_ids), start + 1, end, len(target_ids),
+        )
+    else:
+        target_ids = filtered_ids
 
     downloaded = download_face_images(
-        filtered_ids=filtered_ids,
+        filtered_ids=target_ids,
         split=split,
         output_dir=output_dir,
         max_images=max_images,
@@ -492,6 +555,14 @@ def main() -> None:
     parser.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE_DIR)
     parser.add_argument("--attribution-csv", type=Path, default=ATTRIBUTION_CSV)
     parser.add_argument("--refresh-cache", action="store_true")
+    parser.add_argument(
+        "--shard", type=int, default=None,
+        help="シャード番号 (0始まり, --shard-count と併用)",
+    )
+    parser.add_argument(
+        "--shard-count", type=int, default=None,
+        help="総シャード数 (--shard と併用)",
+    )
 
     args = parser.parse_args()
 
@@ -502,6 +573,8 @@ def main() -> None:
         cache_dir=args.cache_dir,
         refresh_cache=args.refresh_cache,
         attribution_path=args.attribution_csv,
+        shard=args.shard,
+        shard_count=args.shard_count,
     )
 
 

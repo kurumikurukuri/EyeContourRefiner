@@ -249,15 +249,39 @@ def _extract_samples_from_image(
     return samples
 
 
+def _process_chunk(
+    image_paths: List[Path],
+    existing_by_image: Dict[str, List[Dict[str, Any]]],
+    chunk_idx: int,
+) -> List[Dict[str, Any]]:
+    """1 ワーカーが担当する画像チャンクを処理する。"""
+    samples: List[Dict[str, Any]] = []
+    total = len(image_paths)
+    for i, image_path in enumerate(image_paths):
+        image_path_posix = _normalize_path(str(image_path))
+        existing_centroids = _build_existing_centroids(
+            image_path_posix, existing_by_image.get(image_path_posix, [])
+        )
+        result = _extract_samples_from_image(image_path, existing_centroids)
+        if result:
+            samples.extend(result)
+        if (i + 1) % 500 == 0:
+            logger.info("  chunk %d: %d/%d (%.0f%%)", chunk_idx, i + 1, total, (i + 1) / total * 100)
+    return samples
+
+
 def generate_samples(
     images_dir: Path,
     db_path: Path,
+    workers: int = 1,
 ) -> None:
     """
     images_dir 内の全画像からサンプルを生成し db_path (SQLite) に保存する。
 
     既存の DB が存在する場合、t / skip_flag 値を保持してマージする。
     face_index は既存 DB の PQ 重心との最近傍マッチングにより揃える。
+
+    workers >= 2 の場合、ThreadPoolExecutor で並列処理する。
     """
     image_extensions = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
     image_paths = sorted(
@@ -269,7 +293,7 @@ def generate_samples(
         logger.error("画像が見つかりません: %s", images_dir)
         return
 
-    logger.info("%d 枚の画像を処理します...", len(image_paths))
+    logger.info("%d 枚の画像を処理します (workers=%d)...", len(image_paths), workers)
 
     # 既存の t / skip_flag 値と face_index 対応を保持するため全サンプルを読み込む
     existing_by_image: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
@@ -296,15 +320,23 @@ def generate_samples(
         logger.warning("既存の DB を読み込めませんでした: %s", exc)
 
     all_samples: List[Dict[str, Any]] = []
-    for image_path in image_paths:
-        logger.info("処理中: %s", image_path.name)
-        image_path_posix = _normalize_path(str(image_path))
-        existing_centroids = _build_existing_centroids(
-            image_path_posix, existing_by_image.get(image_path_posix, [])
-        )
-        samples = _extract_samples_from_image(image_path, existing_centroids)
-        if samples:
-            all_samples.extend(samples)
+
+    if workers <= 1:
+        all_samples = _process_chunk(image_paths, existing_by_image, 0)
+    else:
+        from concurrent.futures import ThreadPoolExecutor
+
+        chunk_size = max(100, len(image_paths) // workers)
+        chunks = [image_paths[i:i + chunk_size] for i in range(0, len(image_paths), chunk_size)]
+        logger.info("%d workers, %d chunks", workers, len(chunks))
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(_process_chunk, chunk, existing_by_image, idx): idx
+                for idx, chunk in enumerate(chunks)
+            }
+            for future in futures:
+                all_samples.extend(future.result())
 
     # idx を付与し、既存の t / skip_flag 値をマージ
     for idx, sample in enumerate(all_samples):
@@ -339,8 +371,9 @@ def main() -> None:
         "--db", default="data/samples.db", type=Path,
         help="出力 SQLite DB パス (default: data/samples.db)",
     )
+    parser.add_argument("--workers", type=int, default=1, help="並列数 (default: 1)")
     args = parser.parse_args()
-    generate_samples(args.images, args.db)
+    generate_samples(args.images, args.db, workers=args.workers)
 
 
 if __name__ == "__main__":
