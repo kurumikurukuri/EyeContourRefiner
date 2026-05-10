@@ -1,174 +1,172 @@
 """
-MediaPipe で顔が検出できなかった画像、および eye_scale が小さすぎる画像を削除するスクリプト。
+画像レジストリ DB (data/images.db) を参照し、条件に合致する画像を削除する。
 
 ===============================================================================
-概要
+前提
 ===============================================================================
-このスクリプトは、画像データセットの品質管理（クリーニング）を目的としています。
+事前に `python tools/build_image_registry.py` で images.db を構築しておくこと。
+images.db には全画像の has_face / max_eye_scale / max_lap_var / min_face_yaw が
+格納されており、フィルタは SQL 一発で完了する（MediaPipe 不要）。
 
-主な役割:
-  - 顔が写っていない画像を除外
-  - 顔はあるが目が小さすぎて学習用途に不向きな画像を除外
-  - 削除対象画像に対応する DB / attribution 情報も同期削除
+===============================================================================
+フィルタ
+===============================================================================
+  --no-face            顔が 1 つも検出されていない
+  --min-eye-scale PX   max_eye_scale < 閾値
+  --max-face-yaw DEG   min_face_yaw > 閾値（全顔が横顔すぎる）
+  --min-lap-var VAR    max_lap_var < 閾値
+  --ellipse            楕円フィルタ (scale/66)^2 + (lap/240)^2 < 1
+  --ellipse-a A        楕円の scale 軸 (default: 66)
+  --ellipse-b B        楕円の lap 軸 (default: 240)
 
-これにより、顔解析モデルや目関連モデルの学習データ品質を向上できます。
-
--------------------------------------------------------------------------------
-処理フロー
--------------------------------------------------------------------------------
-1. 指定ディレクトリ内の画像を列挙
-2. MediaPipe FaceDetection + FaceMesh で顔検出
-3. 顔が検出できない画像を削除候補に追加
-4. （--min-eye-scale 指定時）
-   DB 内の eye_scale 情報を参照し、
-   「画像内で最も大きい eye_scale ですら閾値未満」の画像を削除候補に追加
-5. samples.db から該当サンプル削除
-6. open_images_attribution.csv から該当 image_id 削除
-7. dry-run でなければ実ファイル削除
-
--------------------------------------------------------------------------------
+===============================================================================
 使い方
--------------------------------------------------------------------------------
-# 顔なし画像のみ確認
-python tools/remove_no_face_images.py --dry-run
+===============================================================================
+  # dry-run
+  python tools/remove_no_face_images.py --no-face --ellipse --dry-run
 
-# 顔なし + eye_scale フィルタ確認
-python tools/remove_no_face_images.py --min-eye-scale 30 --dry-run
+  # 実際に削除
+  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 35
 
-# 実際に削除
-python tools/remove_no_face_images.py --min-eye-scale 30
-
-# 別ディレクトリ指定
-python tools/remove_no_face_images.py --images path/to/images/ --min-eye-scale 30
+  # 強制（アノテーション済み含む）
+  python tools/remove_no_face_images.py --no-face --ellipse --force
 """
+
 from __future__ import annotations
 
 import argparse
 import csv
 import logging
+import sqlite3
 import sys
 from pathlib import Path
-
-import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from annotator import db as _db  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-ROOT            = Path(__file__).parent.parent
-IMAGES_DIR      = ROOT / "data" / "images"
-DB_PATH         = ROOT / "data" / "samples.db"
+ROOT = Path(__file__).parent.parent
+IMAGES_DIR = ROOT / "data" / "images"
+SAMPLES_DB = ROOT / "data" / "samples.db"
+REGISTRY_DB = ROOT / "data" / "images.db"
 ATTRIBUTION_CSV = ROOT / "data" / "open_images_attribution.csv"
 
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-
 
 # ---------------------------------------------------------------------------
-# Face detection
+# Filter queries
 # ---------------------------------------------------------------------------
 
-def _has_face(image_path: Path) -> bool:
-    """MediaPipe FaceMesh で顔が 1 人以上検出できるか確認する。"""
-    try:
-        import mediapipe as mp
-    except ImportError as exc:
-        raise ImportError(
-            "mediapipe が見つかりません。`pip install mediapipe` でインストールしてください。"
-        ) from exc
+def _build_where(
+    no_face: bool = False,
+    min_eye_scale: float | None = None,
+    max_face_yaw: float | None = None,
+    min_lap_var: float | None = None,
+    ellipse_a: float | None = None,
+    ellipse_b: float | None = None,
+) -> str:
+    """レジストリ DB に対する WHERE 句を構築する。"""
+    conditions: list[str] = []
 
-    bgr = cv2.imread(str(image_path))
-    if bgr is None:
-        log.warning("画像を読み込めません: %s", image_path)
-        return False
+    if no_face:
+        conditions.append("has_face = 0")
 
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    if min_eye_scale is not None:
+        conditions.append(f"(max_eye_scale IS NULL OR max_eye_scale < {min_eye_scale})")
 
-    mp_face_detection = mp.solutions.face_detection
-    with mp_face_detection.FaceDetection(
-        model_selection=1,
-        min_detection_confidence=0.5,
-    ) as detector:
-        det = detector.process(rgb)
-        if not det.detections:
-            log.info("  顔なし: %s", image_path.name)
-            return False
+    if max_face_yaw is not None:
+        conditions.append(f"(min_face_yaw IS NULL OR min_face_yaw > {max_face_yaw})")
 
-    mp_face_mesh = mp.solutions.face_mesh
-    with mp_face_mesh.FaceMesh(
-        static_image_mode=True,
-        max_num_faces=10,
-        refine_landmarks=True,
-    ) as face_mesh:
-        results = face_mesh.process(rgb)
+    if min_lap_var is not None:
+        conditions.append(f"(max_lap_var IS NULL OR max_lap_var < {min_lap_var})")
 
-    detected = bool(results.multi_face_landmarks)
-    if not detected:
-        log.info("  顔なし: %s", image_path.name)
-    return detected
+    if ellipse_a is not None and ellipse_b is not None:
+        conditions.append(
+            f"(max_eye_scale IS NULL OR max_lap_var IS NULL OR "
+            f"(max_eye_scale / {ellipse_a}) * (max_eye_scale / {ellipse_a}) + "
+            f"(max_lap_var / {ellipse_b}) * (max_lap_var / {ellipse_b}) < 1)"
+        )
+
+    if not conditions:
+        return "1 = 0"  # no filter → empty result
+    return "(" + ") OR (".join(conditions) + ")"
 
 
-def scan_images(images_dir: Path) -> tuple[list[Path], list[Path]]:
-    """images_dir 内の画像を走査し (顔あり, 顔なし) に分類して返す。"""
-    image_paths = sorted(
-        p for p in images_dir.iterdir()
-        if p.suffix.lower() in IMAGE_EXTENSIONS
+def query_delete_candidates(
+    conn: sqlite3.Connection,
+    no_face: bool = False,
+    min_eye_scale: float | None = None,
+    max_face_yaw: float | None = None,
+    min_lap_var: float | None = None,
+    ellipse_a: float | None = None,
+    ellipse_b: float | None = None,
+) -> list[dict]:
+    """削除候補の image_path リストを返す。"""
+    where = _build_where(
+        no_face=no_face,
+        min_eye_scale=min_eye_scale,
+        max_face_yaw=max_face_yaw,
+        min_lap_var=min_lap_var,
+        ellipse_a=ellipse_a,
+        ellipse_b=ellipse_b,
     )
-    if not image_paths:
-        log.warning("画像が見つかりません: %s", images_dir)
-        return [], []
-
-    log.info("%d 枚の画像を検査します...", len(image_paths))
-    with_face: list[Path] = []
-    no_face:   list[Path] = []
-
-    for i, p in enumerate(image_paths, 1):
-        log.info("[%d/%d] %s", i, len(image_paths), p.name)
-        if _has_face(p):
-            with_face.append(p)
-        else:
-            no_face.append(p)
-
-    return with_face, no_face
-
-
-# ---------------------------------------------------------------------------
-# eye_scale filter
-# ---------------------------------------------------------------------------
-
-def find_small_eye_images(min_eye_scale: float) -> list[str]:
-    """DB から全画像の最大 eye_scale を計算し、閾値未満の image_path リストを返す。
-
-    各画像について全 (face_index, part_name) の最大 eye_scale を代表値とする。
-    最大値でも閾値未満 = その画像に含まれる全ての目が小さすぎる。
-    """
-    max_scale_per_image = _db.get_max_eye_scale_per_image(DB_PATH)
+    sql = f"SELECT image_path, has_face, max_eye_scale, max_lap_var, min_face_yaw FROM images WHERE {where}"
+    log.info("query: %s", sql)
+    rows = conn.execute(sql).fetchall()
     return [
-        image_path
-        for image_path, scale in max_scale_per_image.items()
-        if scale < min_eye_scale
+        {
+            "image_path": r[0],
+            "has_face": r[1],
+            "max_eye_scale": r[2],
+            "max_lap_var": r[3],
+            "min_face_yaw": r[4],
+        }
+        for r in rows
     ]
 
 
 # ---------------------------------------------------------------------------
-# Data cleanup helpers
+# Safety / data cleanup
 # ---------------------------------------------------------------------------
 
-def _remove_image_paths_from_db(image_paths: list[str], dry_run: bool) -> int:
-    """DB から指定 image_path のエントリを削除する。削除件数を返す。"""
-    if not DB_PATH.exists() or not image_paths:
+def _get_annotated_db_paths() -> set[str]:
+    """samples.db で t IS NOT NULL の image_path の basename セット。"""
+    if not SAMPLES_DB.exists():
+        return set()
+    return {Path(s["image_path"]).name for s in _db.get_annotated_samples(SAMPLES_DB)}
+
+
+def _remove_from_samples_db(image_paths: list[str], dry_run: bool) -> int:
+    """image_paths (basename) を samples.db から削除する（バッチ処理）。"""
+    if not SAMPLES_DB.exists() or not image_paths:
         return 0
-    log.info("DB: %d 画像のエントリを削除予定", len(image_paths))
+    full_paths = [f"data/images/{p}" for p in image_paths]
+    log.info("samples.db: %d 画像のエントリを削除予定", len(full_paths))
     if not dry_run:
-        _db.delete_samples_by_image_paths(image_paths, DB_PATH)
+        batch_size = 500
+        for i in range(0, len(full_paths), batch_size):
+            batch = full_paths[i:i + batch_size]
+            _db.delete_samples_by_image_paths(batch, SAMPLES_DB)
+        log.info("samples.db: 削除完了")
+    return len(full_paths)
+
+
+def _remove_from_registry(conn: sqlite3.Connection, image_paths: list[str], dry_run: bool) -> int:
+    if not image_paths:
+        return 0
+    log.info("registry: %d 画像を削除予定", len(image_paths))
+    if not dry_run:
+        conn.executemany(
+            "DELETE FROM images WHERE image_path = ?",
+            [(p,) for p in image_paths],
+        )
+        conn.commit()
     return len(image_paths)
 
 
 def _remove_from_attribution_csv(stems: set[str], dry_run: bool) -> int:
-    """open_images_attribution.csv から該当画像の行を削除する。削除件数を返す。"""
     if not ATTRIBUTION_CSV.exists():
         return 0
-
     with ATTRIBUTION_CSV.open(newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         fieldnames = reader.fieldnames or []
@@ -179,10 +177,13 @@ def _remove_from_attribution_csv(stems: set[str], dry_run: bool) -> int:
     log.info("attribution.csv: %d 行削除 (残り %d)", removed, len(kept))
 
     if not dry_run and removed > 0:
-        with ATTRIBUTION_CSV.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(kept)
+        ATTRIBUTION_CSV.write_text(
+            "\n".join(
+                [",".join(fieldnames)]
+                + [",".join(r.get(f, "") for f in fieldnames) for r in kept]
+            ),
+            encoding="utf-8",
+        )
     return removed
 
 
@@ -190,79 +191,132 @@ def _remove_from_attribution_csv(stems: set[str], dry_run: bool) -> int:
 # Main
 # ---------------------------------------------------------------------------
 
-def main(images_dir: Path, dry_run: bool, min_eye_scale: float | None) -> None:
-    # DB-stored image_path → absolute file Path
-    to_delete: dict[str, Path] = {}
-
-    # --- Face check ---
-    if not images_dir.exists():
-        log.warning("画像ディレクトリが見つかりません: %s (face check をスキップ)", images_dir)
-    else:
-        _, no_face = scan_images(images_dir)
-        log.info("顔なし: %d 枚", len(no_face))
-        if no_face and DB_PATH.exists():
-            abs_to_db: dict[Path, str] = {
-                (ROOT / s["image_path"]).resolve(): s["image_path"]
-                for s in _db.load_all_samples(DB_PATH)
-            }
-            for p in no_face:
-                db_path = abs_to_db.get(p.resolve())
-                if db_path:
-                    to_delete[db_path] = p.resolve()
-                else:
-                    to_delete[str(p.resolve())] = p.resolve()
-
-    # --- eye_scale filter ---
-    if min_eye_scale is not None:
-        small_paths = find_small_eye_images(min_eye_scale)
-        log.info("eye_scale < %.1fpx (最大値基準): %d 枚", min_eye_scale, len(small_paths))
-        for rel_path in small_paths:
-            to_delete.setdefault(rel_path, (ROOT / rel_path).resolve())
-
-    if not to_delete:
-        log.info("削除対象の画像はありません。")
+def main(
+    dry_run: bool = False,
+    force: bool = False,
+    no_face: bool = False,
+    min_eye_scale: float | None = None,
+    max_face_yaw: float | None = None,
+    min_lap_var: float | None = None,
+    ellipse: bool = False,
+    ellipse_a: float = 66,
+    ellipse_b: float = 240,
+) -> None:
+    if not REGISTRY_DB.exists():
+        log.error(
+            "registry DB が見つかりません: %s\n"
+            "  先に `python tools/build_image_registry.py` を実行してください。",
+            REGISTRY_DB,
+        )
         return
 
-    log.info("---")
-    log.info("削除対象: 合計 %d 枚", len(to_delete))
-    for db_path in sorted(to_delete):
-        log.info("  %s", Path(db_path).name)
+    # ellispe flag → set a, b
+    ea = ellipse_a if ellipse else None
+    eb = ellipse_b if ellipse else None
 
-    stems = {Path(p).stem for p in to_delete}
-    _remove_image_paths_from_db(list(to_delete.keys()), dry_run)
+    conn = sqlite3.connect(str(REGISTRY_DB))
+    conn.execute("PRAGMA read_uncommitted = true")
+
+    # --- query ---
+    candidates = query_delete_candidates(
+        conn,
+        no_face=no_face,
+        min_eye_scale=min_eye_scale,
+        max_face_yaw=max_face_yaw,
+        min_lap_var=min_lap_var,
+        ellipse_a=ea,
+        ellipse_b=eb,
+    )
+
+    if not candidates:
+        log.info("削除候補はありません。")
+        conn.close()
+        return
+
+    image_paths = [c["image_path"] for c in candidates]
+    log.info("削除候補: %d 枚", len(image_paths))
+
+    # detail
+    for c in candidates[:20]:
+        log.info(
+            "  %s  face=%d  scale=%s  lap=%s  yaw=%s",
+            c["image_path"],
+            c["has_face"],
+            f'{c["max_eye_scale"]:.0f}' if c["max_eye_scale"] is not None else "-",
+            f'{c["max_lap_var"]:.0f}' if c["max_lap_var"] is not None else "-",
+            f'{c["min_face_yaw"]:.1f}' if c["min_face_yaw"] is not None else "-",
+        )
+    if len(candidates) > 20:
+        log.info("  ... and %d more", len(candidates) - 20)
+
+    # --- safety check ---
+    annotated = _get_annotated_db_paths()
+    annotated_in_delete = [p for p in image_paths if p in annotated]
+    if annotated_in_delete and not force:
+        log.error(
+            "削除候補に %d 枚のアノテーション済み画像が含まれています。",
+            len(annotated_in_delete),
+        )
+        for p in sorted(annotated_in_delete):
+            log.error("  %s", Path(p).name)
+        log.error("--force を付けると強制的に削除できます。")
+        conn.close()
+        return
+
+    if annotated_in_delete:
+        log.warning(
+            "%d 枚のアノテーション済み画像が削除されます (--force)。",
+            len(annotated_in_delete),
+        )
+
+    # --- execute ---
+    stems = {Path(p).stem for p in image_paths}
+    _remove_from_samples_db(image_paths, dry_run)
+    _remove_from_registry(conn, image_paths, dry_run)
     _remove_from_attribution_csv(stems, dry_run)
 
     if dry_run:
-        log.info("[dry-run] %d 枚の画像は削除されません。", len(to_delete))
+        log.info("[dry-run] %d 枚の画像は削除されません。", len(image_paths))
     else:
         deleted = 0
-        for abs_path in to_delete.values():
-            if abs_path.exists():
-                abs_path.unlink()
-                log.info("削除: %s", abs_path.name)
+        for p in image_paths:
+            fp = IMAGES_DIR / p
+            if fp.exists():
+                fp.unlink()
                 deleted += 1
         log.info("完了: %d 枚の画像を削除しました。", deleted)
 
+    conn.close()
+
 
 if __name__ == "__main__":
-    sys.stdout.reconfigure(encoding="utf-8")
-    sys.stderr.reconfigure(encoding="utf-8")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except OSError:
+        pass
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
-    parser = argparse.ArgumentParser(
-        description="顔なし画像・eye_scale が小さい画像を削除する"
-    )
-    parser.add_argument(
-        "--images", type=Path, default=IMAGES_DIR,
-        help=f"検査する画像ディレクトリ (default: {IMAGES_DIR})",
-    )
-    parser.add_argument(
-        "--min-eye-scale", type=float, default=None, metavar="PX",
-        help="全眼の最大 eye_scale がこの値未満の画像を削除対象に追加する（ピクセル単位）",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="削除対象を表示するだけで実際には削除しない",
-    )
+    parser = argparse.ArgumentParser(description="レジストリ DB 参照で画像を削除する")
+    parser.add_argument("--no-face", action="store_true", help="顔なし画像を削除")
+    parser.add_argument("--min-eye-scale", type=float, default=None, metavar="PX")
+    parser.add_argument("--max-face-yaw", type=float, default=None, metavar="DEG")
+    parser.add_argument("--min-lap-var", type=float, default=None, metavar="VAR")
+    parser.add_argument("--ellipse", action="store_true", help="楕円フィルタ有効")
+    parser.add_argument("--ellipse-a", type=float, default=66, metavar="A")
+    parser.add_argument("--ellipse-b", type=float, default=240, metavar="B")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    main(images_dir=args.images, dry_run=args.dry_run, min_eye_scale=args.min_eye_scale)
+
+    main(
+        dry_run=args.dry_run,
+        force=args.force,
+        no_face=args.no_face,
+        min_eye_scale=args.min_eye_scale,
+        max_face_yaw=args.max_face_yaw,
+        min_lap_var=args.min_lap_var,
+        ellipse=args.ellipse,
+        ellipse_a=args.ellipse_a,
+        ellipse_b=args.ellipse_b,
+    )

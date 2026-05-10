@@ -40,9 +40,12 @@ const state = {
   galleryTotalPages: 1,
   galleryTotalImages: 0,
   gallerySkipFilter: "all",  // "all" | "active" | "skipped"
-  gallerySortBy: "idx",      // "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc"
+  gallerySortBy: "idx",      // "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc" | "lap_var_asc" | "lap_var_desc"
   sortedIdxList: null,       // null = idx順; ソート時はサンプルidxの配列
 };
+
+// sortedIdxList の O(1) 位置検索用 Map (idx → position)
+let _sortedIdxToPos = null;
 
 // ---------------------------------------------------------------------------
 // DOM
@@ -62,6 +65,7 @@ const elInfoR     = document.getElementById("info-r");
 const elInfoPred      = document.getElementById("info-pred");
 const elInfoEyeScale  = document.getElementById("info-eye-scale");
 const elInfoNormEyeScale = document.getElementById("info-norm-eye-scale");
+const elInfoLapVar    = document.getElementById("info-lap-var");
 const elStatus    = document.getElementById("status-msg");
 const elBanner    = document.getElementById("complete-banner");
 
@@ -123,19 +127,12 @@ async function apiFetch(url, options) {
 async function loadSamplesSummary() {
   try {
     const data = await apiFetch("/api/samples");
-    const annotationStatus = {};
-    const skipFlags = {};
-    const sampleMeta = {};
-    data.samples.forEach(s => {
-      annotationStatus[s.idx] = s.t !== null;
-      skipFlags[s.idx] = s.skip_flag === true;
-      sampleMeta[s.idx] = { image_path: s.image_path, part_name: s.part_name };
-    });
-    state.annotationStatus = annotationStatus;
-    state.skipFlags = skipFlags;
-    state.sampleMeta = sampleMeta;
+    // 大規模DB対応: annotated_idxs / skipped_idxs は返さない（サーバーサイドナビを使用）
+    state.annotationStatus = {};
+    state.skipFlags = {};
+    // sampleMeta はサンプルを開くたびにオンデマンドで追加される
   } catch (err) {
-    // サマリー取得失敗は非致命的（未アノテーションジャンプ機能のみ無効化）
+    // 非致命的
   }
 }
 
@@ -143,11 +140,13 @@ async function loadSamplesSummary() {
 // Sort order helpers
 // ---------------------------------------------------------------------------
 
-/** ソート済みリスト上での currentIdx の位置を返す。リストがなければ currentIdx そのものを返す。 */
+/** ソート済みリスト上での currentIdx の位置を返す。リストがなければ currentIdx そのものを返す。
+ *  Map を使った O(1) 検索（大規模リスト対応）。
+ */
 function _sortedPos() {
   if (!state.sortedIdxList) return state.currentIdx;
-  const pos = state.sortedIdxList.indexOf(state.currentIdx);
-  return pos === -1 ? 0 : pos;
+  const pos = _sortedIdxToPos ? _sortedIdxToPos.get(state.currentIdx) : undefined;
+  return pos !== undefined ? pos : 0;
 }
 
 /** ソート済みリスト上でのリスト位置 pos から eye group の先頭位置を返す。 */
@@ -163,60 +162,48 @@ function _eyeGroupStartInList(pos) {
   return pos;
 }
 
-/** idx順でのeye group先頭 idx を返す（ソートなし時に使用）。 */
-function _eyeGroupStart(idx) {
-  const meta = state.sampleMeta;
-  if (!meta.length) return idx;
-  const { image_path, part_name } = meta[idx];
-  while (idx > 0 &&
-         meta[idx - 1].image_path === image_path &&
-         meta[idx - 1].part_name === part_name) {
-    idx--;
-  }
-  return idx;
-}
 
-function jumpToNextEye() {
-  const meta = state.sampleMeta;
-  if (!state.sortedIdxList) { advance(14); return; }
-  const { image_path, part_name } = meta[state.currentIdx];
-
+async function jumpToNextEye() {
   if (state.sortedIdxList) {
+    // ソート済みモード: sampleMeta を使ってリスト内でグループ境界を検索
+    const meta = state.sampleMeta;
     const list = state.sortedIdxList;
     let pos = _sortedPos();
+    const cur = meta[list[pos]];
+    if (!cur) { loadSample(list[Math.min(pos + 1, list.length - 1)]); return; }
+    const { image_path, part_name } = cur;
     // 現在のeye groupを末尾まで読み飛ばす
-    while (pos < list.length && meta[list[pos]].image_path === image_path && meta[list[pos]].part_name === part_name) pos++;
-    // 次のeye groupを探す（skip済みグループはまるごと飛ばす）
+    while (pos < list.length && meta[list[pos]] &&
+           meta[list[pos]].image_path === image_path &&
+           meta[list[pos]].part_name === part_name) pos++;
+    // 次のeye groupを探す（skip済みはスキップ）
     while (pos < list.length) {
       if (!state.skipFlags[list[pos]]) { loadSample(list[pos]); return; }
-      // skipグループを末尾まで読み飛ばす
       const sg = meta[list[pos]];
-      while (pos < list.length && meta[list[pos]].image_path === sg.image_path && meta[list[pos]].part_name === sg.part_name) pos++;
+      if (!sg) { pos++; continue; }
+      while (pos < list.length && meta[list[pos]] &&
+             meta[list[pos]].image_path === sg.image_path &&
+             meta[list[pos]].part_name === sg.part_name) pos++;
     }
     setStatus("次の目はありません");
     return;
   }
-
-  for (let i = state.currentIdx + 1; i < state.total; i++) {
-    if (meta[i].image_path !== image_path || meta[i].part_name !== part_name) {
-      if (state.skipFlags[i]) continue;
-      loadSample(i);
-      return;
-    }
-  }
-  setStatus("次の目はありません");
+  // 非ソートモード: サーバーサイドナビ
+  try {
+    const data = await apiFetch(`/api/nav/next_eye/${state.currentIdx}`);
+    if (data.idx !== null) loadSample(data.idx);
+    else setStatus("次の目はありません");
+  } catch (err) { setStatus("ナビゲーションエラー: " + err.message); }
 }
 
-function jumpToPrevEye() {
-  const meta = state.sampleMeta;
-  if (!state.sortedIdxList) { advance(-14); return; }
-
+async function jumpToPrevEye() {
   if (state.sortedIdxList) {
+    // ソート済みモード: sampleMeta を使ってリスト内でグループ境界を検索
+    const meta = state.sampleMeta;
     const list = state.sortedIdxList;
     let pos = _eyeGroupStartInList(_sortedPos());
     if (pos === 0) { setStatus("前の目はありません"); return; }
     pos--;
-    // skip済みグループはまるごと飛ばして前へ
     while (pos >= 0) {
       const groupStart = _eyeGroupStartInList(pos);
       if (!state.skipFlags[list[groupStart]]) { loadSample(list[groupStart]); return; }
@@ -226,42 +213,23 @@ function jumpToPrevEye() {
     setStatus("前の目はありません");
     return;
   }
-
-  const groupStart = _eyeGroupStart(state.currentIdx);
-  if (groupStart === 0) { setStatus("前の目はありません"); return; }
-  let candidate = _eyeGroupStart(groupStart - 1);
-  while (candidate > 0 && state.skipFlags[candidate]) {
-    const prevStart = _eyeGroupStart(candidate - 1);
-    if (prevStart === candidate) break;
-    candidate = prevStart;
-  }
-  if (state.skipFlags[candidate]) { setStatus("前の目はありません"); return; }
-  loadSample(candidate);
+  // 非ソートモード: サーバーサイドナビ
+  try {
+    const data = await apiFetch(`/api/nav/prev_eye/${state.currentIdx}`);
+    if (data.idx !== null) loadSample(data.idx);
+    else setStatus("前の目はありません");
+  } catch (err) { setStatus("ナビゲーションエラー: " + err.message); }
 }
 
-function jumpToNextUnannotated() {
-  if (state.sortedIdxList) {
-    const list = state.sortedIdxList;
-    const pos = _sortedPos();
-    for (let p = pos + 1; p < list.length; p++) {
-      const i = list[p];
-      if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
-    }
-    for (let p = 0; p <= pos; p++) {
-      const i = list[p];
-      if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
-    }
-    setStatus("全サンプルのアノテーションが完了しています！");
-    return;
+async function jumpToNextUnannotated() {
+  // 常にサーバーサイドナビ（ソート順問わず）
+  try {
+    const data = await apiFetch(`/api/nav/next_unannotated/${state.currentIdx}`);
+    if (data.idx !== null) loadSample(data.idx);
+    else setStatus("全サンプルのアノテーションが完了しています！");
+  } catch (err) {
+    setStatus("ナビゲーションエラー: " + err.message);
   }
-
-  for (let i = state.currentIdx + 1; i < state.total; i++) {
-    if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
-  }
-  for (let i = 0; i < state.currentIdx; i++) {
-    if (!state.annotationStatus[i] && !state.skipFlags[i]) { loadSample(i); return; }
-  }
-  setStatus("全サンプルのアノテーションが完了しています！");
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +243,9 @@ async function loadSample(idx) {
     state.currentIdx  = idx;
     state.total       = data.total;
     state.annotated   = data.annotated;
+
+    // Populate sampleMeta for this sample
+    state.sampleMeta[idx] = { image_path: data.image_path, part_name: data.part_name };
     state.px = data.px; state.py = data.py;
     state.qx = data.qx; state.qy = data.qy;
     state.existingT   = data.existing_t;
@@ -294,7 +265,8 @@ async function loadSample(idx) {
     elInfoP.textContent    = `(${data.px.toFixed(1)}, ${data.py.toFixed(1)})`;
     elInfoQ.textContent    = `(${data.qx.toFixed(1)}, ${data.qy.toFixed(1)})`;
     elInfoEyeScale.textContent     = data.eye_scale != null ? `${Math.round(data.eye_scale)}px` : "--";
-    elInfoNormEyeScale.textContent = data.norm_eye_scale != null ? data.norm_eye_scale.toFixed(4) : "--";
+    elInfoNormEyeScale.textContent = data.norm_eye_scale != null ? data.norm_eye_scale.toFixed(5) : "--";
+    if (elInfoLapVar) elInfoLapVar.textContent = data.lap_var != null ? data.lap_var.toFixed(1) : "--";
 
     // Open Images metadata
     if (data.image_metadata && (data.image_metadata.labels.length > 0 || Object.keys(data.image_metadata.face_flags).length > 0)) {
@@ -463,9 +435,11 @@ btnSkipImage.addEventListener("click", async () => {
       body: JSON.stringify({ skip: newSkip }),
     });
     state.skipFlag = newSkip;
-    // 同画像の全サンプルの skipFlags を更新
-    const currentMeta = state.sampleMeta[state.currentIdx];
-    if (currentMeta) {
+    // Update skip flags from server response
+    if (result.updated_idxs) {
+      result.updated_idxs.forEach(i => { state.skipFlags[i] = newSkip; });
+    } else if (state.sampleMeta[state.currentIdx]) {
+      const currentMeta = state.sampleMeta[state.currentIdx];
       const keys = state.sortedIdxList || Object.keys(state.sampleMeta).map(Number);
       for (const i of keys) {
         if (state.sampleMeta[i] && state.sampleMeta[i].image_path === currentMeta.image_path) {
@@ -513,24 +487,12 @@ btnSave.addEventListener("click", async () => {
   advance(1);
 });
 
-function jumpToRandom() {
-  const candidates = [];
-  const list = state.sortedIdxList;
-  if (list) {
-    for (const i of list) {
-      if (!state.annotationStatus[i] && !state.skipFlags[i]) candidates.push(i);
-    }
-  } else {
-    for (let i = 0; i < state.total; i++) {
-      if (!state.annotationStatus[i] && !state.skipFlags[i]) candidates.push(i);
-    }
-  }
-  if (candidates.length === 0) {
-    setStatus("未アノテーションのサンプルがありません");
-    return;
-  }
-  const idx = candidates[Math.floor(Math.random() * candidates.length)];
-  loadSample(idx);
+async function jumpToRandom() {
+  try {
+    const data = await apiFetch("/api/nav/random_unannotated");
+    if (data.idx !== null) loadSample(data.idx);
+    else setStatus("未アノテーションのサンプルがありません");
+  } catch (err) { setStatus("ナビゲーションエラー: " + err.message); }
 }
 
 btnRandom.addEventListener("click", jumpToRandom);
@@ -616,25 +578,22 @@ inputJump.addEventListener("keydown", (e) => {
   if (e.key === "Enter") btnJump.click();
 });
 
-function advance(delta) {
+async function advance(delta) {
   if (state.sortedIdxList) {
+    // ソート済みモード: リスト内で Map を使って O(1) で位置を求め、skip フラグ確認
     const list = state.sortedIdxList;
     let pos = _sortedPos() + delta;
     while (pos >= 0 && pos < list.length && state.skipFlags[list[pos]]) {
       pos += delta;
     }
-    if (pos >= 0 && pos < list.length) {
-      loadSample(list[pos]);
-    }
+    if (pos >= 0 && pos < list.length) loadSample(list[pos]);
     return;
   }
-  let next = state.currentIdx + delta;
-  while (next >= 0 && next < state.total && state.skipFlags[next]) {
-    next += delta;
-  }
-  if (next >= 0 && next < state.total) {
-    loadSample(next);
-  }
+  // 非ソートモード: サーバーサイドナビ（skip 済みを自動スキップ）
+  try {
+    const data = await apiFetch(`/api/nav/adjacent/${state.currentIdx}?delta=${delta}`);
+    if (data.idx !== null) loadSample(data.idx);
+  } catch (err) { setStatus("ナビゲーションエラー: " + err.message); }
 }
 
 async function saveCurrent() {
@@ -885,16 +844,18 @@ function renderGalleryPage(items) {
     label.className = "gallery-label";
     label.textContent = item.image_key.replace(/\.[^.]+$/, "");
 
-    // eye_scale バッジ（ソート時に表示）
-    if (item.eye_scale != null && state.gallerySortBy !== "idx") {
+    // ソート値バッジ（ソート時に表示）
+    if (state.gallerySortBy !== "idx") {
       const scaleBadge = document.createElement("div");
       scaleBadge.className = "gallery-eye-scale";
-      if (state.gallerySortBy.startsWith("norm_eye_scale") && item.norm_eye_scale != null) {
+      if (state.gallerySortBy.startsWith("lap_var") && item.lap_var != null) {
+        scaleBadge.textContent = `lv=${Math.round(item.lap_var)}`;
+      } else if (state.gallerySortBy.startsWith("norm_eye_scale") && item.norm_eye_scale != null) {
         scaleBadge.textContent = `nes=${item.norm_eye_scale.toFixed(3)}`;
-      } else {
+      } else if (item.eye_scale != null) {
         scaleBadge.textContent = `es=${Math.round(item.eye_scale)}px`;
       }
-      card.appendChild(scaleBadge);
+      if (scaleBadge.textContent) card.appendChild(scaleBadge);
     }
 
     card.appendChild(img);
@@ -981,13 +942,31 @@ gallerySortSelect.addEventListener("change", async () => {
 async function updateSortedOrder() {
   if (state.gallerySortBy === "idx") {
     state.sortedIdxList = null;
+    _sortedIdxToPos = null;
     return;
   }
   try {
+    // ソート済み idx リストを取得
     const data = await apiFetch(`/api/sample_order?sort_by=${state.gallerySortBy}`);
     state.sortedIdxList = data.order;
+    // O(1) 逆引き Map を構築
+    _sortedIdxToPos = new Map(data.order.map((idx, pos) => [idx, pos]));
+    // ソート済みナビに必要な sampleMeta を取得
+    try {
+      const groupsData = await apiFetch("/api/sample_groups");
+      const meta = {};
+      if (groupsData.groups) {
+        groupsData.groups.forEach(g => {
+          for (let i = 0; i < g.count; i++) {
+            meta[g.start_idx + i] = { image_path: g.image_path, part_name: g.part_name };
+          }
+        });
+      }
+      state.sampleMeta = meta;
+    } catch (_) { /* sampleMeta なしでもソート自体は動作 */ }
   } catch (err) {
     state.sortedIdxList = null;
+    _sortedIdxToPos = null;
     setStatus("ソート順の取得に失敗しました: " + err.message);
   }
 }
@@ -1073,12 +1052,7 @@ fullImg.addEventListener("click", async () => {
 // Boot
 // ---------------------------------------------------------------------------
 loadSamplesSummary().then(async () => {
-  // 削除後のidx欠番でナビゲーションが壊れないよう、常に有効idxリストを取得する
-  try {
-    const orderData = await apiFetch("/api/sample_order?sort_by=idx");
-    state.sortedIdxList = orderData.order;
-  } catch (err) { /* non-fatal */ }
-
+  // 大規模DB対応: 起動時は全idxリストを取得しない（サーバーサイドナビを使用）
   const params = new URLSearchParams(window.location.search);
   const idxParam = params.get("idx");
   if (idxParam !== null) {
@@ -1094,9 +1068,12 @@ loadSamplesSummary().then(async () => {
       }
     }
   }
-  const startIdx = (state.sortedIdxList && state.sortedIdxList.length > 0)
-    ? state.sortedIdxList[0]
-    : 0;
-  loadSample(startIdx);
+  // 最初の有効なサンプル idx をサーバーから取得
+  try {
+    const data = await apiFetch("/api/nav/first");
+    loadSample(data.idx ?? 0);
+  } catch {
+    loadSample(0);
+  }
 });
 loadModelList();

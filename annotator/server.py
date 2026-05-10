@@ -62,9 +62,13 @@ _ALLOWED_MODEL_DIRS = [
 # 画像グルーピングインデックス（ギャラリー用）
 _image_index: Optional[Dict[str, Dict[str, Any]]] = None  # image_path → {first_pos, total, annotated, skipped}
 _image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
-_image_eye_scale: Optional[Dict[str, float]] = None  # image_path → min eye_scale (px)
-_eye_scale_per_eye: Optional[Dict[tuple, float]] = None  # (image_path, face_index, part_name) → eye_scale (px)
-_image_dims_cache: Dict[str, tuple] = {}  # image_path → (w, h) — norm_eye_scale 計算用遅延キャッシュ
+# ギャラリーソート用 per-image キャッシュ（遅延ロード）
+# col名 → {image_path → min_value}
+_gallery_sort_cache: Dict[str, Optional[Dict[str, float]]] = {
+    "eye_scale": None,
+    "norm_eye_scale": None,
+    "lap_var": None,
+}
 
 # モデル状態（_infer_models 等）の競合状態防止用ロック
 _models_lock = threading.Lock()
@@ -290,36 +294,31 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 
 def _build_image_index() -> None:
     """DB から画像パス単位のグループインデックスを構築する。"""
-    global _image_index, _image_order, _image_eye_scale, _eye_scale_per_eye
+    global _image_index, _image_order, _gallery_sort_cache
     _image_index, _image_order = _db.get_image_index()
-    _image_eye_scale = _db.get_eye_scale_per_image()
-    _eye_scale_per_eye = _db.get_eye_scale_per_eye()
+    _gallery_sort_cache = {"eye_scale": None, "norm_eye_scale": None, "lap_var": None}
 
 
-def _build_eye_scale_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
-    """サンプルに対応する eye_scale / norm_eye_scale を返す。"""
-    key = (sample["image_path"], int(sample.get("face_index", 0)), sample["part_name"])
-    es = (_eye_scale_per_eye or {}).get(key)
-    if es is None:
-        return {"eye_scale": None, "norm_eye_scale": None}
-    w, h = _get_image_dims(sample["image_path"])
-    diag = float(np.sqrt(h * w))
-    nes = round(es / diag, 4) if diag > 0 else None
-    return {"eye_scale": round(es, 1), "norm_eye_scale": nes}
+def _ensure_gallery_sort_loaded(col: str) -> Dict[str, float]:
+    """ギャラリーソート用 per-image min キャッシュを返す（未ロードなら DB から取得）。"""
+    global _gallery_sort_cache
+    if _gallery_sort_cache.get(col) is None:
+        logger.info("gallery sort cache loading: %s", col)
+        _gallery_sort_cache[col] = _db.get_col_min_per_image(col)
+        logger.info("gallery sort cache ready: %s (%d images)", col, len(_gallery_sort_cache[col]))
+    return _gallery_sort_cache[col] or {}
 
 
-def _get_image_dims(image_path: str) -> tuple:
-    """画像の (width, height) を返す。PIL ヘッダ読みでキャッシュする。"""
-    if image_path in _image_dims_cache:
-        return _image_dims_cache[image_path]
-    try:
-        from PIL import Image as _PILImage
-        with _PILImage.open(image_path) as img:
-            dims = img.size  # (w, h)
-    except Exception:
-        dims = (1, 1)
-    _image_dims_cache[image_path] = dims
-    return dims
+def _build_sample_feature_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
+    """サンプルに対応する eye_scale / norm_eye_scale / lap_var を DB カラムから返す。"""
+    es  = sample.get("eye_scale")
+    nes = sample.get("norm_eye_scale")
+    lv  = sample.get("lap_var")
+    return {
+        "eye_scale":      round(es, 1)  if es  is not None else None,
+        "norm_eye_scale": round(nes, 5) if nes is not None else None,
+        "lap_var":        round(lv, 1)  if lv  is not None else None,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +399,7 @@ DUMMY_T1_DIR = "__dummy_t1__"
 def _make_dummy_t1_predictor():
     """常に t=1.0 を返すダミー予測器。"""
     def predict(image_rgb, px, py, qx, qy, is_upper):
-        return 1.0
+        return 0.6666
     return predict
 
 
@@ -568,25 +567,68 @@ def select_models(body: ModelSelectRequest):
 
 @app.get("/api/samples")
 def get_samples_summary():
-    samples = _db.load_all_samples()
+    """サンプル集計を返す。大規模DB対応のため idx リストは含めない。"""
     total, annotated = _db.count_samples()
-
     return {
         "total": total,
         "annotated": annotated,
-        "samples": [
-            {
-                "idx": s["idx"],
-                "image_path": s["image_path"],
-                "part_name": s["part_name"],
-                "sub_key": s["sub_key"],
-                "point_index": s["point_index"],
-                "t": s.get("t"),
-                "skip_flag": s.get("skip_flag", False),
-            }
-            for s in samples
-        ],
+        "annotated_idxs": [],
+        "skipped_idxs": [],
+        "samples": [],
     }
+
+
+# ---------------------------------------------------------------------------
+# Server-side navigation (large-DB対応)
+# ---------------------------------------------------------------------------
+
+@app.get("/api/nav/adjacent/{idx}")
+def nav_adjacent(idx: int, delta: int = 1):
+    """idx から delta 方向の次の非スキップサンプル idx を返す。"""
+    next_idx = _db.get_adjacent_idx(idx, delta)
+    return {"idx": next_idx}
+
+
+@app.get("/api/nav/next_eye/{idx}")
+def nav_next_eye(idx: int):
+    """idx が属する目グループの次の目グループ先頭 idx を返す。"""
+    next_idx = _db.get_next_eye_start_idx(idx)
+    return {"idx": next_idx}
+
+
+@app.get("/api/nav/prev_eye/{idx}")
+def nav_prev_eye(idx: int):
+    """idx が属する目グループの前の目グループ先頭 idx を返す。"""
+    prev_idx = _db.get_prev_eye_start_idx(idx)
+    return {"idx": prev_idx}
+
+
+@app.get("/api/nav/next_unannotated/{idx}")
+def nav_next_unannotated(idx: int):
+    """idx より後の未アノテーション・非スキップの idx を返す（末尾で折り返す）。"""
+    next_idx = _db.get_next_unannotated_idx(idx)
+    return {"idx": next_idx}
+
+
+@app.get("/api/nav/random_unannotated")
+def nav_random_unannotated():
+    """未アノテーション・非スキップのランダムな idx を返す。"""
+    rand_idx = _db.get_random_unannotated_idx()
+    return {"idx": rand_idx}
+
+
+@app.get("/api/nav/first")
+def nav_first():
+    """最初の非スキップサンプルの idx を返す。"""
+    idx = _db.get_first_idx()
+    return {"idx": idx if idx is not None else 0}
+
+
+@app.get("/api/sample_groups")
+def get_sample_groups():
+    """(image_path, face_index, part_name) グループの idx 範囲を返す。"""
+    groups = _db.get_sample_groups()
+    return {"groups": groups}
 
 
 @app.get("/api/resolve_idx/{idx_field}")
@@ -725,7 +767,7 @@ def get_sample(idx: int):
         "point_index": sample["point_index"],
         "image_path": sample["image_path"],
         "skip_flag": sample.get("skip_flag", False),
-        **_build_eye_scale_fields(sample),
+        **_build_sample_feature_fields(sample),
         "image_metadata": _db.get_image_labels(
             _db.DB_PATH, Path(sample["image_path"]).stem
         ),
@@ -763,7 +805,13 @@ def skip_image(idx: int, body: SkipImageRequest):
     updated_count = _db.update_skip_flag(image_path, body.skip)
     _build_image_index()
 
-    return {"ok": True, "updated": updated_count, "skip": body.skip}
+    # Return affected idxs so frontend can update local state
+    with _db._connect(_db.DB_PATH) as conn:
+        affected = [r["idx"] for r in conn.execute(
+            "SELECT idx FROM samples WHERE image_path = ?", (image_path,)
+        ).fetchall()]
+
+    return {"ok": True, "updated": updated_count, "skip": body.skip, "updated_idxs": affected}
 
 
 @app.post("/api/apply_pred_eye/{idx}")
@@ -843,8 +891,9 @@ def get_gallery(
       "eye_scale_desc"       — eye_scale 降順（大→小）
       "norm_eye_scale_asc"   — 正規化 eye_scale 昇順
       "norm_eye_scale_desc"  — 正規化 eye_scale 降順
+      "lap_var_asc"          — lap_var 昇順（ブレが多い→少ない）
+      "lap_var_desc"         — lap_var 降順（シャープ→ブレ）
     """
-    import math
     if _image_index is None or _image_order is None:
         _build_image_index()
 
@@ -855,27 +904,25 @@ def get_gallery(
     elif skip_filter == "skipped":
         filtered_order = [p for p in _image_order if _image_index[p].get("skipped", False)]
 
-    # ソート
-    eye_scale_index = _image_eye_scale or {}
-    if sort_by in ("eye_scale_asc", "eye_scale_desc"):
-        reverse = sort_by == "eye_scale_desc"
+    # ソート（DB カラムの per-image MIN を使用）
+    _SORT_COL_MAP = {
+        "eye_scale_asc":       ("eye_scale",      False),
+        "eye_scale_desc":      ("eye_scale",      True),
+        "norm_eye_scale_asc":  ("norm_eye_scale", False),
+        "norm_eye_scale_desc": ("norm_eye_scale", True),
+        "lap_var_asc":         ("lap_var",        False),
+        "lap_var_desc":        ("lap_var",        True),
+    }
+    sort_col_info = _SORT_COL_MAP.get(sort_by)
+    sort_index: Dict[str, float] = {}
+    if sort_col_info:
+        col, reverse = sort_col_info
+        sort_index = _ensure_gallery_sort_loaded(col)
         filtered_order = sorted(
             filtered_order,
-            key=lambda p: eye_scale_index.get(p, float("inf")),
+            key=lambda p: sort_index.get(p, float("inf")),
             reverse=reverse,
         )
-    elif sort_by in ("norm_eye_scale_asc", "norm_eye_scale_desc"):
-        reverse = sort_by == "norm_eye_scale_desc"
-
-        def _norm_key(p: str) -> float:
-            es = eye_scale_index.get(p)
-            if es is None:
-                return float("inf")
-            w, h = _get_image_dims(p)
-            diag = math.sqrt(w * h)
-            return es / diag if diag > 0 else float("inf")
-
-        filtered_order = sorted(filtered_order, key=_norm_key, reverse=reverse)
 
     total_images = len(filtered_order)
     total_pages = max(1, (total_images + per_page - 1) // per_page)
@@ -885,24 +932,27 @@ def get_gallery(
     end = min(start + per_page, total_images)
     page_images = filtered_order[start:end]
 
+    # 表示用に全ソートキャッシュを取得（バッジ表示用）
+    es_index  = _gallery_sort_cache.get("eye_scale")  or {}
+    nes_index = _gallery_sort_cache.get("norm_eye_scale") or {}
+    lv_index  = _gallery_sort_cache.get("lap_var")    or {}
+
     items = []
     for image_path in page_images:
         entry = _image_index[image_path]
-        eye_scale_val = eye_scale_index.get(image_path)
-        norm_eye_scale_val = None
-        if eye_scale_val is not None:
-            w, h = _get_image_dims(image_path)
-            diag = math.sqrt(w * h)
-            norm_eye_scale_val = round(eye_scale_val / diag, 4) if diag > 0 else None
+        es  = es_index.get(image_path)
+        nes = nes_index.get(image_path)
+        lv  = lv_index.get(image_path)
         items.append({
-            "image_key": Path(image_path).name,
-            "image_path": image_path,
-            "total": entry["total"],
-            "annotated": entry["annotated"],
-            "first_idx": entry["first_pos"],
-            "skipped": entry.get("skipped", False),
-            "eye_scale": round(eye_scale_val, 1) if eye_scale_val is not None else None,
-            "norm_eye_scale": norm_eye_scale_val,
+            "image_key":       Path(image_path).name,
+            "image_path":      image_path,
+            "total":           entry["total"],
+            "annotated":       entry["annotated"],
+            "first_idx":       entry["first_pos"],
+            "skipped":         entry.get("skipped", False),
+            "eye_scale":       round(es,  1) if es  is not None else None,
+            "norm_eye_scale":  round(nes, 5) if nes is not None else None,
+            "lap_var":         round(lv,  1) if lv  is not None else None,
         })
 
     return {
@@ -918,49 +968,26 @@ def get_gallery(
 def get_sample_order(sort_by: str = Query("idx")):
     """ソート順のサンプル idx リストを返す。
 
-    フロントエンドはこのリストを使って前へ/次へナビゲーションを行う。
-    sort_by: "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc"
+    sort_by: "idx" | "eye_scale_asc" | "eye_scale_desc"
+           | "norm_eye_scale_asc" | "norm_eye_scale_desc"
+           | "lap_var_asc" | "lap_var_desc"
     """
-    import math
-    from collections import defaultdict
-
-    all_samples = _db.load_all_samples()
-
     if sort_by == "idx":
-        return {"order": [s["idx"] for s in all_samples]}
+        return {"order": _db.get_sample_order_by_idx()}
 
-    # (image_path, face_index, part_name) → [idx, ...] のグループ化（idx順を維持）
-    groups: Dict[tuple, List[int]] = defaultdict(list)
-    for s in all_samples:
-        groups[(s["image_path"], s["face_index"], s["part_name"])].append(s["idx"])
+    _COL_MAP = {
+        "eye_scale_asc":       ("eye_scale",      "ASC"),
+        "eye_scale_desc":      ("eye_scale",      "DESC"),
+        "norm_eye_scale_asc":  ("norm_eye_scale", "ASC"),
+        "norm_eye_scale_desc": ("norm_eye_scale", "DESC"),
+        "lap_var_asc":         ("lap_var",        "ASC"),
+        "lap_var_desc":        ("lap_var",        "DESC"),
+    }
+    if sort_by in _COL_MAP:
+        col, direction = _COL_MAP[sort_by]
+        return {"order": _db.get_sample_order_by_col(col, direction)}
 
-    eye_scale_map = _db.get_eye_scale_per_eye()
-
-    def _eye_scale_key(group_key: tuple) -> float:
-        return eye_scale_map.get(group_key, float("inf"))
-
-    def _norm_eye_scale_key(group_key: tuple) -> float:
-        image_path = group_key[0]
-        es = eye_scale_map.get(group_key)
-        if es is None:
-            return float("inf")
-        w, h = _get_image_dims(image_path)
-        diag = math.sqrt(w * h)
-        return es / diag if diag > 0 else float("inf")
-
-    reverse = sort_by.endswith("_desc")
-    if sort_by in ("eye_scale_asc", "eye_scale_desc"):
-        sorted_groups = sorted(groups.keys(), key=_eye_scale_key, reverse=reverse)
-    elif sort_by in ("norm_eye_scale_asc", "norm_eye_scale_desc"):
-        sorted_groups = sorted(groups.keys(), key=_norm_eye_scale_key, reverse=reverse)
-    else:
-        sorted_groups = list(groups.keys())
-
-    order: List[int] = []
-    for key in sorted_groups:
-        order.extend(groups[key])
-
-    return {"order": order}
+    raise HTTPException(status_code=400, detail=f"Unknown sort_by: {sort_by}")
 
 
 @app.get("/api/gallery/find_page")
