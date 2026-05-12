@@ -14,6 +14,7 @@ import base64
 import csv
 import io
 import logging
+import logging.handlers
 import os
 import sys
 import threading
@@ -787,10 +788,10 @@ def annotate(idx: int, body: AnnotateRequest):
     if sample is None:
         raise HTTPException(status_code=404, detail=f"サンプル {idx} が見つかりません")
 
+    action_type = "add" if sample.get("t") is None else "modify"
     _db.update_annotation(idx, t_raw)
     _build_image_index()
-
-
+    logger.info("[annotate:%s] idx=%d t=%.4f", action_type, idx, body.t)
     return {"ok": True, "idx": idx, "t": body.t}
 
 
@@ -811,6 +812,7 @@ def skip_image(idx: int, body: SkipImageRequest):
             "SELECT idx FROM samples WHERE image_path = ?", (image_path,)
         ).fetchall()]
 
+    logger.info("[skip] idx=%d skip=%s updated=%d", idx, body.skip, updated_count)
     return {"ok": True, "updated": updated_count, "skip": body.skip, "updated_idxs": affected}
 
 
@@ -855,7 +857,7 @@ def apply_pred_eye(idx: int):
 
     _db.batch_update_t(updates)
     _build_image_index()
-
+    logger.info("[apply_pred] idx=%d updated=%d", idx, len(updates))
     return {"ok": True, "updated": len(updates)}
 
 
@@ -872,7 +874,7 @@ def reset_eye(idx: int):
 
     updated = _db.reset_t_for_eye(image_path, face_index, part_name)
     _build_image_index()
-
+    logger.info("[reset_eye] idx=%d updated=%d", idx, updated)
     return {"ok": True, "updated": updated}
 
 
@@ -1290,4 +1292,14 @@ if __name__ == "__main__":
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
     logging.basicConfig(level=logging.INFO)
+    log_dir = Path(__file__).parent.parent / "logs"
+    log_dir.mkdir(exist_ok=True)
+    _file_handler = logging.handlers.TimedRotatingFileHandler(
+        log_dir / "annotator.log",
+        when="midnight",
+        backupCount=90,
+        encoding="utf-8",
+    )
+    _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    logging.getLogger().addHandler(_file_handler)
     uvicorn.run(app, host="127.0.0.1", port=8000)
