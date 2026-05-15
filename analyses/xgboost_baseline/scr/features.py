@@ -47,6 +47,8 @@ class FeatureConfig:
     use_pose_composite: bool = False     # pose_magnitude, niqe_score_x_pose_magnitude
     use_dataset_percentile: bool = False  # niqe_percentile, eye_scale_percentile
     use_image_features: bool = False      # 目領域の局所画像特徴量 (HOG/LBP/blur/histogram)
+    use_eye_brightness: bool = False      # min_eye_brightness (images.db 由来の画像単位輝度)
+    use_oi_class_features: bool = False   # is_boy/girl/man/woman/person (Open Images 画像ラベル)
     exclude_features: tuple[str, ...] = ()  # 除外する特徴量カラム名
 
 
@@ -152,6 +154,8 @@ def add_dataset_percentile_features(
             ref_sorted = references[src_col]
         else:
             ref_sorted = np.sort(out[src_col].dropna().values)
+            if len(ref_sorted) == 0:
+                continue
             new_refs[src_col] = ref_sorted
         ranks = np.searchsorted(ref_sorted, out[src_col].fillna(ref_sorted[-1]).values)
         out[out_col] = ranks / len(ref_sorted) * 100.0
@@ -316,6 +320,13 @@ def select_feature_columns(
         candidates.extend(["niqe_percentile", "eye_scale_percentile"])
     if cfg.use_image_features:
         candidates.extend(_IMAGE_FEATURE_COLS)
+    if cfg.use_eye_brightness:
+        candidates.append("min_eye_brightness")
+    if cfg.use_oi_class_features:
+        candidates.extend([
+            "is_boy", "is_girl", "is_man", "is_woman", "is_person",
+            "is_sunglasses", "is_glasses", "is_goggles",
+        ])
     if cfg.use_eye_scale:
         candidates.extend(
             ["eye_scale", "norm_eye_scale", "eye_bbox_w", "eye_bbox_h", "eye_aspect"]

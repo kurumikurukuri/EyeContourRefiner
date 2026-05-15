@@ -29,7 +29,9 @@ CLAUDE.md
 # Analysis artifacts (再生成可能)
 *.joblib
 analyses/**/*_predictions*.csv
+analyses/**/predictions_*.csv
 analyses/**/manifest_*.csv
+analyses/**/image_features.parquet
 pipeline_download_register.log.err
 
 # Database files
