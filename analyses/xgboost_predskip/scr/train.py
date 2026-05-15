@@ -317,6 +317,8 @@ def _feature_cfg_from(d: Dict[str, Any]) -> FeatureConfig:
         use_pose_composite=bool(d.get("use_pose_composite", False)),
         use_dataset_percentile=bool(d.get("use_dataset_percentile", False)),
         use_image_features=bool(d.get("use_image_features", False)),
+        use_eye_brightness=bool(d.get("use_eye_brightness", False)),
+        use_oi_class_features=bool(d.get("use_oi_class_features", False)),
         exclude_features=tuple(d.get("exclude_features", [])),
     )
 

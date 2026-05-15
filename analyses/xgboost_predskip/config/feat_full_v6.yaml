@@ -1,12 +1,20 @@
-# hpo_full_v2: feat_full_v2 + Optuna HPO + GroupKFold
-# Phase 3A: リークフリー HPO（GroupKFold で image_path をグループ）
-# 100 trials, 探索空間拡大
+# feat_full_v6: feat_full_v3 + OI class features
+#
+# 追加: use_oi_class_features（is_boy/girl/man/woman/person/sunglasses/glasses/goggles）
+# Open Images 画像ラベル 8 特徴量で性別・眼鏡・サングラスを直接識別
+# 計 58 + 8 = 66 特徴量
 
 data:
   csv_path: "data/samples.csv"
   manifests_dir: "analyses/xgboost_predskip/manifests"
-  outputs_dir: "analyses/xgboost_predskip/outputs/hpo_full_v2"
+  outputs_dir: "analyses/xgboost_predskip/outputs/feat_full_v6"
   image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
+
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  seed: 42
 
 features:
   use_geometry: true
@@ -22,6 +30,8 @@ features:
   use_pose_composite: true
   use_dataset_percentile: true
   use_image_features: true
+  use_eye_brightness: true
+  use_oi_class_features: true
 
 xgboost:
   n_estimators: 2000
@@ -34,19 +44,8 @@ xgboost:
   min_child_weight: 1
   early_stopping_rounds: 50
   random_state: 42
-  verbosity: 0
+  verbosity: 1
   scale_pos_weight: 0.72
-
-kfold:
-  enabled: true
-  n_splits: 5
-  shuffle: true
-  seed: 42
-
-optuna:
-  enabled: true
-  n_trials: 100
-  timeout: null
 
 analysis:
   top_k_misclassified: 500
