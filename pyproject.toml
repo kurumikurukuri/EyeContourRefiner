@@ -52,7 +52,7 @@ dev = [
 Repository = "https://github.com/kurumikurukuri/EyelinerDetector"
 
 [tool.setuptools.packages.find]
-include = ["eyeliner*", "scripts*", "tools*", "annotator*"]
+include = ["eyeliner*", "scripts*", "tools*", "annotator*", "analyses*"]
 
 [tool.pytest.ini_options]
 markers = [

@@ -32,7 +32,7 @@ images.db には全画像の has_face / max_eye_scale / max_lap_var / min_face_y
   python tools/remove_no_face_images.py --no-face --ellipse --dry-run
   
   #条件
-  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 39 --max-eye-brightness 20 --min-eye-brightness 185
+  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 39 --max-face-yaw 45 --max-eye-brightness 20 --min-eye-brightness 185
 
   # 実際に削除
 

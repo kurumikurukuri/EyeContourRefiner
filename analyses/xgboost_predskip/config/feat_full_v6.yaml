@@ -22,8 +22,8 @@ features:
   use_face_pose: true
   use_categorical: true
   use_point_index: true
-  use_cyclical_angle: false
-  use_interactions: false
+  use_cyclical_angle: true
+  use_interactions: true
   use_niqe_score: true
   use_aggregate_features: true
   use_extended_aggregate: true

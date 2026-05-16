@@ -1,0 +1,85 @@
+# feat_full: 全特徴量を有効にした xgboost_baseline の拡張設定
+#
+# baseline との差分:
+#   + use_cyclical_angle: pq_angle を sin/cos に分解
+#   + use_interactions: is_upper × pq_ratio / dist_from_center
+#   + use_niqe_score: 画質スコア
+#   + use_aggregate_features: 眼内ばらつき・左右非対称・顔数・cross-face 姿勢ばらつき
+#   + use_extended_aggregate: pq_dist_eye_range / eye_scale_face_range / niqe_in_img_* / aspect_face_range
+#   + use_pose_composite: pose_magnitude / niqe_score_x_pose_magnitude
+#   + use_dataset_percentile: niqe_percentile / eye_scale_percentile
+#   + use_image_features: HOG / LBP / blur / histogram (14 特徴量、キャッシュ使用)
+#   + use_eye_brightness: min_eye_brightness
+#   + use_oi_class_features: is_boy/girl/man/woman/person/sunglasses/glasses/goggles
+
+# --- データ入出力 ---
+data:
+  csv_path: "data/samples.csv"
+  manifests_dir: "analyses/xgboost_baseline/manifests"
+  outputs_dir: "analyses/xgboost_baseline/outputs/feat_full"
+  image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
+
+# --- 目標変数の前処理 ---
+target:
+  t_resolution: null
+
+# --- 分割 ---
+split:
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+  exclude_skip_flag: true
+  seed: 42
+
+# --- 特徴量 ---
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: true
+  use_interactions: true
+  use_niqe_score: true
+  use_aggregate_features: true
+  use_extended_aggregate: true
+  use_pose_composite: true
+  use_dataset_percentile: true
+  use_image_features: true
+  use_eye_brightness: true
+  use_oi_class_features: true
+
+# --- XGBoost ---
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+
+# --- Quantile Regression ---
+quantile:
+  q_lo: 0.1
+  q_hi: 0.9
+
+# --- IsolationForest ---
+iforest:
+  n_estimators: 200
+  contamination: "auto"
+  max_samples: "auto"
+  random_state: 42
+
+# --- 外れ値統合スコア ---
+outlier:
+  top_k: 500
+  weight_uncertainty: 0.4
+  weight_range_violation: 0.3
+  weight_iforest: 0.3
+  t_valid_min: 0.0
+  t_valid_max: 1.5
