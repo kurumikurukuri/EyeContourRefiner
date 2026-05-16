@@ -109,6 +109,7 @@ def build_experiment_record(
         },
         "data": {
             "data_version": data_version,
+            "max_train_samples": getattr(args, "max_train_samples", None),
             "n_train_samples": n_train_samples,
             "n_holdout_samples": n_holdout_samples,
             "train_images": train_images,
@@ -275,11 +276,15 @@ def mode_kfold(args: argparse.Namespace) -> None:
         exp_dir=exp_dir,
         config=config,
         k_folds=args.k,
+        max_train_samples=getattr(args, "max_train_samples", None),
     )
 
     # 訓練サンプル数・画像リスト取得
     train_records = load_manifest(manifest_path)
     n_train_samples = len(train_records)
+    max_ts = getattr(args, "max_train_samples", None)
+    if max_ts is not None and max_ts < n_train_samples:
+        n_train_samples = max_ts
     train_images = sorted({r["image_path"] for r in train_records})
 
     # Hold-out 画像リスト取得
@@ -515,6 +520,10 @@ def main() -> None:
     parser.add_argument(
         "--save_prediction_train", action="store_true",
         help="訓練セットへのアンサンブル推論結果を prediction_train.csv として保存する",
+    )
+    parser.add_argument(
+        "--max_train_samples", type=int, default=None,
+        help="訓練サンプル上限（学習曲線実験用）。指定時はシード固定ランダムサブサンプリング",
     )
 
     args = parser.parse_args()

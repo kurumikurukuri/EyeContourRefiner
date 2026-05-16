@@ -1,0 +1,26 @@
+# EXP016 S08: 学習曲線実験 (8107 サンプル)
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -2.0
+patch_t_max: 3.0
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 64
+label_t_min: -1
+label_t_max: 2
+t_quant_step: null
+max_train_samples: 8107

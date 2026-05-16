@@ -41,15 +41,17 @@ def run_kfold(
     config: TrainConfig,
     k_folds: int = 5,
     holdout_path: str | Path | None = None,
+    max_train_samples: int | None = None,
 ) -> list[FoldResult]:
     """K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
 
     Args:
-        manifest_path: manifest.csv のパス（訓練・CV 用、Hold-out を除いたもの）
-        exp_dir:       実験ディレクトリ（モデル・ログを保存）
-        config:        訓練設定
-        k_folds:       Fold 数
-        holdout_path:  Hold-out セットのパス（現在は未使用、Phase 2 で利用）
+        manifest_path:     manifest.csv のパス（訓練・CV 用、Hold-out を除いたもの）
+        exp_dir:           実験ディレクトリ（モデル・ログを保存）
+        config:            訓練設定
+        k_folds:           Fold 数
+        holdout_path:      Hold-out セットのパス（現在は未使用、Phase 2 で利用）
+        max_train_samples: 訓練サンプル上限（None = 全件使用）。超過時はシード固定ランダムサブサンプリング
 
     Returns:
         list[FoldResult] — 各 Fold の結果
@@ -61,6 +63,14 @@ def run_kfold(
 
     records = load_manifest(manifest_path)
     compute_eye_meta(records)
+
+    if max_train_samples is not None and len(records) > max_train_samples:
+        original_count = len(records)
+        rng = np.random.RandomState(config.seed)
+        chosen = sorted(rng.choice(original_count, size=max_train_samples, replace=False))
+        records = [records[i] for i in chosen]
+        logger.info("サブサンプリング: %d → %d サンプル", original_count, len(records))
+
     logger.info("訓練データ: %d サンプル", len(records))
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
