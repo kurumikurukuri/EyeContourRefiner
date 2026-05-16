@@ -11,22 +11,31 @@ images.db には全画像の has_face / max_eye_scale / max_lap_var / min_face_y
 ===============================================================================
 フィルタ
 ===============================================================================
-  --no-face            顔が 1 つも検出されていない
-  --min-eye-scale PX   max_eye_scale < 閾値
-  --max-face-yaw DEG   min_face_yaw > 閾値（全顔が横顔すぎる）
-  --min-lap-var VAR    max_lap_var < 閾値
-  --ellipse            楕円フィルタ (scale/66)^2 + (lap/240)^2 < 1
-  --ellipse-a A        楕円の scale 軸 (default: 66)
-  --ellipse-b B        楕円の lap 軸 (default: 240)
+  --no-face              顔が 1 つも検出されていない
+  --min-eye-scale PX     max_eye_scale < 閾値
+  --max-face-yaw DEG     min_face_yaw > 閾値（全顔が横顔すぎる）
+  --max-face-pitch DEG   min_face_pitch > 閾値（全顔が上向き/下向きすぎる）
+  --max-face-roll DEG    min_face_roll > 閾値（全顔が傾きすぎる）
+  --max-faces N          n_faces > 閾値（複数顔を除去）
+  --min-lap-var VAR      max_lap_var < 閾値
+  --ellipse              楕円フィルタ (scale/66)^2 + (lap/240)^2 < 1
+  --ellipse-a A          楕円の scale 軸 (default: 66)
+  --ellipse-b B          楕円の lap 軸 (default: 240)
+  --max-eye-brightness B max_eye_brightness < 閾値（暗すぎ・サングラス検出: max(全眼) < B）
+  --min-eye-brightness B min_eye_brightness > 閾値（明るすぎ・露出過多検出: min(全眼) > B）
+                         --max + --min でバンドパスフィルタとして使用可
 
 ===============================================================================
 使い方
 ===============================================================================
   # dry-run
   python tools/remove_no_face_images.py --no-face --ellipse --dry-run
+  
+  #条件
+  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 39 --max-eye-brightness 20 --min-eye-brightness 185
 
   # 実際に削除
-  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 35
+
 
   # 強制（アノテーション済み含む）
   python tools/remove_no_face_images.py --no-face --ellipse --force
@@ -61,9 +70,14 @@ def _build_where(
     no_face: bool = False,
     min_eye_scale: float | None = None,
     max_face_yaw: float | None = None,
+    max_face_pitch: float | None = None,
+    max_face_roll: float | None = None,
+    max_n_faces: int | None = None,
     min_lap_var: float | None = None,
     ellipse_a: float | None = None,
     ellipse_b: float | None = None,
+    max_eye_brightness: float | None = None,
+    min_eye_brightness: float | None = None,
 ) -> str:
     """レジストリ DB に対する WHERE 句を構築する。"""
     conditions: list[str] = []
@@ -75,7 +89,16 @@ def _build_where(
         conditions.append(f"(max_eye_scale IS NULL OR max_eye_scale < {min_eye_scale})")
 
     if max_face_yaw is not None:
-        conditions.append(f"(min_face_yaw IS NULL OR min_face_yaw > {max_face_yaw})")
+        conditions.append(f"(min_face_yaw IS NOT NULL AND min_face_yaw > {max_face_yaw})")
+
+    if max_face_pitch is not None:
+        conditions.append(f"(min_face_pitch IS NOT NULL AND min_face_pitch > {max_face_pitch})")
+
+    if max_face_roll is not None:
+        conditions.append(f"(min_face_roll IS NOT NULL AND min_face_roll > {max_face_roll})")
+
+    if max_n_faces is not None:
+        conditions.append(f"(n_faces IS NOT NULL AND n_faces > {max_n_faces})")
 
     if min_lap_var is not None:
         conditions.append(f"(max_lap_var IS NULL OR max_lap_var < {min_lap_var})")
@@ -85,6 +108,20 @@ def _build_where(
             f"(max_eye_scale IS NULL OR max_lap_var IS NULL OR "
             f"(max_eye_scale / {ellipse_a}) * (max_eye_scale / {ellipse_a}) + "
             f"(max_lap_var / {ellipse_b}) * (max_lap_var / {ellipse_b}) < 1)"
+        )
+
+    if max_eye_brightness is not None:
+        # max(全眼) < threshold: 最も明るい目でも暗い → サングラス
+        conditions.append(
+            f"(has_face = 1 AND "
+            f"(max_eye_brightness IS NULL OR max_eye_brightness < {max_eye_brightness}))"
+        )
+
+    if min_eye_brightness is not None:
+        # min(全眼) > threshold: 最も暗い目でも明るい → 露出過多
+        conditions.append(
+            f"(has_face = 1 AND "
+            f"(min_eye_brightness IS NOT NULL AND min_eye_brightness > {min_eye_brightness}))"
         )
 
     if not conditions:
@@ -97,20 +134,34 @@ def query_delete_candidates(
     no_face: bool = False,
     min_eye_scale: float | None = None,
     max_face_yaw: float | None = None,
+    max_face_pitch: float | None = None,
+    max_face_roll: float | None = None,
+    max_n_faces: int | None = None,
     min_lap_var: float | None = None,
     ellipse_a: float | None = None,
     ellipse_b: float | None = None,
+    max_eye_brightness: float | None = None,
+    min_eye_brightness: float | None = None,
 ) -> list[dict]:
     """削除候補の image_path リストを返す。"""
     where = _build_where(
         no_face=no_face,
         min_eye_scale=min_eye_scale,
         max_face_yaw=max_face_yaw,
+        max_face_pitch=max_face_pitch,
+        max_face_roll=max_face_roll,
+        max_n_faces=max_n_faces,
         min_lap_var=min_lap_var,
         ellipse_a=ellipse_a,
         ellipse_b=ellipse_b,
+        max_eye_brightness=max_eye_brightness,
+        min_eye_brightness=min_eye_brightness,
     )
-    sql = f"SELECT image_path, has_face, max_eye_scale, max_lap_var, min_face_yaw FROM images WHERE {where}"
+    sql = (
+        f"SELECT image_path, has_face, max_eye_scale, max_lap_var, "
+        f"min_face_yaw, min_face_pitch, min_face_roll, n_faces, "
+        f"min_eye_brightness FROM images WHERE {where}"
+    )
     log.info("query: %s", sql)
     rows = conn.execute(sql).fetchall()
     return [
@@ -120,6 +171,10 @@ def query_delete_candidates(
             "max_eye_scale": r[2],
             "max_lap_var": r[3],
             "min_face_yaw": r[4],
+            "min_face_pitch": r[5],
+            "min_face_roll": r[6],
+            "n_faces": r[7],
+            "min_eye_brightness": r[8],
         }
         for r in rows
     ]
@@ -197,10 +252,15 @@ def main(
     no_face: bool = False,
     min_eye_scale: float | None = None,
     max_face_yaw: float | None = None,
+    max_face_pitch: float | None = None,
+    max_face_roll: float | None = None,
+    max_n_faces: int | None = None,
     min_lap_var: float | None = None,
     ellipse: bool = False,
     ellipse_a: float = 66,
     ellipse_b: float = 240,
+    max_eye_brightness: float | None = None,
+    min_eye_brightness: float | None = None,
 ) -> None:
     if not REGISTRY_DB.exists():
         log.error(
@@ -223,9 +283,14 @@ def main(
         no_face=no_face,
         min_eye_scale=min_eye_scale,
         max_face_yaw=max_face_yaw,
+        max_face_pitch=max_face_pitch,
+        max_face_roll=max_face_roll,
+        max_n_faces=max_n_faces,
         min_lap_var=min_lap_var,
         ellipse_a=ea,
         ellipse_b=eb,
+        max_eye_brightness=max_eye_brightness,
+        min_eye_brightness=min_eye_brightness,
     )
 
     if not candidates:
@@ -239,12 +304,16 @@ def main(
     # detail
     for c in candidates[:20]:
         log.info(
-            "  %s  face=%d  scale=%s  lap=%s  yaw=%s",
+            "  %s  face=%d  scale=%s  lap=%s  yaw=%s  pitch=%s  roll=%s  n=%s  bright=%s",
             c["image_path"],
             c["has_face"],
             f'{c["max_eye_scale"]:.0f}' if c["max_eye_scale"] is not None else "-",
             f'{c["max_lap_var"]:.0f}' if c["max_lap_var"] is not None else "-",
             f'{c["min_face_yaw"]:.1f}' if c["min_face_yaw"] is not None else "-",
+            f'{c["min_face_pitch"]:.1f}' if c["min_face_pitch"] is not None else "-",
+            f'{c["min_face_roll"]:.1f}' if c["min_face_roll"] is not None else "-",
+            str(c["n_faces"]) if c["n_faces"] is not None else "-",
+            f'{c["min_eye_brightness"]:.0f}' if c["min_eye_brightness"] is not None else "-",
         )
     if len(candidates) > 20:
         log.info("  ... and %d more", len(candidates) - 20)
@@ -301,10 +370,22 @@ if __name__ == "__main__":
     parser.add_argument("--no-face", action="store_true", help="顔なし画像を削除")
     parser.add_argument("--min-eye-scale", type=float, default=None, metavar="PX")
     parser.add_argument("--max-face-yaw", type=float, default=None, metavar="DEG")
+    parser.add_argument("--max-face-pitch", type=float, default=None, metavar="DEG")
+    parser.add_argument("--max-face-roll", type=float, default=None, metavar="DEG")
+    parser.add_argument("--max-faces", type=int, default=None, metavar="N",
+                        help="n_faces > 閾値の画像を削除（複数顔）")
     parser.add_argument("--min-lap-var", type=float, default=None, metavar="VAR")
     parser.add_argument("--ellipse", action="store_true", help="楕円フィルタ有効")
     parser.add_argument("--ellipse-a", type=float, default=66, metavar="A")
     parser.add_argument("--ellipse-b", type=float, default=240, metavar="B")
+    parser.add_argument(
+        "--max-eye-brightness", type=float, default=None, metavar="BRIGHT",
+        help="min_eye_brightness < 閾値の画像を削除（暗すぎ・サングラス検出、推奨: 80）",
+    )
+    parser.add_argument(
+        "--min-eye-brightness", type=float, default=None, metavar="BRIGHT",
+        help="min_eye_brightness > 閾値の画像を削除（明るすぎ・露出過多検出、推奨: 220）",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
@@ -315,8 +396,13 @@ if __name__ == "__main__":
         no_face=args.no_face,
         min_eye_scale=args.min_eye_scale,
         max_face_yaw=args.max_face_yaw,
+        max_face_pitch=args.max_face_pitch,
+        max_face_roll=args.max_face_roll,
+        max_n_faces=args.max_faces,
         min_lap_var=args.min_lap_var,
         ellipse=args.ellipse,
         ellipse_a=args.ellipse_a,
         ellipse_b=args.ellipse_b,
+        max_eye_brightness=args.max_eye_brightness,
+        min_eye_brightness=args.min_eye_brightness,
     )

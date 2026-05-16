@@ -95,6 +95,7 @@ class TransferModel(nn.Module):
         use_sigmoid: bool = False,
         use_distance_from_center: bool = False,
         use_norm_eye_scale: bool = False,
+        use_is_upper: bool = True,
     ) -> None:
         super().__init__()
         self.backbone_name = backbone_name
@@ -102,12 +103,13 @@ class TransferModel(nn.Module):
         self.use_sigmoid = use_sigmoid
         self.use_distance_from_center = use_distance_from_center
         self.use_norm_eye_scale = use_norm_eye_scale
+        self.use_is_upper = use_is_upper
         feat_dim = BACKBONE_FEAT_DIMS[backbone_name]
 
         self.backbone = _build_backbone_features(backbone_name, pretrained)
         self.pool = nn.AdaptiveAvgPool2d((1, 32))
 
-        scalar_in = 1 + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
+        scalar_in = int(use_is_upper) + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
         regressor_in = feat_dim * 32 + scalar_in
         regressor_layers: list[nn.Module] = [
             nn.Linear(regressor_in, 256),
@@ -133,7 +135,9 @@ class TransferModel(nn.Module):
         feat = self.backbone(x)           # (B, C, H', W')
         feat = self.pool(feat)            # (B, C, 1, 32)
         feat = feat.view(x.size(0), -1)  # (B, C*32)
-        scalars = [feat, is_upper]
+        scalars = [feat]
+        if self.use_is_upper:
+            scalars.append(is_upper)
         if self.use_pq_ratio and pq_ratio is not None:
             scalars.append(pq_ratio)
         if self.use_distance_from_center and dist_from_center is not None:

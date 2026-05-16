@@ -47,6 +47,11 @@ CREATE TABLE IF NOT EXISTS images (
     max_eye_scale REAL,
     max_lap_var   REAL,
     min_face_yaw  REAL,
+    min_face_pitch REAL,
+    min_face_roll  REAL,
+    n_faces        INTEGER,
+    min_eye_brightness REAL,
+    max_eye_brightness REAL,
     source      TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_has_face ON images(has_face);
@@ -210,6 +215,9 @@ def _extract_features_one(image_path_str: str) -> dict:
         "max_eye_scale": None,
         "max_lap_var": None,
         "min_face_yaw": None,
+        "min_face_pitch": None,
+        "min_face_roll": None,
+        "n_faces": None,
         "source": "mediapipe",
     }
     try:
@@ -272,8 +280,10 @@ def _extract_features_one(image_path_str: str) -> dict:
     if lap_vars:
         result["max_lap_var"] = max(lap_vars)
 
-    # face_yaw
+    # face_yaw / pitch / roll / n_faces
     yaws: list[float] = []
+    pitches: list[float] = []
+    rolls: list[float] = []
     for lm_list in face_landmarks_list:
         landmarks_xyz = np.array(
             [[lm.x * img_w, lm.y * img_h, lm.z * img_w] for lm in lm_list.landmark],
@@ -281,8 +291,15 @@ def _extract_features_one(image_path_str: str) -> dict:
         orient = compute_face_orientation(landmarks_xyz, img_w, img_h)
         if orient is not None:
             yaws.append(abs(orient[0]))
+            pitches.append(abs(orient[1]))
+            rolls.append(abs(orient[2]))
     if yaws:
         result["min_face_yaw"] = min(yaws)
+    if pitches:
+        result["min_face_pitch"] = min(pitches)
+    if rolls:
+        result["min_face_roll"] = min(rolls)
+    result["n_faces"] = len(face_landmarks_list)
 
     return result
 
@@ -295,6 +312,11 @@ def _extract_features_from_rgb(rgb: np.ndarray, face_mesh) -> dict:
         "max_eye_scale": None,
         "max_lap_var": None,
         "min_face_yaw": None,
+        "min_face_pitch": None,
+        "min_face_roll": None,
+        "n_faces": None,
+        "min_eye_brightness": None,
+        "max_eye_brightness": None,
     }
 
     fmesh = face_mesh.process(rgb)
@@ -338,8 +360,33 @@ def _extract_features_from_rgb(rgb: np.ndarray, face_mesh) -> dict:
     if lap_vars:
         result["max_lap_var"] = max(lap_vars)
 
-    # face_yaw
+    # eye brightness
+    #   max_eye_brightness = max(全眼): 最も明るい目でも暗い → サングラス検出
+    #   min_eye_brightness = min(全眼): 最も暗い目でも明るい → 露出過多検出
+    all_eye_vals: list[float] = []
+    for lm_list in face_landmarks_list:
+        for eye_indices in (_LEFT_EYE_CONTOUR, _RIGHT_EYE_CONTOUR):
+            pts = np.array(
+                [[lm_list.landmark[i].x * img_w, lm_list.landmark[i].y * img_h]
+                 for i in eye_indices], dtype=np.int32)
+            x, y, w, h = cv2.boundingRect(pts)
+            x1 = max(0, x)
+            y1 = max(0, y)
+            x2 = min(img_w, x + w)
+            y2 = min(img_h, y + h)
+            if x2 <= x1 or y2 <= y1:
+                continue
+            patch = rgb[y1:y2, x1:x2]
+            gray = cv2.cvtColor(patch, cv2.COLOR_RGB2GRAY)
+            all_eye_vals.append(float(gray.mean()))
+    if all_eye_vals:
+        result["max_eye_brightness"] = max(all_eye_vals)
+        result["min_eye_brightness"] = min(all_eye_vals)
+
+    # face_yaw / pitch / roll / n_faces
     yaws: list[float] = []
+    pitches: list[float] = []
+    rolls: list[float] = []
     for lm_list in face_landmarks_list:
         landmarks_xyz = np.array(
             [[lm.x * img_w, lm.y * img_h, lm.z * img_w] for lm in lm_list.landmark],
@@ -347,8 +394,15 @@ def _extract_features_from_rgb(rgb: np.ndarray, face_mesh) -> dict:
         orient = compute_face_orientation(landmarks_xyz, img_w, img_h)
         if orient is not None:
             yaws.append(abs(orient[0]))
+            pitches.append(abs(orient[1]))
+            rolls.append(abs(orient[2]))
     if yaws:
         result["min_face_yaw"] = min(yaws)
+    if pitches:
+        result["min_face_pitch"] = min(pitches)
+    if rolls:
+        result["min_face_roll"] = min(rolls)
+    result["n_faces"] = len(face_landmarks_list)
 
     return result
 
@@ -423,11 +477,14 @@ def scan_phase2_features(conn: sqlite3.Connection, workers: int = 1) -> int:
             conn.execute(
                 """UPDATE images SET
                     has_face = ?, max_eye_scale = ?, max_lap_var = ?,
-                    min_face_yaw = ?, source = ?
+                    min_face_yaw = ?, min_face_pitch = ?, min_face_roll = ?,
+                    n_faces = ?, min_eye_brightness = ?, max_eye_brightness = ?, source = ?
                 WHERE image_path = ?""",
                 (result["has_face"], result["max_eye_scale"],
                  result["max_lap_var"], result["min_face_yaw"],
-                 "mediapipe", p),
+                 result.get("min_face_pitch"), result.get("min_face_roll"),
+                 result.get("n_faces"), result.get("min_eye_brightness"),
+                 result.get("max_eye_brightness"), "mediapipe", p),
             )
             updated += 1
             if i % 500 == 0:
@@ -455,11 +512,14 @@ def scan_phase2_features(conn: sqlite3.Connection, workers: int = 1) -> int:
                     conn.execute(
                         """UPDATE images SET
                             has_face = ?, max_eye_scale = ?, max_lap_var = ?,
-                            min_face_yaw = ?, source = ?
+                            min_face_yaw = ?, min_face_pitch = ?, min_face_roll = ?,
+                            n_faces = ?, min_eye_brightness = ?, max_eye_brightness = ?, source = ?
                         WHERE image_path = ?""",
                         (result["has_face"], result["max_eye_scale"],
                          result["max_lap_var"], result["min_face_yaw"],
-                         "mediapipe", p),
+                         result.get("min_face_pitch"), result.get("min_face_roll"),
+                         result.get("n_faces"), result.get("min_eye_brightness"),
+                         result.get("max_eye_brightness"), "mediapipe", p),
                     )
                     updated += 1
 
@@ -474,6 +534,127 @@ def scan_phase2_features(conn: sqlite3.Connection, workers: int = 1) -> int:
 
     elapsed = time.time() - t0
     log.info("Phase 2 done: %d images in %.1f min (%.1f img/s)", updated, elapsed / 60, updated / elapsed)
+    return updated
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: pitch / roll / n_faces / min_eye_brightness を既存画像に補完
+# ---------------------------------------------------------------------------
+
+def _process_batch_pose(image_paths: list[str]) -> list[tuple[str, dict]]:
+    """Phase 3 用バッチワーカー。pose / brightness のみを返す。"""
+    import mediapipe as mp
+
+    face_mesh = mp.solutions.face_mesh.FaceMesh(
+        static_image_mode=True,
+        max_num_faces=10,
+        refine_landmarks=True,
+    )
+    results: list[tuple[str, dict]] = []
+    for p in image_paths:
+        image_path = IMAGES_DIR / p
+        bgr = cv2.imread(str(image_path))
+        if bgr is None:
+            results.append((p, {}))
+        else:
+            rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            r = _extract_features_from_rgb(rgb, face_mesh)
+            results.append((p, r))
+    face_mesh.close()
+    return results
+
+
+def scan_phase3_pose(conn: sqlite3.Connection, workers: int = 1) -> int:
+    """Phase 3: has_face=1 かつ min_face_pitch IS NULL の画像に pose/brightness を補完。
+
+    既存の has_face / max_eye_scale / max_lap_var / min_face_yaw は上書きしない。
+    """
+    cur = conn.cursor()
+    targets = cur.execute(
+        "SELECT image_path FROM images WHERE has_face = 1"
+        " AND (min_face_pitch IS NULL OR min_eye_brightness IS NULL OR max_eye_brightness IS NULL)"
+    ).fetchall()
+
+    if not targets:
+        log.info("no targets for phase 3 (all images already have pose data)")
+        return 0
+
+    paths = [row[0] for row in targets]
+    total = len(paths)
+    log.info("Phase 3: pose/brightness patch on %d images (workers=%d)", total, workers)
+
+    updated = 0
+    t0 = time.time()
+
+    def _patch(conn: sqlite3.Connection, p: str, r: dict) -> None:
+        conn.execute(
+            """UPDATE images SET
+                min_face_pitch = ?, min_face_roll = ?,
+                n_faces = ?, min_eye_brightness = ?, max_eye_brightness = ?
+            WHERE image_path = ?""",
+            (r.get("min_face_pitch"), r.get("min_face_roll"),
+             r.get("n_faces"), r.get("min_eye_brightness"),
+             r.get("max_eye_brightness"), p),
+        )
+
+    if workers <= 1:
+        try:
+            import mediapipe as mp
+        except ImportError:
+            log.error("mediapipe not installed")
+            return 0
+
+        face_mesh = mp.solutions.face_mesh.FaceMesh(
+            static_image_mode=True,
+            max_num_faces=10,
+            refine_landmarks=True,
+        )
+        for i, p in enumerate(paths, 1):
+            image_path = IMAGES_DIR / p
+            bgr = cv2.imread(str(image_path))
+            r: dict = {}
+            if bgr is not None:
+                rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                r = _extract_features_from_rgb(rgb, face_mesh)
+            _patch(conn, p, r)
+            updated += 1
+            if i % 500 == 0:
+                conn.commit()
+                elapsed = time.time() - t0
+                rate = i / elapsed
+                eta_min = (total - i) / rate / 60 if rate > 0 else 0
+                log.info("  phase3: %d/%d (%.0f%%)  %.1f img/s  ETA %.0f min",
+                         i, total, i / total * 100, rate, eta_min)
+        face_mesh.close()
+
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        chunk_size = max(50, len(paths) // (workers * 10))
+        chunks = [paths[i:i + chunk_size] for i in range(0, len(paths), chunk_size)]
+        log.info("  %d chunks of ~%d images each", len(chunks), chunk_size)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_process_batch_pose, chunk): i
+                       for i, chunk in enumerate(chunks)}
+
+            for future in as_completed(futures):
+                for p, r in future.result():
+                    _patch(conn, p, r)
+                    updated += 1
+
+                if updated % 1000 == 0:
+                    conn.commit()
+                    elapsed = time.time() - t0
+                    rate = updated / elapsed
+                    eta_min = (total - updated) / rate / 60 if rate > 0 else 0
+                    log.info("  phase3: %d/%d (%.0f%%)  %.1f img/s  ETA %.0f min",
+                             updated, total, updated / total * 100, rate, eta_min)
+
+    conn.commit()
+
+    elapsed = time.time() - t0
+    log.info("Phase 3 done: %d images in %.1f min (%.1f img/s)", updated, elapsed / 60, updated / elapsed)
     return updated
 
 
@@ -494,6 +675,19 @@ def build_registry(
 
     conn = sqlite3.connect(str(REGISTRY_DB))
     conn.executescript(SCHEMA)
+    # 既存 DB への列追加マイグレーション
+    for col_def in [
+        "min_eye_brightness REAL",
+        "max_eye_brightness REAL",
+        "min_face_pitch REAL",
+        "min_face_roll REAL",
+        "n_faces INTEGER",
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE images ADD COLUMN {col_def}")
+            conn.commit()
+        except sqlite3.OperationalError:
+            pass  # 列がすでに存在する場合は無視
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
 
@@ -519,6 +713,9 @@ def build_registry(
     if phase in ("2", "all"):
         scan_phase2_features(conn, workers=workers)
 
+    if phase in ("3", "all"):
+        scan_phase3_pose(conn, workers=workers)
+
     # Stats
     stats = conn.execute(
         "SELECT source, COUNT(*) as cnt FROM images GROUP BY source"
@@ -543,8 +740,8 @@ if __name__ == "__main__":
     parser.add_argument("--force", action="store_true", help="既存 DB を破棄して再構築")
     parser.add_argument("--workers", type=int, default=1, help="並列数 (default: 1)")
     parser.add_argument(
-        "--phase", choices=["1", "2", "all"], default="all",
-        help="1=顔検出のみ, 2=特徴量のみ, all=両方 (default: all)",
+        "--phase", choices=["1", "2", "3", "all"], default="all",
+        help="1=顔検出のみ, 2=特徴量のみ, 3=pose/brightness補完のみ, all=すべて (default: all)",
     )
     args = parser.parse_args()
 

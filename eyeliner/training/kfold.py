@@ -140,6 +140,7 @@ def run_kfold(
             num_conv_layers=config.num_conv_layers,
             use_distance_from_center=config.use_distance_from_center,
             use_norm_eye_scale=config.use_norm_eye_scale,
+            use_is_upper=config.use_is_upper,
             dropout_rate=config.dropout_rate,
         ).to(device)
 

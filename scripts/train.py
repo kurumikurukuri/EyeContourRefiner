@@ -97,6 +97,7 @@ def build_experiment_record(
             "loss_delta": args.loss_delta,
             "use_distance_from_center": args.use_distance_from_center,
             "use_norm_eye_scale": args.use_norm_eye_scale,
+            "use_is_upper": not args.no_is_upper,
             "use_logit_target": args.use_logit_target,
             "patch_h": args.patch_h,
             "patch_w": args.patch_w,
@@ -157,8 +158,16 @@ def _save_prediction_train_csv(
     all_preds: list[float] = []
     ensemble.eval()
     with torch.no_grad():
-        for x, is_upper, pq_ratio, *_ in loader:
-            pred = ensemble(x.to(device), is_upper.to(device), pq_ratio.to(device))
+        for batch in loader:
+            x = batch[0].to(device)
+            is_upper = batch[1].to(device)
+            pq_ratio = batch[2].to(device)
+            kwargs = {"pq_ratio": pq_ratio}
+            if args.use_distance_from_center:
+                kwargs["dist_from_center"] = batch[6].to(device)
+            if args.use_norm_eye_scale:
+                kwargs["norm_eye_scale"] = batch[7].to(device)
+            pred = ensemble(x, is_upper, **kwargs)
             all_preds.extend(pred.squeeze(-1).cpu().tolist())
 
     csv_path = exp_dir / "prediction_train.csv"
@@ -241,6 +250,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         loss_delta=args.loss_delta,
         use_distance_from_center=args.use_distance_from_center,
         use_norm_eye_scale=args.use_norm_eye_scale,
+        use_is_upper=not args.no_is_upper,
         use_logit_target=args.use_logit_target,
         use_t_norm=args.use_t_norm,
         dropout_rate=args.dropout_rate,
@@ -433,6 +443,10 @@ def main() -> None:
     parser.add_argument(
         "--use_norm_eye_scale", action="store_true",
         help="eye_scale / sqrt(img_H * img_W) をモデルの追加スカラー入力として使用する",
+    )
+    parser.add_argument(
+        "--no_is_upper", action="store_true",
+        help="is_upper スカラー入力を無効化する（極座標で代替する場合に使用）",
     )
     parser.add_argument(
         "--use_logit_target", action="store_true",
