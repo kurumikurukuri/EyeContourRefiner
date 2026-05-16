@@ -20,6 +20,7 @@ import yaml
 
 from analyses.xgboost_baseline.scr.features import (
     FeatureConfig,
+    add_dataset_percentile_features,
     build_feature_matrix,
     enrich_all,
 )
@@ -343,6 +344,13 @@ def _feature_cfg_from(d: Dict[str, Any]) -> FeatureConfig:
         use_cyclical_angle=bool(d.get("use_cyclical_angle", False)),
         use_interactions=bool(d.get("use_interactions", False)),
         use_niqe_score=bool(d.get("use_niqe_score", False)),
+        use_aggregate_features=bool(d.get("use_aggregate_features", False)),
+        use_extended_aggregate=bool(d.get("use_extended_aggregate", False)),
+        use_pose_composite=bool(d.get("use_pose_composite", False)),
+        use_dataset_percentile=bool(d.get("use_dataset_percentile", False)),
+        use_image_features=bool(d.get("use_image_features", False)),
+        use_eye_brightness=bool(d.get("use_eye_brightness", False)),
+        use_oi_class_features=bool(d.get("use_oi_class_features", False)),
     )
 
 
@@ -458,6 +466,7 @@ def main() -> None:
     target_cfg = _target_cfg_from(cfg.get("target", {}))
     kfold_cfg = _kfold_cfg_from(cfg.get("kfold", {}))
     optuna_cfg = _optuna_cfg_from(cfg.get("optuna", {}))
+    image_cache_path: Optional[str] = cfg.get("data", {}).get("image_cache_path", None)
 
     # --- データ読み込み ---
     manifests = _load_manifests(manifests_dir)
@@ -470,7 +479,9 @@ def main() -> None:
     )
 
     # --- train 特徴量（median 統計量を固定）---
-    train_feat, feat_cols, _ = build_feature_matrix(manifests["train"], feat_cfg)
+    train_feat, feat_cols, percentile_refs = build_feature_matrix(
+        manifests["train"], feat_cfg, image_cache_path=image_cache_path
+    )
     train_medians = train_feat.median(numeric_only=True)
     if feat_cfg.use_niqe_score and "niqe_score" in feat_cols:
         train_medians["niqe_score"] = manifests["train"]["niqe_score"].max()
@@ -480,7 +491,9 @@ def main() -> None:
     # val / test / unlabeled: 同じカラム集合 + train の median で埋める
     def _prepare(name: str) -> pd.DataFrame:
         df = manifests[name]
-        enriched = enrich_all(df, feat_cfg)
+        enriched = enrich_all(df, feat_cfg, image_cache_path=image_cache_path)
+        if feat_cfg.use_dataset_percentile:
+            enriched, _ = add_dataset_percentile_features(enriched, percentile_refs)
         for c in feat_cols:
             if c not in enriched.columns:
                 enriched[c] = np.nan
@@ -552,6 +565,11 @@ def main() -> None:
     _save_model(m_hi, outputs_dir / "xgb_q_hi.joblib")
     _save_model(m_if, outputs_dir / "iforest.joblib")
     train_medians.to_csv(outputs_dir / "train_medians.csv")
+    # percentile_refs を保存（推論時に同じ参照分布を使うため）
+    serializable_refs = {k: v.tolist() for k, v in percentile_refs.items()}
+    (outputs_dir / "percentile_refs.json").write_text(
+        json.dumps(serializable_refs, ensure_ascii=False), encoding="utf-8"
+    )
     (outputs_dir / "feature_columns.json").write_text(
         json.dumps(feat_cols, ensure_ascii=False, indent=2), encoding="utf-8"
     )

@@ -23,15 +23,14 @@ import yaml
 
 from analyses.xgboost_baseline.scr.features import (
     FeatureConfig,
-    add_categorical_features,
-    add_cyclical_features,
-    add_geometry_features,
-    add_interaction_features,
+    add_dataset_percentile_features,
+    enrich_all,
 )
-# KFoldEnsemble を __main__ スコープに持ち込む。
-# train_exp015 を __main__ として実行したとき pickle は __main__.KFoldEnsemble として
-# クラスを記録するため、infer 側でも同名で参照できるよう import する。
-from analyses.xgboost_baseline.scr.train import KFoldEnsemble  # noqa: F401
+from analyses.xgboost_baseline.scr.train import (  # noqa: F401
+    KFoldEnsemble,
+    _feature_cfg_from,
+)
+
 
 logger = logging.getLogger(__name__)
 
@@ -122,17 +121,30 @@ def prepare_features(
     df: pd.DataFrame,
     feature_columns: List[str],
     train_medians: pd.Series,
+    feat_cfg: FeatureConfig | None = None,
+    percentile_refs: dict | None = None,
+    image_cache_path: str | None = None,
 ) -> pd.DataFrame:
-    # 全エンリッチメントを無条件に実行する。feature_columns に含まれない列は後段で無視される。
-    enriched = add_geometry_features(df)
-    enriched = add_categorical_features(enriched)
-    enriched = add_cyclical_features(enriched)
-    enriched = add_interaction_features(enriched)
+    if feat_cfg is not None:
+        enriched = enrich_all(df, feat_cfg, image_cache_path=image_cache_path)
+        if feat_cfg.use_dataset_percentile and percentile_refs:
+            enriched, _ = add_dataset_percentile_features(enriched, percentile_refs)
+    else:
+        # 後方互換: feat_cfg がない場合は geometry + categorical のみ
+        from analyses.xgboost_baseline.scr.features import (
+            add_categorical_features,
+            add_cyclical_features,
+            add_geometry_features,
+            add_interaction_features,
+        )
+        enriched = add_geometry_features(df)
+        enriched = add_categorical_features(enriched)
+        enriched = add_cyclical_features(enriched)
+        enriched = add_interaction_features(enriched)
     for c in feature_columns:
         if c not in enriched.columns:
             enriched[c] = np.nan
-    feat = enriched[feature_columns].astype(float).fillna(train_medians)
-    return feat
+    return enriched[feature_columns].astype(float).fillna(train_medians)
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +191,15 @@ def infer_split(
     train_medians: pd.Series,
     models: Dict[str, Any],
     outlier_cfg: OutlierConfig,
+    feat_cfg: FeatureConfig | None = None,
+    percentile_refs: dict | None = None,
+    image_cache_path: str | None = None,
 ) -> pd.DataFrame:
-    feat = prepare_features(df, feat_cols, train_medians)
+    feat = prepare_features(
+        df, feat_cols, train_medians,
+        feat_cfg=feat_cfg, percentile_refs=percentile_refs,
+        image_cache_path=image_cache_path,
+    )
     pred_med = models["median"].predict(feat)
     pred_lo = models["q_lo"].predict(feat)
     pred_hi = models["q_hi"].predict(feat)
@@ -227,14 +246,34 @@ def main() -> None:
     train_medians = pd.read_csv(medians_path, index_col=0).iloc[:, 0]
     models = _load_models(outputs_dir)
 
+    # feat_cfg / percentile_refs / image_cache_path（存在する場合のみ使用）
+    feat_cfg: FeatureConfig | None = None
+    percentile_refs: dict | None = None
+    image_cache_path: str | None = cfg.get("data", {}).get("image_cache_path", None)
+    exp_path = outputs_dir / "experiment.json"
+    if exp_path.exists():
+        exp = json.loads(exp_path.read_text(encoding="utf-8"))
+        fc_dict = exp.get("feature_config", {})
+        if fc_dict:
+            feat_cfg = _feature_cfg_from(fc_dict)
+    refs_path = outputs_dir / "percentile_refs.json"
+    if refs_path.exists():
+        raw = json.loads(refs_path.read_text(encoding="utf-8"))
+        percentile_refs = {k: np.array(v) for k, v in raw.items()}
+
     for split_name in ["train", "val", "test", "unlabeled"]:
         df = _load_manifest(manifests_dir / f"manifest_{split_name}.csv")
-        
-        #skipフラグを除去する処理追加
-        df=df[df["skip_flag"]==0]
-        
+
+        # skip_flag を除去
+        if "skip_flag" in df.columns:
+            df = df[df["skip_flag"] == 0]
+
         logger.info("inferring %s (%d rows)", split_name, len(df))
-        pred_df = infer_split(df, feat_cols, train_medians, models, outlier_cfg)
+        pred_df = infer_split(
+            df, feat_cols, train_medians, models, outlier_cfg,
+            feat_cfg=feat_cfg, percentile_refs=percentile_refs,
+            image_cache_path=image_cache_path,
+        )
         out_path = outputs_dir / f"predictions_{split_name}.csv"
         pred_df.to_csv(out_path, index=False)
         logger.info("wrote %s", out_path)

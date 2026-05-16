@@ -48,17 +48,13 @@
    ```
 3. 学習（2 条件を順次）:
    ```bash
-   python -m analyses.xgboost_baseline.scr.train_exp015 \
+   python -m analyses.xgboost_baseline.scr.train \
      --config analyses/xgboost_baseline/config/baseline.yaml
-   python -m analyses.xgboost_baseline.scr.train_exp015 \
-     --config analyses/xgboost_baseline/config/t_res_0.1.yaml
    ```
 4. 推論 + 外れ値スコア:
    ```bash
-   python -m analyses.xgboost_baseline.scr.infer_exp015 \
+   python -m analyses.xgboost_baseline.scr.infer \
      --config analyses/xgboost_baseline/config/baseline.yaml
-   python -m analyses.xgboost_baseline.scr.infer_exp015 \
-     --config analyses/xgboost_baseline/config/t_res_0.1.yaml
    ```
 
 ## 結果
