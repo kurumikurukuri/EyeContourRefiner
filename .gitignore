@@ -23,6 +23,7 @@ build/
 
 # Claude Code internal
 .claude/
+.playwright-mcp
 tasks/
 CLAUDE.md
 
