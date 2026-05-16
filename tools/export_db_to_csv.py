@@ -379,14 +379,23 @@ def _fmt(value: Optional[float], precision: int = 6) -> str:
 # Main
 # -----------------------------
 def main() -> None:
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--skip-niqe", action="store_true", help="NIQE 計算をスキップ（高速エクスポート）")
+    args = parser.parse_args()
+
     records = load_records()
     print(f"Loaded {len(records)} records")
 
     print("Computing eye bbox...")
     eye_bbox_map = compute_eye_bbox(records)
 
-    print("Computing NIQE scores...")
-    niqe_map = build_niqe_map(eye_bbox_map)
+    if args.skip_niqe:
+        print("Skipping NIQE computation.")
+        niqe_map: dict = {}
+    else:
+        print("Computing NIQE scores...")
+        niqe_map = build_niqe_map(eye_bbox_map)
 
     unique_paths = list({rec["image_path"] for rec in records})
 

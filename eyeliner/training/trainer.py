@@ -44,6 +44,7 @@ class TrainConfig:
     loss_delta: float = 0.05   # dead_zone / huber 損失の二次→線形遷移点
     use_distance_from_center: bool = False
     use_norm_eye_scale: bool = False
+    use_is_upper: bool = True
     use_logit_target: bool = False
     use_t_norm: bool = True
     dropout_rate: float = 0.3

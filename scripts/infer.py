@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import cv2
+import math
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,7 @@ def load_models(models_dir: Path, device: torch.device) -> EnsembleModel:
     return ensemble
 
 
+
 def predict(
     model: torch.nn.Module,
     device: torch.device,
@@ -94,6 +96,7 @@ def predict(
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
     use_t_norm: bool = True,
+    point_index: int | None = None,
 ) -> float:
     """パッチを抽出して ImageNet 正規化を適用しモデルに通し、予測 t を返す。
 
@@ -110,6 +113,7 @@ def predict(
     std  = torch.tensor(IMAGENET_STD,  device=device).view(1, 3, 1, 1)
     x = (x - mean) / std
     is_upper_t = torch.tensor([[is_upper]], dtype=torch.float32, device=device)
+
     with torch.no_grad():
         raw = model(x, is_upper_t)
         if use_t_norm:
@@ -183,12 +187,14 @@ def run_manifest(
             image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             del bgr
             is_upper = 1.0 if rec.get("sub_key", "") == "upper" else 0.0
+            point_index = int(rec.get("point_index", 3)) if "point_index" in rec else None
             t_pred = predict(
                 model, device, image, px, py, qx, qy, is_upper,
                 patch_t_min=patch_t_min, patch_t_max=patch_t_max,
                 patch_perp_scale=patch_perp_scale,
                 patch_size=patch_size,
                 use_t_norm=use_t_norm,
+                point_index=point_index,
             )
             # label 範囲（None のときは crop 範囲にフォールバック）
             eff_label_min = label_t_min if label_t_min is not None else patch_t_min
@@ -376,6 +382,7 @@ def run_single(
         patch_perp_scale=patch_perp_scale,
         patch_size=patch_size,
         use_t_norm=use_t_norm,
+        point_index=args.point_index,
     )
     if use_t_norm:
         eff_label_min = label_t_min if label_t_min is not None else patch_t_min
@@ -417,6 +424,10 @@ def main() -> None:
     parser.add_argument(
         "--is_upper", action="store_true",
         help="upper アイラインの場合に指定（単一画像モード用）",
+    )
+    parser.add_argument(
+        "--point_index", type=int, default=None,
+        help="point_index（0〜6）",
     )
     parser.add_argument(
         "--patch_t_min", type=float, default=T_MIN,

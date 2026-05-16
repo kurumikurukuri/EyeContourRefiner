@@ -22,6 +22,7 @@ class EyelinerCNN(nn.Module):
         num_conv_layers: int = 3,
         use_distance_from_center: bool = False,
         use_norm_eye_scale: bool = False,
+        use_is_upper: bool = True,
         dropout_rate: float = 0.3,
     ) -> None:
         super().__init__()
@@ -31,6 +32,7 @@ class EyelinerCNN(nn.Module):
         self.num_conv_layers = num_conv_layers
         self.use_distance_from_center = use_distance_from_center
         self.use_norm_eye_scale = use_norm_eye_scale
+        self.use_is_upper = use_is_upper
         self.dropout_rate = dropout_rate
 
         def _bn(channels: int) -> nn.Module:
@@ -48,7 +50,7 @@ class EyelinerCNN(nn.Module):
         self.features = nn.Sequential(*layers)
 
         cnn_flat = channels[-1] * 32
-        scalar_in = 1 + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
+        scalar_in = int(use_is_upper) + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
         regressor_layers: list[nn.Module] = [
             nn.Linear(cnn_flat + scalar_in, 64),
             nn.ReLU(),
@@ -68,7 +70,9 @@ class EyelinerCNN(nn.Module):
         norm_eye_scale: torch.Tensor | None = None,
     ) -> torch.Tensor:
         feat = self.features(x).view(x.size(0), -1)   # (B, 4096)
-        scalars = [feat, is_upper]
+        scalars = [feat]
+        if self.use_is_upper:
+            scalars.append(is_upper)
         if self.use_pq_ratio:
             val = pq_ratio if pq_ratio is not None else torch.zeros(x.size(0), 1, device=x.device)
             scalars.append(val)
