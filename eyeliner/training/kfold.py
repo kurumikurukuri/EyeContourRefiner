@@ -42,6 +42,7 @@ def run_kfold(
     k_folds: int = 5,
     holdout_path: str | Path | None = None,
     max_train_samples: int | None = None,
+    mid_t_keep_ratio: float = 1.0,
 ) -> list[FoldResult]:
     """K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
 
@@ -52,6 +53,7 @@ def run_kfold(
         k_folds:           Fold 数
         holdout_path:      Hold-out セットのパス（現在は未使用、Phase 2 で利用）
         max_train_samples: 訓練サンプル上限（None = 全件使用）。超過時はシード固定ランダムサブサンプリング
+        mid_t_keep_ratio:  0.5 < t < 0.9 サンプルの保持率（1.0 = 全件保持）
 
     Returns:
         list[FoldResult] — 各 Fold の結果
@@ -70,6 +72,21 @@ def run_kfold(
         chosen = sorted(rng.choice(original_count, size=max_train_samples, replace=False))
         records = [records[i] for i in chosen]
         logger.info("サブサンプリング: %d → %d サンプル", original_count, len(records))
+
+    if mid_t_keep_ratio < 1.0:
+        mid_mask = [0.5 < float(r["t"]) < 0.9 for r in records]
+        mid_records = [r for r, m in zip(records, mid_mask) if m]
+        other_records = [r for r, m in zip(records, mid_mask) if not m]
+        n_keep = max(1, int(len(mid_records) * mid_t_keep_ratio))
+        rng_mid = np.random.RandomState(config.seed + 1)
+        chosen_mid = sorted(rng_mid.choice(len(mid_records), size=n_keep, replace=False))
+        kept_mid = [mid_records[i] for i in chosen_mid]
+        records = other_records + kept_mid
+        rng_mid.shuffle(records)
+        logger.info(
+            "mid-t フィルタ (0.5<t<0.9): %d → %d 件 (keep_ratio=%.2f)",
+            len(mid_records), n_keep, mid_t_keep_ratio,
+        )
 
     logger.info("訓練データ: %d サンプル", len(records))
 

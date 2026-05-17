@@ -110,6 +110,7 @@ def build_experiment_record(
         "data": {
             "data_version": data_version,
             "max_train_samples": getattr(args, "max_train_samples", None),
+            "mid_t_keep_ratio": getattr(args, "mid_t_keep_ratio", 1.0),
             "n_train_samples": n_train_samples,
             "n_holdout_samples": n_holdout_samples,
             "train_images": train_images,
@@ -277,6 +278,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         config=config,
         k_folds=args.k,
         max_train_samples=getattr(args, "max_train_samples", None),
+        mid_t_keep_ratio=getattr(args, "mid_t_keep_ratio", 1.0),
     )
 
     # 訓練サンプル数・画像リスト取得
@@ -524,6 +526,10 @@ def main() -> None:
     parser.add_argument(
         "--max_train_samples", type=int, default=None,
         help="訓練サンプル上限（学習曲線実験用）。指定時はシード固定ランダムサブサンプリング",
+    )
+    parser.add_argument(
+        "--mid_t_keep_ratio", type=float, default=1.0,
+        help="訓練データのうち 0.5 < t < 0.9（易しいサンプル）を保持する割合（1.0 = 全件保持）",
     )
 
     args = parser.parse_args()
