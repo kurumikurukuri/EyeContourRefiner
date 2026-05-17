@@ -24,7 +24,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 DEFAULT_DB = "data/samples.db"
-DEFAULT_CSV = "data/samples.csv"
+DEFAULT_CSV = "analyses/samples.csv"
 DEFAULT_IMAGES_DB = "data/images.db"
 OI_LABELS_PATH = Path("data") / ".open_images_cache" / "oi_image_labels.csv"
 

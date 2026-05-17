@@ -3,14 +3,14 @@
 manifest は samples.db から最新状態で生成する（samples.csv ベースとは別）。
 
 Usage:
-    python analyses/double_fold_candidates/infer_unlabeled_r2_aligned.py
+    python analyses/double_fold_candidates/scr/infer_unlabeled_r2_aligned.py
 
 出力:
-    analyses/double_fold_candidates/manifest_unlabeled_upper_db.csv
-    analyses/double_fold_candidates/predictions/unlabeled_R2_db.csv
-    analyses/double_fold_candidates/predictions/unlabeled_aligned_wide_large_db.csv
-    analyses/double_fold_candidates/unlabeled_r2_aligned_diff.csv
-    analyses/double_fold_candidates/unlabeled_r2_aligned_diff_by_face.csv
+    analyses/double_fold_candidates/manifests/manifest_unlabeled_upper_db.csv
+    analyses/double_fold_candidates/outputs/predictions/unlabeled_R2_db.csv
+    analyses/double_fold_candidates/outputs/predictions/unlabeled_aligned_wide_large_db.csv
+    analyses/double_fold_candidates/outputs/unlabeled_r2_aligned_diff.csv
+    analyses/double_fold_candidates/outputs/unlabeled_r2_aligned_diff_by_face.csv
 """
 from __future__ import annotations
 
@@ -20,16 +20,16 @@ from pathlib import Path
 
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS_DIR = Path(__file__).parent
-PREDICTIONS_DIR = ANALYSIS_DIR / "predictions"
+ROOT = Path(__file__).resolve().parents[3]
+ANALYSIS_DIR = Path(__file__).resolve().parents[1]
+PREDICTIONS_DIR = ANALYSIS_DIR / "outputs" / "predictions"
 
 EXP014_DIR = ROOT / "experiments" / "EXP014_t_resolution_sweep"
 EXP003_DIR = ROOT / "experiments" / "EXP003_input_sweep"
 LOG_PATH = EXP014_DIR / "log.txt"
 
 DB_PATH = ROOT / "data" / "samples.db"
-MANIFEST_OUT = ANALYSIS_DIR / "manifest_unlabeled_upper_db.csv"
+MANIFEST_OUT = ANALYSIS_DIR / "manifests" / "manifest_unlabeled_upper_db.csv"
 
 DUMMY_T = 0.5
 
@@ -175,12 +175,13 @@ def main() -> None:
     print("\n=== 差異計算 ===")
     df_diff = compute_diff(out_paths["R2_baseline_t_perturbation"], out_paths["aligned_wide_large"])
 
-    diff_out = ANALYSIS_DIR / "unlabeled_r2_aligned_diff.csv"
+    diff_out = ANALYSIS_DIR / "outputs" / "unlabeled_r2_aligned_diff.csv"
+    diff_out.parent.mkdir(parents=True, exist_ok=True)
     df_diff.to_csv(diff_out, index=False)
     print(f"点レベル差異: {diff_out}  ({len(df_diff)} 行)")
 
     df_face = summarize_by_face(df_diff)
-    face_out = ANALYSIS_DIR / "unlabeled_r2_aligned_diff_by_face.csv"
+    face_out = ANALYSIS_DIR / "outputs" / "unlabeled_r2_aligned_diff_by_face.csv"
     df_face.to_csv(face_out, index=False)
     print(f"face レベル集計: {face_out}  ({len(df_face)} 行)")
 

@@ -19,11 +19,11 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parents[2]
-PRED_CSV = ROOT / "analyses" / "double_fold_candidates" / "predictions_unlabeled_upper.csv"
-SAMPLES_CSV = ROOT / "data" / "samples.csv"
-OUT_POINTS = ROOT / "analyses" / "double_fold_candidates" / "candidates_points.csv"
-OUT_FACES = ROOT / "analyses" / "double_fold_candidates" / "candidates_faces.csv"
+ROOT = Path(__file__).resolve().parents[3]
+PRED_CSV = ROOT / "analyses" / "double_fold_candidates" / "outputs" / "predictions_unlabeled_upper.csv"
+SAMPLES_CSV = ROOT / "analyses" / "samples.csv"
+OUT_POINTS = ROOT / "analyses" / "double_fold_candidates" / "outputs" / "candidates_points.csv"
+OUT_FACES = ROOT / "analyses" / "double_fold_candidates" / "outputs" / "candidates_faces.csv"
 
 # 二重幅誤認しきい値:
 #   upper の pred_t 中央値は約 0.73。0.30 未満は明らかに下振れしており

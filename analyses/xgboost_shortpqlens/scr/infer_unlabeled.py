@@ -1,13 +1,13 @@
 """unlabeled.csv の lower[0] 行に XGBoost 推論を実行する。
 
 select_candidates_xgb.py でモデルを学習し、
-manifest/unlabeled.csv に含まれる lower[0] パッチ（12k 件）の
+manifests/predictions_unlabeled.csv に含まれる lower[0] パッチ（12k 件）の
 pred_score を全件出力する。
 
 Usage:
-    python analyses/xgboost_shortpqlens/infer_unlabeled.py
-    python analyses/xgboost_shortpqlens/infer_unlabeled.py \\
-        --manifest analyses/xgboost_shortpqlens/manifest/unlabeled.csv \\
+    python analyses/xgboost_shortpqlens/scr/infer_unlabeled.py
+    python analyses/xgboost_shortpqlens/scr/infer_unlabeled.py \\
+        --manifest analyses/xgboost_shortpqlens/manifests/predictions_unlabeled.csv \\
         --output   analyses/xgboost_shortpqlens/outputs/predictions_unlabeled_lower0.csv
 """
 from __future__ import annotations
@@ -19,10 +19,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).parent.parent.parent
+ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT))
 
-from analyses.xgboost_shortpqlens.select_candidates_xgb import (  # noqa: E402
+from analyses.xgboost_shortpqlens.scr.select_candidates_xgb import (  # noqa: E402
     DEFAULT_CACHE_DIR,
     build_features,
     load_from_db,
@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--db",       default="data/samples.db")
     parser.add_argument(
         "--manifest",
-        default="analyses/xgboost_shortpqlens/manifest/unlabeled.csv",
+        default="analyses/xgboost_shortpqlens/manifests/predictions_unlabeled.csv",
     )
     parser.add_argument(
         "--output",

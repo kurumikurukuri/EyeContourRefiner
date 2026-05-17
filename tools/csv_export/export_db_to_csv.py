@@ -25,7 +25,7 @@ from skimage.transform import resize as sk_resize
 
 
 DB_PATH = "data/samples.db"
-OUTPUT_PATH = "data/samples.csv"
+OUTPUT_PATH = "analyses/samples.csv"
 
 OUTPUT_COLS = [
     "idx",

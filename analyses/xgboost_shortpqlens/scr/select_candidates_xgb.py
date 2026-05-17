@@ -286,7 +286,7 @@ def load_from_db(db_path: str, labeled: bool) -> pd.DataFrame:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default="data/samples.db")
-    parser.add_argument("--output", default="analyses/xgboost_shortpqlens/candidates_lower0.csv")
+    parser.add_argument("--output", default="analyses/xgboost_shortpqlens/outputs/candidates_lower0.csv")
     parser.add_argument("--n", type=int, default=1000, help="出力するパッチ数")
     parser.add_argument("--cache", default=DEFAULT_CACHE_DIR, type=Path,
                         help="OI ラベルキャッシュディレクトリ")

@@ -12,11 +12,11 @@ t < 0 または t > 1.2 のアノテーション候補 idx を CSV に出力す�
 出力 CSV 列: idx, source, image_path, part_name, sub_key, point_index, pred_t_raw, reason
 
 使用方法:
-    python tools/collect_extreme_t_targets.py --mode geo
-    python tools/collect_extreme_t_targets.py --mode geo --input-csv analyses/extreme_t/unlabeled.csv
-    python tools/collect_extreme_t_targets.py --mode model --model-dir experiments/EXP017_xxx/outputs/S12/
-    python tools/collect_extreme_t_targets.py --mode model --model-dir experiments/EXP017_xxx/outputs/S12/ --input-csv analyses/extreme_t/unlabeled.csv
-    python tools/collect_extreme_t_targets.py --mode both --model-dir experiments/EXP017_xxx/outputs/S12/
+    python analyses/extreme_t/scr/collect_extreme_t_targets.py --mode geo
+    python analyses/extreme_t/scr/collect_extreme_t_targets.py --mode geo --input-csv analyses/extreme_t/manifests/unlabeled.csv
+    python analyses/extreme_t/scr/collect_extreme_t_targets.py --mode model --model-dir experiments/EXP017_xxx/outputs/S12/
+    python analyses/extreme_t/scr/collect_extreme_t_targets.py --mode model --model-dir experiments/EXP017_xxx/outputs/S12/ --input-csv analyses/extreme_t/manifests/unlabeled.csv
+    python analyses/extreme_t/scr/collect_extreme_t_targets.py --mode both --model-dir experiments/EXP017_xxx/outputs/S12/
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from eyeliner.data.patch_utils import (
     IMAGENET_MEAN,
@@ -342,8 +342,8 @@ def main() -> None:
              "例: 0.5 → xgboost が skip と予測しにくいサンプルのみ対象",
     )
     parser.add_argument(
-        "--output-dir", type=Path, default=Path("analyses/extreme_t_targets"),
-        help="CSV 出力ディレクトリ (default: analyses/extreme_t_targets/)",
+        "--output-dir", type=Path, default=Path("analyses/extreme_t/outputs"),
+        help="CSV 出力ディレクトリ (default: analyses/extreme_t/outputs/)",
     )
     # t 極端値の定義
     parser.add_argument(

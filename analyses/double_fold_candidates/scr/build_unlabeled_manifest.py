@@ -5,7 +5,7 @@ infer.py は t カラムに有効値が入っていないと行をスキップ�
 後段のフィルタリングでは参照しない。
 
 Usage:
-    python analyses/double_fold_candidates/build_unlabeled_manifest.py
+    python analyses/double_fold_candidates/scr/build_unlabeled_manifest.py
 """
 from __future__ import annotations
 
@@ -16,10 +16,10 @@ import pandas as pd
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SAMPLES_CSV = PROJECT_ROOT / "data" / "samples.csv"
-OUTPUT_DIR = PROJECT_ROOT / "analyses" / "double_fold_candidates"
-OUTPUT_CSV = OUTPUT_DIR / "manifest_unlabeled_upper.csv"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SAMPLES_CSV = PROJECT_ROOT / "analyses" / "samples.csv"
+MANIFESTS_DIR = PROJECT_ROOT / "analyses" / "double_fold_candidates" / "manifests"
+OUTPUT_CSV = MANIFESTS_DIR / "manifest_unlabeled_upper.csv"
 
 DUMMY_T = 0.5
 
@@ -53,7 +53,7 @@ def build() -> Path:
     ]
     out = sub[keep_cols]
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    MANIFESTS_DIR.mkdir(parents=True, exist_ok=True)
     out.to_csv(OUTPUT_CSV, index=False)
     logger.info("wrote: %s (%d rows)", OUTPUT_CSV, len(out))
     return OUTPUT_CSV

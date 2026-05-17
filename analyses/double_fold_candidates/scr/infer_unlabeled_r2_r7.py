@@ -1,13 +1,13 @@
 """EXP014: R2 / R7 でunlabeledデータを推論し、差異から二重幅候補を抽出する。
 
 Usage:
-    python analyses/double_fold_candidates/infer_unlabeled_r2_r7.py
+    python analyses/double_fold_candidates/scr/infer_unlabeled_r2_r7.py
 
 出力:
-    analyses/double_fold_candidates/predictions/unlabeled_R2.csv
-    analyses/double_fold_candidates/predictions/unlabeled_R7.csv
-    analyses/double_fold_candidates/unlabeled_r2_r7_diff.csv
-    analyses/double_fold_candidates/unlabeled_r2_r7_diff_by_face.csv
+    analyses/double_fold_candidates/outputs/predictions/unlabeled_R2.csv
+    analyses/double_fold_candidates/outputs/predictions/unlabeled_R7.csv
+    analyses/double_fold_candidates/outputs/unlabeled_r2_r7_diff.csv
+    analyses/double_fold_candidates/outputs/unlabeled_r2_r7_diff_by_face.csv
 """
 from __future__ import annotations
 
@@ -17,15 +17,15 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
-ROOT = Path(__file__).resolve().parents[2]
-ANALYSIS_DIR = Path(__file__).parent
-PREDICTIONS_DIR = ANALYSIS_DIR / "predictions"
+ROOT = Path(__file__).resolve().parents[3]
+ANALYSIS_DIR = Path(__file__).resolve().parents[1]
+PREDICTIONS_DIR = ANALYSIS_DIR / "outputs" / "predictions"
 
 EXP014_DIR = ROOT / "experiments" / "EXP014_t_resolution_sweep"
 CONFIG_DIR = EXP014_DIR / "config"
 LOG_PATH = EXP014_DIR / "log.txt"
 
-UNLABELED_MANIFEST = ANALYSIS_DIR / "manifest_unlabeled_upper.csv"
+UNLABELED_MANIFEST = ANALYSIS_DIR / "manifests" / "manifest_unlabeled_upper.csv"
 
 CONFIGS = ["R2_baseline_t_perturbation", "R7_baseline_patch_t_narrow"]
 CONFIG_SHORT = {
@@ -147,12 +147,13 @@ def main() -> None:
     print("\n=== 差異計算 ===")
     df_diff = compute_diff(pred_paths["R2_baseline_t_perturbation"], pred_paths["R7_baseline_patch_t_narrow"])
 
-    diff_out = ANALYSIS_DIR / "unlabeled_r2_r7_diff.csv"
+    diff_out = ANALYSIS_DIR / "outputs" / "unlabeled_r2_r7_diff.csv"
+    diff_out.parent.mkdir(parents=True, exist_ok=True)
     df_diff.to_csv(diff_out, index=False)
     print(f"点レベル差異: {diff_out}  ({len(df_diff)} 行)")
 
     df_face = summarize_by_face(df_diff)
-    face_out = ANALYSIS_DIR / "unlabeled_r2_r7_diff_by_face.csv"
+    face_out = ANALYSIS_DIR / "outputs" / "unlabeled_r2_r7_diff_by_face.csv"
     df_face.to_csv(face_out, index=False)
     print(f"face レベル集計: {face_out}  ({len(df_face)} 行)")
 
