@@ -25,7 +25,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from annotator import db as _db  # noqa: E402
 from eyeliner.data.patch_utils import (

@@ -32,13 +32,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from annotator.face_pose import compute_face_orientation  # noqa: E402
 from annotator.preprocessor import EYELINER_SAMPLES_MAP  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-PROJECT_ROOT = Path(__file__).parent.parent
+PROJECT_ROOT = Path(__file__).parent.parent.parent
 IMAGES_DB = PROJECT_ROOT / "data" / "images.db"
 SAMPLES_DB = PROJECT_ROOT / "data" / "samples.db"
 SHARD_DIR = PROJECT_ROOT / "data"

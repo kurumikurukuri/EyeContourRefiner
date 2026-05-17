@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from eyeliner.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD, extract_patch
 
 
@@ -188,7 +188,7 @@ def plot_sample_patches(patches: np.ndarray, out_path: Path, n: int = 16) -> Non
 
 
 def main():
-    repo_root = Path(__file__).parent.parent
+    repo_root = Path(__file__).parent.parent.parent
     manifest_path = repo_root / "data" / "manifest.csv"
     out_dir = repo_root / "tasks" / "research"
     out_dir.mkdir(parents=True, exist_ok=True)
