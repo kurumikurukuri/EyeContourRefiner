@@ -2,7 +2,7 @@
 
 Split 割り当て（train/val/test/unlabeled）は変更しない。
 以下の 3 ソースから新列を取得する:
-  1. data/samples.csv         - サンプル単位の特徴量（idx でジョイン）
+  1. analyses/samples.csv     - サンプル単位の特徴量（idx でジョイン）
   2. image_features.parquet   - 目領域の局所画像特徴量（eye_gray_mean → min_eye_brightness 派生）
   3. data/images.db           - 画像単位の特徴量（将来 FaceMesh 実行時に使用）
 
@@ -29,7 +29,7 @@ import pandas as pd
 log = logging.getLogger(__name__)
 
 ROOT = Path(__file__).parent.parent.parent.parent
-SAMPLES_CSV = ROOT / "data" / "samples.csv"
+SAMPLES_CSV = ROOT / "analyses" / "samples.csv"
 REGISTRY_DB = ROOT / "data" / "images.db"
 
 DEFAULT_MANIFESTS_DIR = Path("analyses/xgboost_predskip/manifests")

@@ -5,7 +5,7 @@
 # 計 58 + 8 = 66 特徴量
 
 data:
-  csv_path: "data/samples.csv"
+  csv_path: "analyses/samples.csv"
   manifests_dir: "analyses/xgboost_predskip/manifests"
   outputs_dir: "analyses/xgboost_predskip/outputs/feat_full_v6"
   image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"

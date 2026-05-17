@@ -14,7 +14,7 @@
 
 # --- データ入出力 ---
 data:
-  csv_path: "data/samples.csv"
+  csv_path: "analyses/samples.csv"
   manifests_dir: "analyses/xgboost_baseline/manifests"
   outputs_dir: "analyses/xgboost_baseline/outputs/feat_full"
   image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
