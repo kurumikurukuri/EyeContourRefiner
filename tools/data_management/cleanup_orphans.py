@@ -25,10 +25,10 @@ sys.stderr.reconfigure(encoding='utf-8')
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 log = logging.getLogger(__name__)
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from annotator import db as _db  # noqa: E402
 
-ROOT = Path(__file__).parent.parent
+ROOT = Path(__file__).parent.parent.parent
 DB_PATH = ROOT / "data" / "samples.db"
 IMAGES_DIR = ROOT / "data" / "images"
 ATTRIBUTION_CSV = ROOT / "data" / "open_images_attribution.csv"

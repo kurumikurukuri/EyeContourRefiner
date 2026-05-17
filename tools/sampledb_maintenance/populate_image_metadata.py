@@ -17,7 +17,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List, Set
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from annotator import db as _db
 
 logger = logging.getLogger(__name__)
