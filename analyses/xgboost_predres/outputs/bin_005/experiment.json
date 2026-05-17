@@ -1,0 +1,235 @@
+{
+  "experiment": "xgboost_predres_cls",
+  "config_path": "analyses\\xgboost_predres\\config\\bin_005.yaml",
+  "target": "bin(residual, threshold=0.05): under/ok/over",
+  "xgboost": {
+    "n_estimators": 2000,
+    "max_depth": 6,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "reg_alpha": 0.0,
+    "reg_lambda": 1.0,
+    "min_child_weight": 1,
+    "early_stopping_rounds": 50,
+    "random_state": 42,
+    "verbosity": 1
+  },
+  "kfold": {
+    "enabled": false,
+    "n_splits": 5,
+    "shuffle": true,
+    "seed": 42
+  },
+  "optuna": {
+    "enabled": false,
+    "n_trials": 50,
+    "timeout": null
+  },
+  "feature_config": {
+    "use_geometry": true,
+    "use_eye_scale": true,
+    "use_face_pose": true,
+    "use_categorical": true,
+    "use_point_index": true,
+    "use_cyclical_angle": true,
+    "use_interactions": true,
+    "use_niqe_score": true,
+    "use_aggregate_features": true,
+    "use_extended_aggregate": true,
+    "use_pose_composite": true,
+    "use_dataset_percentile": true,
+    "use_image_features": true,
+    "use_eye_brightness": false,
+    "use_oi_class_features": false,
+    "exclude_features": []
+  },
+  "metrics": {
+    "threshold": 0.05,
+    "train": {
+      "accuracy": 0.77391622462045,
+      "macro_f1": 0.7719383638800931,
+      "weighted_f1": 0.7746777403733887,
+      "confusion_matrix": [
+        [
+          2409,
+          296,
+          191
+        ],
+        [
+          800,
+          3833,
+          754
+        ],
+        [
+          158,
+          273,
+          2220
+        ]
+      ],
+      "per_class": {
+        "under": {
+          "precision": 0.7154737154737155,
+          "recall": 0.8318370165745856,
+          "f1": 0.7692798978125499,
+          "support": 2896.0
+        },
+        "ok": {
+          "precision": 0.8707405724670604,
+          "recall": 0.7115277519955449,
+          "f1": 0.7831239145980182,
+          "support": 5387.0
+        },
+        "over": {
+          "precision": 0.7014218009478673,
+          "recall": 0.8374198415692191,
+          "f1": 0.7634112792297112,
+          "support": 2651.0
+        }
+      }
+    },
+    "val": {
+      "accuracy": 0.44587628865979384,
+      "macro_f1": 0.4047342799290818,
+      "weighted_f1": 0.45000242770320553,
+      "confusion_matrix": [
+        [
+          252,
+          335,
+          165
+        ],
+        [
+          343,
+          770,
+          287
+        ],
+        [
+          169,
+          206,
+          189
+        ]
+      ],
+      "per_class": {
+        "under": {
+          "precision": 0.3298429319371728,
+          "recall": 0.3351063829787234,
+          "f1": 0.3324538258575198,
+          "support": 752.0
+        },
+        "ok": {
+          "precision": 0.5873379099923722,
+          "recall": 0.55,
+          "f1": 0.5680560678716341,
+          "support": 1400.0
+        },
+        "over": {
+          "precision": 0.2948517940717629,
+          "recall": 0.3351063829787234,
+          "f1": 0.3136929460580913,
+          "support": 564.0
+        }
+      }
+    },
+    "test": {
+      "accuracy": 0.38810545677498465,
+      "macro_f1": 0.36418706419355035,
+      "weighted_f1": 0.38073403644611736,
+      "confusion_matrix": [
+        [
+          282,
+          453,
+          213
+        ],
+        [
+          356,
+          735,
+          261
+        ],
+        [
+          314,
+          399,
+          249
+        ]
+      ],
+      "per_class": {
+        "under": {
+          "precision": 0.296218487394958,
+          "recall": 0.2974683544303797,
+          "f1": 0.2968421052631579,
+          "support": 948.0
+        },
+        "ok": {
+          "precision": 0.46313799621928164,
+          "recall": 0.5436390532544378,
+          "f1": 0.5001701258931609,
+          "support": 1352.0
+        },
+        "over": {
+          "precision": 0.34439834024896265,
+          "recall": 0.2588357588357588,
+          "f1": 0.29554896142433235,
+          "support": 962.0
+        }
+      }
+    },
+    "n_train": 10934,
+    "n_val": 2716,
+    "n_test": 3262,
+    "feature_columns": [
+      "point_index",
+      "is_upper",
+      "is_left_eye",
+      "pq_dist",
+      "pq_angle_sin",
+      "pq_angle_cos",
+      "pq_ratio",
+      "dist_from_center",
+      "pose_magnitude",
+      "eye_scale_percentile",
+      "eye_gray_mean",
+      "eye_gray_std",
+      "eye_gray_skewness",
+      "eye_gray_entropy",
+      "eye_gray_p10",
+      "eye_gray_p90",
+      "eye_laplacian_var",
+      "eye_sobel_mean",
+      "eye_sobel_std",
+      "eye_canny_density",
+      "eye_hog_mean",
+      "eye_hog_std",
+      "eye_lbp_uniform_ratio",
+      "eye_lbp_entropy",
+      "eye_scale",
+      "norm_eye_scale",
+      "eye_bbox_w",
+      "eye_bbox_h",
+      "eye_aspect",
+      "face_yaw",
+      "face_pitch",
+      "face_roll",
+      "is_upper_x_pq_ratio",
+      "is_upper_x_dist_from_center",
+      "pq_dist_eye_std",
+      "pq_ratio_eye_std",
+      "dist_from_center_eye_std",
+      "eye_scale_asymmetry",
+      "eye_aspect_asymmetry",
+      "norm_eye_scale_asymmetry",
+      "eye_bbox_w_asymmetry",
+      "eye_bbox_h_asymmetry",
+      "n_faces",
+      "face_yaw_cross_face_std",
+      "face_pitch_cross_face_std",
+      "face_roll_cross_face_std",
+      "pq_dist_eye_range",
+      "eye_scale_face_max",
+      "eye_scale_face_min",
+      "eye_scale_face_range",
+      "niqe_in_img_std",
+      "niqe_in_img_range",
+      "eye_bbox_w_norm_face",
+      "eye_aspect_face_range"
+    ]
+  }
+}

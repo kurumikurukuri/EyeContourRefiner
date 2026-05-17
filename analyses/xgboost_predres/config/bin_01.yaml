@@ -1,0 +1,57 @@
+# bin_01: 残差を 0.1 基準で 3 クラスに分類する XGBoost
+#
+# bin ラベル:
+#   0 = under  : residual < -0.1  (EXP017 が過小予測)
+#   1 = ok     : -0.1 <= residual <= 0.1
+#   2 = over   : residual >  0.1  (EXP017 が過大予測)
+
+data:
+  manifests_dir: "analyses/xgboost_predres/manifests"
+  outputs_dir: "analyses/xgboost_predres/outputs/bin_01"
+  image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
+
+bin:
+  threshold: 0.1
+  labels: ["under", "ok", "over"]   # index 0/1/2 に対応
+
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: true
+  use_interactions: true
+  use_niqe_score: true
+  use_aggregate_features: true
+  use_extended_aggregate: true
+  use_pose_composite: true
+  use_dataset_percentile: true
+  use_image_features: true
+  use_eye_brightness: false
+  use_oi_class_features: false
+
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+  use_class_weight: true   # クラス不均衡補正（sample_weight で逆頻度重み）
+
+kfold:
+  enabled: false
+  n_splits: 5
+  shuffle: true
+  seed: 42
+
+optuna:
+  enabled: false
+  n_trials: 50
+  timeout: null
