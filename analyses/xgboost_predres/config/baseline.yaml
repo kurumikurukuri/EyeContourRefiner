@@ -1,0 +1,65 @@
+# xgboost_predres: EXP017 W0_baseline の残差を予測する XGBoost
+#
+# 目的変数: pred_t_raw - true_t_raw (EXP017 W0_baseline の符号付き残差)
+# 特徴量: xgboost_predskip manifests 由来（後で analyses/samples.csv に切り替え予定）
+
+data:
+  # 暫定: xgboost_predskip manifests を特徴量ソースとして流用
+  # → analyses/samples.csv が用意でき次第 csv_path に切り替える
+  feature_manifests_dir: "analyses/xgboost_predskip/manifests"
+  # EXP017 W0_baseline の予測ファイル（残差の目的変数ソース）
+  exp017_train_predictions: "experiments/EXP017_rebalancing/outputs/W0_baseline/W0_baseline/train_predictions.csv"
+  exp017_test_predictions: "experiments/EXP017_rebalancing/outputs/W0_baseline/W0_baseline/test_predictions.csv"
+  # split.py の出力先 (train.py / infer.py の入力)
+  manifests_dir: "analyses/xgboost_predres/manifests"
+  outputs_dir: "analyses/xgboost_predres/outputs/baseline"
+  image_cache_path: "analyses/xgboost_predskip/outputs/image_features.parquet"
+
+split:
+  val_ratio: 0.20  # EXP017 train を image_path 単位でさらに train/val に分割する比率
+  seed: 42
+
+features:
+  use_geometry: true
+  use_eye_scale: true
+  use_face_pose: true
+  use_categorical: true
+  use_point_index: true
+  use_cyclical_angle: true
+  use_interactions: true
+  use_niqe_score: true
+  use_aggregate_features: true
+  use_extended_aggregate: true
+  use_pose_composite: true
+  use_dataset_percentile: true
+  use_image_features: true
+  use_eye_brightness: false   # xgboost_predskip manifests にはないカラム
+  use_oi_class_features: false  # xgboost_predskip manifests にはないカラム
+
+xgboost:
+  n_estimators: 2000
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  reg_alpha: 0.0
+  reg_lambda: 1.0
+  min_child_weight: 1
+  early_stopping_rounds: 50
+  random_state: 42
+  verbosity: 1
+
+quantile:
+  q_lo: 0.10
+  q_hi: 0.90
+
+kfold:
+  enabled: false
+  n_splits: 5
+  shuffle: true
+  seed: 42
+
+optuna:
+  enabled: false
+  n_trials: 50
+  timeout: null
