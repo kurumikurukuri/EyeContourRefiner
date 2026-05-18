@@ -404,23 +404,6 @@ def upsert_image_labels(
         )
 
 
-def get_annotation_status(db_path: Path = DB_PATH) -> Dict[int, Dict[str, Any]]:
-    """idx → {t, skip_flag, image_path, part_name} の軽量マップを返す（全行スキャン不要）。"""
-    with _connect(db_path) as conn:
-        rows = conn.execute(
-            "SELECT idx, image_path, part_name, t, skip_flag FROM samples ORDER BY idx"
-        ).fetchall()
-    result: Dict[int, Dict[str, Any]] = {}
-    for row in rows:
-        result[row["idx"]] = {
-            "image_path": row["image_path"],
-            "part_name": row["part_name"],
-            "t": _optional_float(row["t"]),
-            "skip_flag": bool(row["skip_flag"]),
-        }
-    return result
-
-
 def get_sample_order_by_idx(db_path: Path = DB_PATH) -> List[int]:
     """idx順のサンプル idx リストを返す（全カラムロードなし）。"""
     with _connect(db_path) as conn:
@@ -472,21 +455,6 @@ def get_col_min_per_image(
     return {row["image_path"]: float(row["v"]) for row in rows}
 
 
-def get_annotated_and_skipped_idxs(db_path: Path = DB_PATH) -> Tuple[List[int], List[int]]:
-    """アノテーション済み idx と skip_flag=1 の idx を返す。"""
-    with _connect(db_path) as conn:
-        annotated = [
-            r["idx"] for r in conn.execute(
-                "SELECT idx FROM samples WHERE t IS NOT NULL ORDER BY idx"
-            ).fetchall()
-        ]
-        skipped = [
-            r["idx"] for r in conn.execute(
-                "SELECT idx FROM samples WHERE skip_flag = 1 ORDER BY idx"
-            ).fetchall()
-        ]
-    return annotated, skipped
-
 
 # ---------------------------------------------------------------------------
 # Server-side navigation (large-DB対応：クライアントに全idxを送らない)
@@ -516,7 +484,7 @@ def get_next_eye_start_idx(
     current_idx: int,
     db_path: Path = DB_PATH,
 ) -> Optional[int]:
-    """current_idx が属する目グループの次の（スキップなし）目グループ先頭 idx を返す。"""
+    """current_idx が属する目グループの次の非スキップ目グループ先頭 idx を返す。"""
     with _connect(db_path) as conn:
         cur = conn.execute(
             "SELECT image_path, face_index, part_name FROM samples WHERE idx = ?",
@@ -526,8 +494,9 @@ def get_next_eye_start_idx(
             return None
         row = conn.execute(
             """SELECT MIN(idx) AS next_idx FROM samples
-               WHERE idx > ? AND skip_flag = 0
-                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)""",
+               WHERE idx > ?
+                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)
+                 AND skip_flag = 0""",
             (current_idx, cur["image_path"], cur["face_index"], cur["part_name"]),
         ).fetchone()
     return int(row["next_idx"]) if row and row["next_idx"] is not None else None
@@ -537,7 +506,7 @@ def get_prev_eye_start_idx(
     current_idx: int,
     db_path: Path = DB_PATH,
 ) -> Optional[int]:
-    """current_idx が属する目グループの前の（スキップなし）目グループ先頭 idx を返す。"""
+    """current_idx が属する目グループの前の非スキップ目グループ先頭 idx を返す。"""
     with _connect(db_path) as conn:
         cur = conn.execute(
             "SELECT image_path, face_index, part_name FROM samples WHERE idx = ?",
@@ -545,11 +514,12 @@ def get_prev_eye_start_idx(
         ).fetchone()
         if not cur:
             return None
-        # 前の目グループの末尾 idx を取得
+        # 前の非スキップ目グループの末尾 idx を取得
         row = conn.execute(
             """SELECT MAX(idx) AS prev_last FROM samples
-               WHERE idx < ? AND skip_flag = 0
-                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)""",
+               WHERE idx < ?
+                 AND NOT (image_path = ? AND face_index = ? AND part_name = ?)
+                 AND skip_flag = 0""",
             (current_idx, cur["image_path"], cur["face_index"], cur["part_name"]),
         ).fetchone()
         if not row or row["prev_last"] is None:

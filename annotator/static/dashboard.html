@@ -6,22 +6,21 @@
   <title>データ分析ダッシュボード</title>
   <link rel="stylesheet" href="/static/dashboard.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@sgratzl/chartjs-chart-boxplot@4/build/index.umd.min.js"></script>
 </head>
 <body>
 
 <div id="header">
   <a href="/" class="back-link">← アノテーターへ</a>
   <h1>データ分析ダッシュボード</h1>
-  <a href="/train" style="color:#a8dadc; font-size:0.85rem; text-decoration:none; padding:5px 12px; border:1px solid #1a78c2; border-radius:6px;">🧠 学習</a>
   <button id="btn-refresh">↺ 更新</button>
 </div>
 
 <nav id="tab-nav">
   <button class="tab-btn active" data-tab="overview">Overview</button>
-  <button class="tab-btn" data-tab="tdist">t値分布</button>
-  <button class="tab-btn" data-tab="quality">品質分析</button>
-  <button class="tab-btn" data-tab="experiments">実験比較</button>
-  <button class="tab-btn" data-tab="errors">エラー分析</button>
+  <button class="tab-btn" data-tab="distrib">分布・統計</button>
+  <button class="tab-btn" data-tab="outliers">外れ値確認</button>
+  <button class="tab-btn" data-tab="errors">prediction.csv分析</button>
 </nav>
 
 <div id="content">
@@ -31,28 +30,23 @@
     <div id="overview-content"><div class="spinner"></div></div>
   </div>
 
-  <!-- ── t値分布 ── -->
-  <div id="tab-tdist" class="tab-panel">
-    <div id="tdist-content"><p class="hint">タブを開くと読み込みます</p></div>
+  <!-- ── 分布・統計 ── -->
+  <div id="tab-distrib" class="tab-panel">
+    <div id="distrib-content"><p class="hint">タブを開くと読み込みます</p></div>
   </div>
 
-  <!-- ── 品質分析 ── -->
-  <div id="tab-quality" class="tab-panel">
-    <div id="quality-content"><p class="hint">タブを開くと読み込みます</p></div>
+  <!-- ── 外れ値確認 ── -->
+  <div id="tab-outliers" class="tab-panel">
+    <div id="outliers-content"><p class="hint">タブを開くと読み込みます</p></div>
   </div>
 
-  <!-- ── 実験比較 ── -->
-  <div id="tab-experiments" class="tab-panel">
-    <div id="experiments-content"><p class="hint">タブを開くと読み込みます</p></div>
-  </div>
-
-  <!-- ── エラー分析 ── -->
+  <!-- ── prediction.csv分析 ── -->
   <div id="tab-errors" class="tab-panel">
     <div id="errors-content"><p class="hint">タブを開くと読み込みます</p></div>
   </div>
 
 </div>
 
-<script src="/static/dashboard.js"></script>
+<script src="/static/dashboard.js?v=3"></script>
 </body>
 </html>

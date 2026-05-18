@@ -7,8 +7,9 @@ Chart.defaults.font.size     = 11;
 /* ── State ── */
 const charts  = {};   // id → Chart instance
 const loaded  = new Set();
-let currentExpPath = '';  // エラー分析で参照する実験パス（空 = data/predictions.csv）
+let currentExpPath = '';  // prediction.csv分析で参照する実験パス（空 = data/predictions.csv）
 let currentSplit = 'test'; // train / test / all
+let _qualityCache = null;  // 分布・統計 / 外れ値確認 で共有するキャッシュ
 
 /* ── Chart helper ── */
 function mkBar(id, labels, data, opts = {}) {
@@ -256,11 +257,10 @@ function switchTab(tabName) {
 
 function loadTab(name) {
   switch (name) {
-    case 'overview':    return loadOverview();
-    case 'tdist':       return loadTDist();
-    case 'quality':     return loadQuality();
-    case 'experiments': return loadExperiments();
-    case 'errors':      return loadErrors();
+    case 'overview': return loadOverview();
+    case 'distrib':  return loadDistrib();
+    case 'outliers': return loadOutliers();
+    case 'errors':   return loadErrors();
   }
 }
 
@@ -268,6 +268,7 @@ function refreshCurrent() {
   const active = document.querySelector('.tab-btn.active');
   if (!active) return;
   const name = active.dataset.tab;
+  if (name === 'distrib' || name === 'outliers') _qualityCache = null;
   loaded.delete(name);
   loaded.add(name);
   loadTab(name);
@@ -301,18 +302,53 @@ function renderOverview(d) {
         <span class="stat-value">${d.total.toLocaleString()}</span>
       </div>
       <div class="stat-card">
-        <span class="stat-label">アノテーション済み</span>
+        <span class="stat-label">アノテーション済み（非スキップ）</span>
         <span class="stat-value">${d.annotated.toLocaleString()}</span>
-        <span class="stat-sub">${d.progress_pct}%</span>
+        <span class="stat-sub">${d.progress_pct}% / 非スキップ ${d.non_skipped_total.toLocaleString()}件</span>
         ${progress}
       </div>
       <div class="stat-card">
-        <span class="stat-label">未アノテーション</span>
+        <span class="stat-label">未アノテーション（非スキップ）</span>
         <span class="stat-value" style="color:${d.unannotated > 0 ? 'var(--orange)' : 'var(--green)'}">${d.unannotated.toLocaleString()}</span>
       </div>
       <div class="stat-card">
-        <span class="stat-label">ユニーク画像数</span>
+        <span class="stat-label">ユニーク画像数（全体）</span>
         <span class="stat-value">${d.unique_images.toLocaleString()}</span>
+      </div>
+      <div class="stat-card">
+        <span class="stat-label">ユニーク画像数（非スキップ）</span>
+        <span class="stat-value" style="color:var(--green)">${(d.non_skipped_unique_images ?? 0).toLocaleString()}</span>
+      </div>
+    </div>`;
+
+  // Completion matrix
+  const matrixRows = (d.completion_matrix || []).map(m => {
+    const color = m.pct >= 100 ? 'var(--green)' : m.pct >= 50 ? 'var(--orange)' : 'var(--red, #f44336)';
+    const barColor = m.pct >= 100 ? '#28a745' : m.pct >= 50 ? '#ff9800' : '#f44336';
+    return `<tr>
+      <td style="font-size:0.8rem">${esc(m.part)}</td>
+      <td style="font-size:0.8rem">${esc(m.sub)}</td>
+      <td class="num">${m.annotated.toLocaleString()}</td>
+      <td class="num">${m.total.toLocaleString()}</td>
+      <td style="min-width:120px">
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="flex:1;background:#1a2a4a;border-radius:3px;height:8px;overflow:hidden">
+            <div style="width:${m.pct}%;background:${barColor};height:100%;border-radius:3px;transition:width 0.3s"></div>
+          </div>
+          <span style="font-size:0.78rem;color:${color};min-width:36px;text-align:right">${m.pct}%</span>
+        </div>
+      </td>
+    </tr>`;
+  }).join('');
+
+  const matrixHtml = `
+    <div class="section-title">完了率内訳 (Part × Sub Key)</div>
+    <div class="card">
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead><tr><th>Part</th><th>Sub Key</th><th>完了</th><th>合計</th><th>進捗</th></tr></thead>
+          <tbody>${matrixRows}</tbody>
+        </table>
       </div>
     </div>`;
 
@@ -329,16 +365,11 @@ function renderOverview(d) {
         <div class="chart-wrap"><canvas id="ov-sub"></canvas></div>
       </div>
       <div class="card">
-        <div class="card-title">Label Source</div>
-        <div class="chart-wrap"><canvas id="ov-src"></canvas></div>
-      </div>
-    </div>
-    <div class="card">
-      <div class="card-title">Point Index 分布</div>
-      <div class="chart-wrap"><canvas id="ov-pt"></canvas></div>
-    </div>`;
+        <div class="card-title">Point Index 分布</div>
+        <div class="chart-wrap"><canvas id="ov-pt"></canvas></div>
+      </div>`;
 
-  html('overview-content', statCards + chartsHtml);
+  html('overview-content', statCards + matrixHtml + chartsHtml);
 
   // Draw charts
   const partLabels  = Object.keys(d.by_part_name);
@@ -357,20 +388,34 @@ function renderOverview(d) {
 }
 
 /* ─────────────────────────────────────────────
-   T値分布
+   Quality data cache (分布・統計 / 外れ値確認 で共有)
 ───────────────────────────────────────────── */
-async function loadTDist() {
-  html('tdist-content', spinner());
+async function fetchQuality() {
+  if (!_qualityCache) {
+    _qualityCache = await api('/api/dashboard/quality');
+  }
+  return _qualityCache;
+}
+
+/* ─────────────────────────────────────────────
+   分布・統計
+───────────────────────────────────────────── */
+async function loadDistrib() {
+  html('distrib-content', spinner());
   try {
-    const d = await api('/api/dashboard/t_distribution');
-    renderTDist(d);
+    const [td, qd] = await Promise.all([
+      api('/api/dashboard/t_distribution'),
+      fetchQuality(),
+    ]);
+    renderDistrib(td, qd);
   } catch (e) {
-    html('tdist-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
+    html('distrib-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
   }
 }
 
-function renderTDist(d) {
-  const { overall, by_sub_key, by_part_name, by_sub_pt } = d;
+function renderDistrib(td, qd) {
+  const { overall, by_sub_key, by_part_name, by_sub_pt: tdSubPt } = td;
+  const { pq_distance, by_sub_pt: qdSubPt, by_sub_pt_raw } = qd;
 
   function histSection(prefix, title, data) {
     if (!data || !data.histogram.bins.length) return '';
@@ -385,14 +430,13 @@ function renderTDist(d) {
   const subKeys   = Object.keys(by_sub_key);
   const partNames = Object.keys(by_part_name);
 
-  // 14パターン グリッド HTML
   function subPtGrid(sub, colorRgba) {
-    const ptMap = (by_sub_pt || {})[sub] || {};
+    const ptMap = (tdSubPt || {})[sub] || {};
     const pts = Object.keys(ptMap).sort();
     if (!pts.length) return '';
     const cards = pts.map(pt => {
       const data = ptMap[pt];
-      const id = `tdist-${sub}-pt${pt}`;
+      const id = `distrib-${sub}-pt${pt}`;
       return `
         <div class="card">
           <div class="card-title" style="font-size:0.82rem">P${pt}
@@ -408,103 +452,10 @@ function renderTDist(d) {
       <div class="card-grid-7">${cards}</div>`;
   }
 
-  let html_ = `
-    <div class="section-title">upper / lower × Point Index 別 t値分布 (14パターン)</div>
-    ${subPtGrid('upper', '#90caf9')}
-    ${subPtGrid('lower', '#ffcc80')}
-
-    <div class="section-title" style="margin-top:24px">全体 / Sub Key / Part Name</div>
-    ${histSection('ov', '全サンプル', overall)}
-    <div class="card-grid-2">
-      ${subKeys.map(k => histSection(`sk-${k.replace(/\W/g, '_')}`, k, by_sub_key[k])).join('')}
-    </div>
-    <div class="card-grid-2">
-      ${partNames.map(k => histSection(`pn-${k.replace(/\W/g, '_')}`, k, by_part_name[k])).join('')}
-    </div>`;
-
-  html('tdist-content', html_);
-
-  // Draw 14-pattern mini histograms (x-axis aligned across all patterns)
-  const upperColor = 'rgba(79,195,247,0.8)';
-  const lowerColor = 'rgba(255,183,77,0.8)';
-
-  // Collect union of all bins across all 14 patterns
-  const allBinSet = new Set();
-  ['upper', 'lower'].forEach(sub => {
-    const ptMap = (by_sub_pt || {})[sub] || {};
-    Object.values(ptMap).forEach(data => {
-      if (data && data.histogram.bins.length) {
-        data.histogram.bins.forEach(b => allBinSet.add(b.toFixed(2)));
-      }
-    });
-  });
-  const globalLabels = [...allBinSet].sort((a, b) => parseFloat(a) - parseFloat(b));
-
-  ['upper', 'lower'].forEach(sub => {
-    const ptMap = (by_sub_pt || {})[sub] || {};
-    const color = sub === 'upper' ? upperColor : lowerColor;
-    Object.keys(ptMap).sort().forEach(pt => {
-      const data = ptMap[pt];
-      if (!data || !data.histogram.bins.length) return;
-      const id = `tdist-${sub}-pt${pt}`;
-      // Map counts to global bins (fill 0 for missing bins)
-      const binToCount = {};
-      data.histogram.bins.forEach((b, i) => { binToCount[b.toFixed(2)] = data.histogram.counts[i]; });
-      const alignedCounts = globalLabels.map(label => binToCount[label] ?? 0);
-      mkBar(id, globalLabels, alignedCounts, { color });
-    });
-  });
-
-  // Draw overall / sub_key / part_name histograms
-  const colors = ['rgba(26,120,194,0.75)', 'rgba(0,230,118,0.75)', 'rgba(255,152,0,0.75)', 'rgba(156,39,176,0.75)'];
-  function drawHist(prefix, data, color) {
-    if (!data || !data.histogram.bins.length) return;
-    mkBar(`${prefix}-hist`, data.histogram.bins.map(b => b.toFixed(2)), data.histogram.counts, { color });
-  }
-  drawHist('ov', overall, colors[0]);
-  subKeys.forEach((k, i) => drawHist(`sk-${k.replace(/\W/g, '_')}`, by_sub_key[k], colors[i % colors.length]));
-  partNames.forEach((k, i) => drawHist(`pn-${k.replace(/\W/g, '_')}`, by_part_name[k], colors[(i + 2) % colors.length]));
-}
-
-/* ─────────────────────────────────────────────
-   品質分析
-───────────────────────────────────────────── */
-async function loadQuality() {
-  html('quality-content', spinner());
-  try {
-    const d = await api('/api/dashboard/quality');
-    renderQuality(d);
-  } catch (e) {
-    html('quality-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
-  }
-}
-
-function renderQuality(d) {
-  const { pq_distance, t_outliers, by_sub_pt } = d;
-
-  // PQ Distance section
-  const pqStats  = statsRowHtml(pq_distance.stats);
-  const pqHist   = `<div class="chart-wrap"><canvas id="pq-hist"></canvas></div>`;
-  const pqOutRow = pq_distance.outliers.map(o =>
-    `<tr><td>${o.idx}</td><td>${o.part_name || ''}</td><td class="num high">${o.pq_dist}</td>
-     <td style="font-size:0.78rem;word-break:break-all">${o.image_path}</td></tr>`
-  ).join('');
-
-  // T-value outliers
-  const tOutCount = t_outliers.count;
-  const iqr = t_outliers.iqr_bounds;
-  const tOutRows = t_outliers.samples.map(o =>
-    `<tr><td>${o.idx}</td><td>${o.part_name || ''}</td><td>${o.sub_key || ''}</td>
-     <td class="num">${o.point_index}</td>
-     <td class="num ${Math.abs(o.t - 0.5) > 0.4 ? 'high' : 'mid'}">${o.t}</td>
-     <td><a href="/?idx=${o.idx}" target="_blank">Annotatorで確認</a></td></tr>`
-  ).join('');
-
-  // upper/lower × pt 別統計 (14パターン)
-  const upper = by_sub_pt['upper'] || {};
-  const lower = by_sub_pt['lower'] || {};
+  // upper/lower × pt 統計テーブル
+  const upper = qdSubPt['upper'] || {};
+  const lower = qdSubPt['lower'] || {};
   const allPts = [...new Set([...Object.keys(upper), ...Object.keys(lower)])].sort();
-
   const subPtRows = allPts.map(pt => {
     const u = upper[pt] || {};
     const l = lower[pt] || {};
@@ -521,35 +472,36 @@ function renderQuality(d) {
     </tr>`;
   }).join('');
 
-  const h = `
+  const pqHistHtml = `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:6px">
+      <button id="btn-pq-log-toggle" style="background:#1a3a5c;border:1px solid #4fc3f7;color:#e0e0e0;border-radius:5px;padding:3px 12px;cursor:pointer;font-size:0.78rem">対数表示</button>
+    </div>
+    <div class="chart-wrap"><canvas id="pq-hist"></canvas></div>`;
+
+  const htmlContent = `
+    <div class="section-title">t値分布（全体 / Sub Key / Part Name）</div>
+    ${histSection('ov', '全サンプル', overall)}
+    <div class="card-grid-2">
+      ${subKeys.map(k => histSection(`sk-${k.replace(/\W/g, '_')}`, k, by_sub_key[k])).join('')}
+    </div>
+    <div class="card-grid-2">
+      ${partNames.map(k => histSection(`pn-${k.replace(/\W/g, '_')}`, k, by_part_name[k])).join('')}
+    </div>
+
+    <div class="section-title">t値分布（upper / lower × Point Index 14パターン）</div>
+    ${subPtGrid('upper', '#90caf9')}
+    ${subPtGrid('lower', '#ffcc80')}
+
     <div class="section-title">PQ 距離分布</div>
     <div class="card">
       <div class="card-title">PQ距離 (px) ヒストグラム</div>
-      ${pqStats}
-      ${pqHist}
+      ${statsRowHtml(pq_distance.stats)}
+      ${pqHistHtml}
     </div>
-    ${pq_distance.outliers.length > 0 ? `
-    <div class="section-title">PQ距離 外れ値 (${pq_distance.outliers.length}件)</div>
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead><tr><th>idx</th><th>part</th><th>PQ距離</th><th>画像パス</th></tr></thead>
-        <tbody>${pqOutRow}</tbody>
-      </table>
-    </div>` : ''}
 
-    <div class="section-title">t値 外れ値 (IQR法) — 計${tOutCount}件</div>
-    ${iqr.low !== undefined ? `<p style="font-size:0.82rem;color:var(--muted);margin-bottom:10px">正常範囲: ${iqr.low} ～ ${iqr.high}</p>` : ''}
-    ${tOutCount > 0 ? `
-    <div class="table-wrap">
-      <table class="data-table">
-        <thead><tr><th>idx</th><th>part</th><th>sub_key</th><th>pt</th><th>t値</th><th>リンク</th></tr></thead>
-        <tbody>${tOutRows}</tbody>
-      </table>
-    </div>` : '<div class="info-msg">外れ値なし</div>'}
-
-    <div class="section-title">upper/lower × Point Index 別統計 (14パターン)</div>
+    <div class="section-title">upper/lower × Point Index 分布比較</div>
     <div class="card" style="margin-bottom:16px">
-      <div class="card-title">t値分布 — upper / lower 比較 (箱ひげ図)</div>
+      <div class="card-title">t値分布 — upper / lower 比較 (バイオリンプロット)</div>
       <div class="chart-wrap-tall"><canvas id="pt-sub-box"></canvas></div>
     </div>
     <div class="card">
@@ -572,178 +524,180 @@ function renderQuality(d) {
       </div>
     </div>`;
 
-  html('quality-content', h);
+  html('distrib-content', htmlContent);
 
-  // Draw PQ histogram
+  // 14パターン mini histograms（x軸を全パターン共通に揃える）
+  const upperColor = 'rgba(79,195,247,0.8)';
+  const lowerColor = 'rgba(255,183,77,0.8)';
+  const allBinSet = new Set();
+  ['upper', 'lower'].forEach(sub => {
+    const ptMap = (tdSubPt || {})[sub] || {};
+    Object.values(ptMap).forEach(data => {
+      if (data && data.histogram.bins.length) {
+        data.histogram.bins.forEach(b => allBinSet.add(b.toFixed(2)));
+      }
+    });
+  });
+  const globalLabels = [...allBinSet].sort((a, b) => parseFloat(a) - parseFloat(b));
+
+  ['upper', 'lower'].forEach(sub => {
+    const ptMap = (tdSubPt || {})[sub] || {};
+    const color = sub === 'upper' ? upperColor : lowerColor;
+    Object.keys(ptMap).sort().forEach(pt => {
+      const data = ptMap[pt];
+      if (!data || !data.histogram.bins.length) return;
+      const id = `distrib-${sub}-pt${pt}`;
+      const binToCount = {};
+      data.histogram.bins.forEach((b, i) => { binToCount[b.toFixed(2)] = data.histogram.counts[i]; });
+      const alignedCounts = globalLabels.map(label => binToCount[label] ?? 0);
+      mkBar(id, globalLabels, alignedCounts, { color });
+    });
+  });
+
+  // 全体 / sub / part ヒストグラム
+  const colors = ['rgba(26,120,194,0.75)', 'rgba(0,230,118,0.75)', 'rgba(255,152,0,0.75)', 'rgba(156,39,176,0.75)'];
+  function drawHist(prefix, data, color) {
+    if (!data || !data.histogram.bins.length) return;
+    mkBar(`${prefix}-hist`, data.histogram.bins.map(b => b.toFixed(2)), data.histogram.counts, { color });
+  }
+  drawHist('ov', overall, colors[0]);
+  subKeys.forEach((k, i) => drawHist(`sk-${k.replace(/\W/g, '_')}`, by_sub_key[k], colors[i % colors.length]));
+  partNames.forEach((k, i) => drawHist(`pn-${k.replace(/\W/g, '_')}`, by_part_name[k], colors[(i + 2) % colors.length]));
+
+  // PQ ヒストグラム
   const pqLabels = pq_distance.histogram.bins.map(b => b.toFixed(1));
   mkBar('pq-hist', pqLabels, pq_distance.histogram.counts, { color: 'rgba(255,152,0,0.75)' });
 
-  // Draw 14-pattern box plot
+  const pqLogBtn = document.getElementById('btn-pq-log-toggle');
+  if (pqLogBtn) {
+    let pqLogScale = false;
+    const pqCounts = pq_distance.histogram.counts;
+    const logHist  = pq_distance.log_histogram || { bins: [], counts: [] };
+    pqLogBtn.addEventListener('click', () => {
+      pqLogScale = !pqLogScale;
+      if (charts['pq-hist']) charts['pq-hist'].destroy();
+      const ctx = document.getElementById('pq-hist');
+      if (!ctx) return;
+      if (pqLogScale && logHist.bins.length > 0) {
+        charts['pq-hist'] = new Chart(ctx.getContext('2d'), {
+          type: 'bar',
+          data: {
+            datasets: [{
+              data: logHist.bins.map((b, i) => ({ x: b, y: logHist.counts[i] })),
+              backgroundColor: 'rgba(255,152,0,0.75)',
+              borderRadius: 2, borderWidth: 0,
+              barPercentage: 1.0, categoryPercentage: 0.9,
+            }],
+          },
+          options: {
+            responsive: true, maintainAspectRatio: false, animation: { duration: 300 },
+            plugins: { legend: { display: false } },
+            scales: {
+              x: { type: 'logarithmic', grid: { color: '#1a2a4a' }, ticks: { maxRotation: 45 } },
+              y: { grid: { color: '#1a2a4a' }, beginAtZero: true },
+            },
+          },
+        });
+      } else {
+        mkBar('pq-hist', pqLabels, pqCounts, { color: 'rgba(255,152,0,0.75)' });
+      }
+      pqLogBtn.textContent = pqLogScale ? '線形表示' : '対数表示';
+    });
+  }
+
+  // バイオリンプロット
+  const upperRaw = (by_sub_pt_raw || {})['upper'] || {};
+  const lowerRaw = (by_sub_pt_raw || {})['lower'] || {};
   const ptAxisLabels = allPts.map(k => `P${k}`);
-  mkBoxplot('pt-sub-box', ptAxisLabels, [
+  mkViolin('pt-sub-box', ptAxisLabels, [
     {
       label: 'upper',
-      data: allPts.map(k => {
-        const s = upper[k];
-        return s ? { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max } : null;
-      }),
+      data: allPts.map(k => upperRaw[k] || []),
       backgroundColor: 'rgba(79,195,247,0.35)',
       borderColor: 'rgba(79,195,247,0.9)',
       borderWidth: 1.5,
-      medianColor: '#4fc3f7',
     },
     {
       label: 'lower',
-      data: allPts.map(k => {
-        const s = lower[k];
-        return s ? { min: s.min, q1: s.q1, median: s.median, q3: s.q3, max: s.max } : null;
-      }),
+      data: allPts.map(k => lowerRaw[k] || []),
       backgroundColor: 'rgba(255,183,77,0.35)',
       borderColor: 'rgba(255,183,77,0.9)',
       borderWidth: 1.5,
-      medianColor: '#ffb74d',
     },
   ]);
 }
 
 /* ─────────────────────────────────────────────
-   実験比較
+   外れ値確認
 ───────────────────────────────────────────── */
-async function loadExperiments() {
-  html('experiments-content', spinner());
+async function loadOutliers() {
+  html('outliers-content', spinner());
   try {
-    const d = await api('/api/dashboard/experiments');
-    renderExperiments(d);
+    const d = await fetchQuality();
+    renderOutliers(d);
   } catch (e) {
-    html('experiments-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
+    html('outliers-content', `<div class="error-msg">読み込みエラー: ${e.message}</div>`);
   }
 }
 
-function renderExperiments(d) {
-  if (!d.experiments || d.experiments.length === 0) {
-    const msg = d.message || 'experiments/ に実験データがありません';
-    html('experiments-content', `<div class="info-msg">${msg}</div>`);
-    return;
-  }
+function renderOutliers(d) {
+  const { pq_distance, t_outliers } = d;
 
-  const exps = d.experiments;
+  const tOutCount = t_outliers.count;
+  const iqr = t_outliers.iqr_bounds;
+  const tOutRows = t_outliers.samples.map(o =>
+    `<tr><td>${o.idx}</td><td>${o.part_name || ''}</td><td>${o.sub_key || ''}</td>
+     <td class="num">${o.point_index}</td>
+     <td class="num ${Math.abs(o.t - 0.5) > 0.4 ? 'high' : 'mid'}">${o.t}</td>
+     <td><a href="/?idx=${o.idx}" target="_blank">Annotatorで確認</a></td></tr>`
+  ).join('');
 
-  // グループ別に分類
-  const groups = {};
-  exps.forEach(e => {
-    const g = e.group || '(ungrouped)';
-    if (!groups[g]) groups[g] = [];
-    groups[g].push(e);
-  });
+  const pqOutRow = pq_distance.outliers.map(o =>
+    `<tr><td>${o.idx}</td><td>${o.part_name || ''}</td><td class="num high">${o.pq_dist}</td>
+     <td style="font-size:0.78rem;word-break:break-all">${esc(o.image_path || '')}</td>
+     <td><a href="/?idx=${o.idx}" target="_blank">確認</a></td></tr>`
+  ).join('');
 
-  // テーブル行生成（グループヘッダー付き）
-  let rows = '';
-  Object.entries(groups).forEach(([groupName, groupExps]) => {
-    rows += `<tr><td colspan="7" style="background:#0d1a30;color:#a8dadc;font-size:0.75rem;padding:4px 8px;font-weight:bold">${esc(groupName)} (${groupExps.length}件)</td></tr>`;
-    groupExps.forEach(e => {
-      const cvMae = e.cv_mae != null ? e.cv_mae.toFixed(5) : '–';
-      const holdoutMae = e.holdout_mae != null ? e.holdout_mae.toFixed(5) : '–';
-      const cvClass = e.cv_mae != null && e.cv_mae < 0.05 ? 'high' : '';
-      const pqBadge = e.use_pq_ratio
-        ? '<span style="color:#a5d6a7;font-size:0.75rem">pq✓</span>'
-        : '<span style="color:#555;font-size:0.75rem">pq–</span>';
-      const predLink = e.has_predictions
-        ? `<button class="tab-link-btn" onclick="loadErrorsForExp('${esc(e.exp_dir)}')" style="font-size:0.75rem;padding:2px 8px">誤差分析</button>`
-        : '';
-      const reportLink = e.has_error_report
-        ? `<a href="/${esc(e.exp_dir)}/error_report.html" target="_blank" style="font-size:0.75rem;color:#80cbc4">レポート</a>`
-        : '';
-      rows += `<tr>
-        <td style="font-size:0.78rem;word-break:break-all;max-width:220px">${esc(e.exp_name || '')}</td>
-        <td class="num" style="font-size:0.78rem">${e.lr ?? '–'}</td>
-        <td class="num" style="font-size:0.78rem">${e.weight_decay ?? '–'}</td>
-        <td>${pqBadge}</td>
-        <td class="num ${cvClass}">${cvMae}</td>
-        <td class="num">${holdoutMae}</td>
-        <td>${predLink} ${reportLink}</td>
-      </tr>`;
-    });
-  });
-
-  // 比較チャート用データ（CV MAE + Holdout MAE）
-  const withMae = exps.filter(e => e.cv_mae != null);
-  const expLabels = withMae.map(e => (e.exp_name || '').substring(0, 25));
-  const cvVals = withMae.map(e => e.cv_mae);
-  const holdoutVals = withMae.map(e => e.holdout_mae);
+  const pqShortRow = (pq_distance.shortest || []).map(o =>
+    `<tr><td>${o.idx}</td><td>${o.part_name || ''}</td><td class="num">${o.pq_dist}</td>
+     <td style="font-size:0.78rem;word-break:break-all">${esc(o.image_path || '')}</td>
+     <td><a href="/?idx=${o.idx}" target="_blank">確認</a></td></tr>`
+  ).join('');
 
   const h = `
-    <div class="section-title">実験一覧 (${exps.length}件)</div>
-    <div class="table-wrap" style="margin-bottom:20px">
+    <div class="section-title">t値 外れ値 (IQR法) — 計${tOutCount}件</div>
+    ${iqr.low !== undefined ? `<p style="font-size:0.82rem;color:var(--muted);margin-bottom:10px">正常範囲: ${iqr.low} ～ ${iqr.high}</p>` : ''}
+    ${tOutCount > 0 ? `
+    <div class="table-wrap">
       <table class="data-table">
-        <thead><tr><th>実験名</th><th>LR</th><th>WD</th><th>pq</th><th>CV MAE</th><th>Holdout MAE</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
+        <thead><tr><th>idx</th><th>part</th><th>sub_key</th><th>pt</th><th>t値</th><th>リンク</th></tr></thead>
+        <tbody>${tOutRows}</tbody>
       </table>
-    </div>
-    ${withMae.length > 1 ? `
-    <div class="section-title">MAE 比較 (CV / Holdout)</div>
-    <div class="card">
-      <div class="chart-wrap-tall"><canvas id="exp-mae-chart"></canvas></div>
+    </div>` : '<div class="info-msg">外れ値なし</div>'}
+
+    ${pq_distance.outliers.length > 0 ? `
+    <div class="section-title">PQ距離 外れ値（長い） — ${pq_distance.outliers.length}件</div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>idx</th><th>part</th><th>PQ距離</th><th>画像パス</th><th>リンク</th></tr></thead>
+        <tbody>${pqOutRow}</tbody>
+      </table>
+    </div>` : ''}
+
+    ${pqShortRow ? `
+    <div class="section-title">PQ距離 外れ値（短い） — ${(pq_distance.shortest || []).length}件</div>
+    <div class="table-wrap">
+      <table class="data-table">
+        <thead><tr><th>idx</th><th>part</th><th>PQ距離</th><th>画像パス</th><th>リンク</th></tr></thead>
+        <tbody>${pqShortRow}</tbody>
+      </table>
     </div>` : ''}`;
 
-  html('experiments-content', h);
-
-  if (withMae.length > 1) {
-    const minMae = Math.min(...cvVals.filter(v => v != null));
-    const maxMae = Math.max(...cvVals.filter(v => v != null));
-    const cvColors = cvVals.map(v => {
-      if (v == null) return 'rgba(100,100,100,0.4)';
-      const ratio = maxMae > minMae ? (v - minMae) / (maxMae - minMae) : 0;
-      const r = Math.round(26  + ratio * (244 - 26));
-      const g = Math.round(120 + ratio * (67  - 120));
-      const b = Math.round(194 + ratio * (54  - 194));
-      return `rgba(${r},${g},${b},0.8)`;
-    });
-
-    if (charts['exp-mae-chart']) charts['exp-mae-chart'].destroy();
-    const ctx = document.getElementById('exp-mae-chart');
-    if (ctx) {
-      charts['exp-mae-chart'] = new Chart(ctx.getContext('2d'), {
-        type: 'bar',
-        data: {
-          labels: expLabels,
-          datasets: [
-            { label: 'CV MAE', data: cvVals, backgroundColor: cvColors, borderRadius: 2, borderWidth: 0 },
-            { label: 'Holdout MAE', data: holdoutVals, backgroundColor: 'rgba(255,152,0,0.5)', borderRadius: 2, borderWidth: 0 },
-          ],
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          animation: { duration: 300 },
-          plugins: {
-            legend: { labels: { color: '#ccc', font: { size: 11 } } },
-            tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${c.formattedValue}` } },
-          },
-          scales: {
-            x: { grid: { color: '#1a2a4a' }, ticks: { maxRotation: 45, font: { size: 10 }, color: '#888' } },
-            y: { grid: { color: '#1a2a4a' }, beginAtZero: false, ticks: { color: '#888' } },
-          },
-        },
-      });
-    }
-  }
+  html('outliers-content', h);
 }
 
 function esc(str) {
   return String(str || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-async function loadErrorsForExp(expDir) {
-  // 実験比較タブ→エラー分析タブに遷移してその実験のデータを表示
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  const errTab = document.querySelector('.tab-btn[data-tab="errors"]');
-  if (errTab) errTab.classList.add('active');
-  const errPanel = document.getElementById('tab-errors');
-  if (errPanel) errPanel.classList.add('active');
-
-  currentExpPath = expDir;
-  await loadErrors();
 }
 
 /* ─────────────────────────────────────────────
@@ -891,6 +845,42 @@ function renderErrors(d, selectorHtml = '') {
       </div>
     </div>`;
 
+  // pq_dist vs 誤差 散布図 + ヒートマップ
+  const hm = d.heatmap || {};
+  const hmParts = Object.keys(hm).sort();
+  const hmPts   = [...new Set(hmParts.flatMap(p => Object.keys(hm[p])))].sort((a, b) => +a - +b);
+  // カラースケール: 最大値を基準に背景色を計算
+  const hmAllVals = hmParts.flatMap(p => Object.values(hm[p]));
+  const hmMax = hmAllVals.length ? Math.max(...hmAllVals) : 1;
+  const hmRows = hmParts.map(part => {
+    const cells = hmPts.map(pt => {
+      const v = hm[part]?.[pt];
+      if (v == null) return '<td style="background:#0d0d1a;color:#333">–</td>';
+      const ratio = Math.min(v / hmMax, 1);
+      const r = Math.round(26  + ratio * (244 - 26));
+      const g = Math.round(120 + ratio * (67  - 120));
+      const b = Math.round(194 + ratio * (54  - 194));
+      return `<td style="background:rgba(${r},${g},${b},0.75);color:#fff;font-size:0.78rem;text-align:center">${v.toFixed(2)}</td>`;
+    }).join('');
+    return `<tr><td style="font-size:0.78rem;white-space:nowrap;color:#a8dadc">${esc(part)}</td>${cells}</tr>`;
+  }).join('');
+  const hmHtml = hmRows.length ? `
+    <div class="section-title">誤差ヒートマップ (Part × Point Index, 単位:px)</div>
+    <div class="card" style="margin-bottom:20px;overflow-x:auto">
+      <table class="data-table" style="min-width:auto">
+        <thead><tr><th>Part</th>${hmPts.map(p => `<th>P${p}</th>`).join('')}</tr></thead>
+        <tbody>${hmRows}</tbody>
+      </table>
+    </div>` : '';
+
+  const extraChartsHtml = `
+    ${hmHtml}
+    <div class="section-title">pq_dist vs 誤差(px) 散布図</div>
+    <div class="card" style="margin-bottom:20px">
+      <div class="card-title">PQ距離 vs 絶対誤差(px) — pq_dist が大きいほど誤差(px)が拡大する傾向</div>
+      <div class="chart-wrap"><canvas id="err-pqdist-scatter"></canvas></div>
+    </div>`;
+
   // Error distribution histogram
   const histHtml = `
     <div class="section-title">絶対誤差分布</div>
@@ -946,7 +936,7 @@ function renderErrors(d, selectorHtml = '') {
   const topErrHtml = errTableHtml(`誤差上位 ${d.top_errors.length} 件（t値順）`, d.top_errors)
     + (d.top_errors_px ? errTableHtml(`誤差上位 ${d.top_errors_px.length} 件（px順）`, d.top_errors_px) : '');
 
-  html('errors-content', (selectorHtml || '') + summaryCards + breakdownHtml + scatterHtml + histHtml + topErrHtml);
+  html('errors-content', (selectorHtml || '') + summaryCards + breakdownHtml + scatterHtml + extraChartsHtml + histHtml + topErrHtml);
 
   // セレクターイベント
   const sel = document.getElementById('err-exp-select');
@@ -1071,6 +1061,13 @@ function renderErrors(d, selectorHtml = '') {
   if (d.residual_histogram_px) {
     const residBinsPx = d.residual_histogram_px.bins.map(b => b.toFixed(2));
     mkBar('err-resid-hist-px', residBinsPx, d.residual_histogram_px.counts, { color: 'rgba(0,188,212,0.7)' });
+  }
+
+  // pq_dist vs 誤差(px) 散布図
+  if (d.pq_dist_scatter) {
+    mkScatter('err-pqdist-scatter', [
+      { label: '誤差(px)', data: d.pq_dist_scatter, color: 'rgba(255,183,77,0.45)' },
+    ], { xLabel: 'pq_dist (px)', yLabel: '絶対誤差 (px)' });
   }
 
   // Patch toggle buttons
