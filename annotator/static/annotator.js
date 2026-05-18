@@ -3,8 +3,8 @@
 // ---------------------------------------------------------------------------
 // Constants — annotator の物理 t 座標系 (utils/patch_utils.py T_MIN/T_MAX と同値)
 // ---------------------------------------------------------------------------
-const ANNOTATOR_T_MIN = -1.0;
-const ANNOTATOR_T_MAX =  2.0;
+const ANNOTATOR_T_MIN = -2.0;
+const ANNOTATOR_T_MAX =  3.0;
 
 /** t_norm [0,1] → 物理 t 値 (PQ 座標系) */
 function toPhysicalT(tNorm) {
@@ -26,7 +26,6 @@ const state = {
   currentT: null,       // null = not yet clicked
   existingT: null,      // value already saved on server
   tPred: null,          // model prediction (null if no model)
-  labelSource: null,    // 後方互換用（旧フィールド）
   imageB64: null,
   faceB64: null,
   patchB64: null,
@@ -40,7 +39,7 @@ const state = {
   galleryTotalPages: 1,
   galleryTotalImages: 0,
   gallerySkipFilter: "all",  // "all" | "active" | "skipped"
-  gallerySortBy: "idx",      // "idx" | "eye_scale_asc" | "eye_scale_desc" | "norm_eye_scale_asc" | "norm_eye_scale_desc" | "lap_var_asc" | "lap_var_desc"
+  gallerySortBy: "idx",      // "idx" | "eye_scale_*" | "lap_var_*"
   sortedIdxList: null,       // null = idx順; ソート時はサンプルidxの配列
 };
 
@@ -165,18 +164,15 @@ function _eyeGroupStartInList(pos) {
 
 async function jumpToNextEye() {
   if (state.sortedIdxList) {
-    // ソート済みモード: sampleMeta を使ってリスト内でグループ境界を検索
     const meta = state.sampleMeta;
     const list = state.sortedIdxList;
     let pos = _sortedPos();
     const cur = meta[list[pos]];
     if (!cur) { loadSample(list[Math.min(pos + 1, list.length - 1)]); return; }
     const { image_path, part_name } = cur;
-    // 現在のeye groupを末尾まで読み飛ばす
     while (pos < list.length && meta[list[pos]] &&
            meta[list[pos]].image_path === image_path &&
            meta[list[pos]].part_name === part_name) pos++;
-    // 次のeye groupを探す（skip済みはスキップ）
     while (pos < list.length) {
       if (!state.skipFlags[list[pos]]) { loadSample(list[pos]); return; }
       const sg = meta[list[pos]];
@@ -188,7 +184,6 @@ async function jumpToNextEye() {
     setStatus("次の目はありません");
     return;
   }
-  // 非ソートモード: サーバーサイドナビ
   try {
     const data = await apiFetch(`/api/nav/next_eye/${state.currentIdx}`);
     if (data.idx !== null) loadSample(data.idx);
@@ -198,7 +193,6 @@ async function jumpToNextEye() {
 
 async function jumpToPrevEye() {
   if (state.sortedIdxList) {
-    // ソート済みモード: sampleMeta を使ってリスト内でグループ境界を検索
     const meta = state.sampleMeta;
     const list = state.sortedIdxList;
     let pos = _eyeGroupStartInList(_sortedPos());
@@ -213,7 +207,6 @@ async function jumpToPrevEye() {
     setStatus("前の目はありません");
     return;
   }
-  // 非ソートモード: サーバーサイドナビ
   try {
     const data = await apiFetch(`/api/nav/prev_eye/${state.currentIdx}`);
     if (data.idx !== null) loadSample(data.idx);
@@ -252,6 +245,7 @@ async function loadSample(idx) {
     state.currentT    = data.existing_t;  // start with saved value
     state.tPred    = data.t_pred ?? null;
     state.skipFlag = data.skip_flag ?? false;
+    state.skipFlags[idx] = data.skip_flag ?? false;
     state.imageB64    = data.image_b64;
     state.faceB64     = data.face_b64;
     state.patchB64    = data.patch_b64;
@@ -285,7 +279,6 @@ async function loadSample(idx) {
     }
 
     updateProgress();
-    updateLabelSourceBadge();
     updateSkipImageButton();
     if (state.imageB64) fullImg.src = "data:image/jpeg;base64," + state.imageB64;
     if (state.faceB64)  faceImg.src = "data:image/jpeg;base64," + state.faceB64;
@@ -398,14 +391,6 @@ function updatePredDisplay() {
 function updateProgress() {
   elProgress.textContent =
     `${state.annotated} / ${state.total}  (現在: ${state.currentIdx})`;
-}
-
-function updateLabelSourceBadge() {
-  // label_source は削除済み — badge 要素が残っていれば非表示にする
-  const el = document.getElementById("label-source-badge");
-  if (el) el.style.display = "none";
-  const confEl = document.getElementById("label-confidence");
-  if (confEl) confEl.style.display = "none";
 }
 
 function setStatus(msg) {
@@ -580,7 +565,6 @@ inputJump.addEventListener("keydown", (e) => {
 
 async function advance(delta) {
   if (state.sortedIdxList) {
-    // ソート済みモード: リスト内で Map を使って O(1) で位置を求め、skip フラグ確認
     const list = state.sortedIdxList;
     let pos = _sortedPos() + delta;
     while (pos >= 0 && pos < list.length && state.skipFlags[list[pos]]) {
@@ -589,10 +573,10 @@ async function advance(delta) {
     if (pos >= 0 && pos < list.length) loadSample(list[pos]);
     return;
   }
-  // 非ソートモード: サーバーサイドナビ（skip 済みを自動スキップ）
   try {
     const data = await apiFetch(`/api/nav/adjacent/${state.currentIdx}?delta=${delta}`);
     if (data.idx !== null) loadSample(data.idx);
+    else setStatus(delta > 0 ? "次の有効なサンプルはありません" : "前の有効なサンプルはありません");
   } catch (err) { setStatus("ナビゲーションエラー: " + err.message); }
 }
 
@@ -737,9 +721,17 @@ btnModelApply.addEventListener("click", async () => {
       body: JSON.stringify({ exp_dir: _selectedFolder }),
     });
     const modeLabel = result.infer_mode === "exp_native" ? " [EXP-native]" : (result.infer_mode === "dummy_t1" ? " [t=1 baseline]" : "");
+    // パッチサイズ・ラベル範囲がデフォルト（64×128, [-2,3]）と異なる場合は注記
+    let patchNote = "";
+    if (result.patch_size && (result.patch_size[0] !== 64 || result.patch_size[1] !== 128)) {
+      patchNote += ` patch=${result.patch_size[0]}×${result.patch_size[1]}`;
+    }
+    if (result.label_t_min !== undefined && (result.label_t_min !== -2.0 || result.label_t_max !== 3.0)) {
+      patchNote += ` label=[${result.label_t_min},${result.label_t_max}]`;
+    }
     _folderData = { ..._folderData, active_dir: _selectedFolder, loaded_count: result.loaded_count, infer_mode: result.infer_mode };
     renderModelPanel(_folderData);
-    setStatus(`モデルを更新しました${result.infer_mode === "dummy_t1" ? " (t=1 baseline)" : ` (${result.loaded_count} 個)${modeLabel}`}`);
+    setStatus(`モデルを更新しました${result.infer_mode === "dummy_t1" ? " (t=1 baseline)" : ` (${result.loaded_count} 個)${modeLabel}${patchNote}`}`);
     // 現在サンプルの予測を更新
     await loadSample(state.currentIdx);
   } catch (err) {
@@ -777,7 +769,8 @@ async function loadGalleryPage() {
   galleryGrid.appendChild(loadingDiv);
 
   try {
-    const data = await apiFetch(`/api/gallery?page=${state.galleryPage}&per_page=${state.galleryPerPage}&skip_filter=${state.gallerySkipFilter}&sort_by=${state.gallerySortBy}`);
+    const galleryUrl = `/api/gallery?page=${state.galleryPage}&per_page=${state.galleryPerPage}&skip_filter=${state.gallerySkipFilter}&sort_by=${state.gallerySortBy}`;
+    const data = await apiFetch(galleryUrl);
     state.galleryPage = data.page;
     state.galleryTotalPages = data.total_pages;
     state.galleryTotalImages = data.total_images;
@@ -848,9 +841,10 @@ function renderGalleryPage(items) {
     if (state.gallerySortBy !== "idx") {
       const scaleBadge = document.createElement("div");
       scaleBadge.className = "gallery-eye-scale";
-      if (state.gallerySortBy.startsWith("lap_var") && item.lap_var != null) {
+      const sb = state.gallerySortBy;
+      if (sb.startsWith("lap_var") && item.lap_var != null) {
         scaleBadge.textContent = `lv=${Math.round(item.lap_var)}`;
-      } else if (state.gallerySortBy.startsWith("norm_eye_scale") && item.norm_eye_scale != null) {
+      } else if (sb.startsWith("norm_eye_scale") && item.norm_eye_scale != null) {
         scaleBadge.textContent = `nes=${item.norm_eye_scale.toFixed(3)}`;
       } else if (item.eye_scale != null) {
         scaleBadge.textContent = `es=${Math.round(item.eye_scale)}px`;
@@ -932,12 +926,6 @@ document.querySelectorAll(".gallery-tab").forEach(tab => {
 
 // ギャラリーソート切替
 const gallerySortSelect = document.getElementById("gallery-sort-select");
-gallerySortSelect.addEventListener("change", async () => {
-  state.gallerySortBy = gallerySortSelect.value;
-  state.galleryPage = 1;
-  await updateSortedOrder();
-  loadGalleryPage();
-});
 
 async function updateSortedOrder() {
   if (state.gallerySortBy === "idx") {
@@ -946,12 +934,9 @@ async function updateSortedOrder() {
     return;
   }
   try {
-    // ソート済み idx リストを取得
     const data = await apiFetch(`/api/sample_order?sort_by=${state.gallerySortBy}`);
     state.sortedIdxList = data.order;
-    // O(1) 逆引き Map を構築
     _sortedIdxToPos = new Map(data.order.map((idx, pos) => [idx, pos]));
-    // ソート済みナビに必要な sampleMeta を取得
     try {
       const groupsData = await apiFetch("/api/sample_groups");
       const meta = {};
@@ -970,6 +955,13 @@ async function updateSortedOrder() {
     setStatus("ソート順の取得に失敗しました: " + err.message);
   }
 }
+
+gallerySortSelect.addEventListener("change", async () => {
+  state.gallerySortBy = gallerySortSelect.value;
+  state.galleryPage = 1;
+  await updateSortedOrder();
+  loadGalleryPage();
+});
 
 btnGalleryClose.addEventListener("click", () => {
   galleryOverlay.classList.remove("open");

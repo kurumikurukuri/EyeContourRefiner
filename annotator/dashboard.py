@@ -67,6 +67,7 @@ def _load_manifest() -> List[Dict[str, Any]]:
                 "t":           "" if t_val is None else str(t_val),
                 "t_float":     t_float,
                 "pq_dist":     math.hypot(qx - px, qy - py),
+                "skip_flag":   bool(s.get("skip_flag", False)),
             })
         except (ValueError, KeyError, TypeError):
             continue
@@ -78,6 +79,20 @@ def _histogram(values: List[float], n_bins: int = 20) -> Dict[str, Any]:
         return {"bins": [], "counts": []}
     arr           = np.array(values, dtype=float)
     counts, edges = np.histogram(arr, bins=n_bins)
+    centers       = [(edges[i] + edges[i + 1]) / 2 for i in range(len(edges) - 1)]
+    return {
+        "bins":   [round(float(b), 4) for b in centers],
+        "counts": [int(c) for c in counts],
+    }
+
+
+def _log_histogram(values: List[float], n_bins: int = 30) -> Dict[str, Any]:
+    pos = [v for v in values if v > 0]
+    if not pos:
+        return {"bins": [], "counts": []}
+    arr           = np.array(pos, dtype=float)
+    edges         = np.geomspace(arr.min(), arr.max(), n_bins + 1)
+    counts, edges = np.histogram(arr, bins=edges)
     centers       = [(edges[i] + edges[i + 1]) / 2 for i in range(len(edges) - 1)]
     return {
         "bins":   [round(float(b), 4) for b in centers],
@@ -115,27 +130,47 @@ def get_overview() -> Dict[str, Any]:
     annotated      = sum(1 for r in rows if r["t_float"] is not None)
     unique_images  = len(set(r.get("image_path", "") for r in rows))
 
+    non_skipped_rows   = [r for r in rows if not r["skip_flag"]]
+    non_skipped_total  = len(non_skipped_rows)
+    non_skipped_annotated = sum(1 for r in non_skipped_rows if r["t_float"] is not None)
+    non_skipped_unique_images = len(set(r.get("image_path", "") for r in non_skipped_rows))
+
     by_part:        Dict[str, int] = {}
     by_sub_key:     Dict[str, int] = {}
     by_point_index: Dict[str, int] = {str(i): 0 for i in range(7)}
+    # part × sub_key の完了率マトリクス: key → {total, annotated}
+    completion_matrix: Dict[str, Dict[str, Any]] = {}
 
-    for r in rows:
+    for r in non_skipped_rows:
         part = r.get("part_name", "unknown")
         sub  = r.get("sub_key",   "unknown")
         pt = str(r["point_index"])
         by_part[part]      = by_part.get(part, 0) + 1
         by_sub_key[sub]    = by_sub_key.get(sub, 0) + 1
         by_point_index[pt] = by_point_index.get(pt, 0) + 1
+        key = f"{part}/{sub}"
+        if key not in completion_matrix:
+            completion_matrix[key] = {"part": part, "sub": sub, "total": 0, "annotated": 0}
+        completion_matrix[key]["total"] += 1
+        if r["t_float"] is not None:
+            completion_matrix[key]["annotated"] += 1
+
+    matrix_list = sorted(completion_matrix.values(), key=lambda x: (x["part"], x["sub"]))
+    for m in matrix_list:
+        m["pct"] = round(100.0 * m["annotated"] / m["total"], 1) if m["total"] > 0 else 0.0
 
     return {
-        "total":         total,
-        "annotated":     annotated,
-        "unannotated":   total - annotated,
-        "progress_pct":  round(100.0 * annotated / total, 1) if total > 0 else 0.0,
-        "unique_images": unique_images,
+        "total":                    total,
+        "annotated":                non_skipped_annotated,
+        "unannotated":              non_skipped_total - non_skipped_annotated,
+        "progress_pct":             round(100.0 * non_skipped_annotated / non_skipped_total, 1) if non_skipped_total > 0 else 0.0,
+        "unique_images":            unique_images,
+        "non_skipped_total":        non_skipped_total,
+        "non_skipped_unique_images": non_skipped_unique_images,
         "by_part_name":  by_part,
         "by_sub_key":    by_sub_key,
         "by_point_index": by_point_index,
+        "completion_matrix": matrix_list,
     }
 
 
@@ -188,6 +223,14 @@ def get_quality() -> Dict[str, Any]:
         ],
         key=lambda x: x["pq_dist"], reverse=True,
     )
+    pq_shortest = sorted(
+        [
+            {"idx": r.get("idx"), "image_path": r.get("image_path"),
+             "pq_dist": round(r["pq_dist"], 2), "part_name": r.get("part_name")}
+            for r in rows if r["pq_dist"] > 0
+        ],
+        key=lambda x: x["pq_dist"],
+    )[:20]
 
     # t 値外れ値 (IQR法)
     t_vals    = np.array([r["t_float"] for r in annotated], dtype=float)
@@ -227,12 +270,18 @@ def get_quality() -> Dict[str, Any]:
         sub: {pt: _stats(v) for pt, v in sorted(pts.items())}
         for sub, pts in sorted(sub_pt_groups.items())
     }
+    by_sub_pt_raw = {
+        sub: {pt: v for pt, v in sorted(pts.items())}
+        for sub, pts in sorted(sub_pt_groups.items())
+    }
 
     return {
         "pq_distance": {
-            "histogram": _histogram(pq_dists),
-            "stats":     _stats(pq_dists),
-            "outliers":  pq_outliers[:20],
+            "histogram":     _histogram(pq_dists),
+            "log_histogram": _log_histogram(pq_dists),
+            "stats":         _stats(pq_dists),
+            "outliers":      pq_outliers[:20],
+            "shortest":      pq_shortest,
         },
         "t_outliers": {
             "count":      len(t_outliers),
@@ -241,6 +290,7 @@ def get_quality() -> Dict[str, Any]:
         },
         "by_point_index": by_point_index,
         "by_sub_pt":      by_sub_pt,
+        "by_sub_pt_raw":  by_sub_pt_raw,
     }
 
 
@@ -261,6 +311,9 @@ def get_experiments() -> Dict[str, Any]:
             hp = data.get("hyperparameters", {})
             results = data.get("results", {})
             exp_dir_rel = str(exp_dir.relative_to(_PROJECT_ROOT))
+            patch_h = hp.get("patch_h")
+            patch_w = hp.get("patch_w")
+            patch_size_str = f"{patch_h}×{patch_w}" if patch_h and patch_w else None
             experiments.append({
                 "group": group,
                 "exp_name": data.get("exp_name", exp_dir.name),
@@ -272,9 +325,13 @@ def get_experiments() -> Dict[str, Any]:
                 "weight_decay": hp.get("weight_decay"),
                 "use_pq_ratio": hp.get("use_pq_ratio", False),
                 "k_folds": hp.get("k_folds"),
+                "patch_size": patch_size_str,
+                "n_train_samples": data.get("data", {}).get("n_train_samples"),
+                "n_test_samples": data.get("data", {}).get("n_test_samples"),
                 "cv_mae": results.get("cv_mae"),
                 "holdout_mae": results.get("holdout_mae"),
-                "n_train_samples": data.get("data", {}).get("n_train_samples"),
+                "cv_mae_px": results.get("cv_mae_px"),
+                "holdout_mae_px": results.get("holdout_mae_px"),
                 "has_predictions": any(
                     (exp_dir / n).exists()
                     for n in ("prediction.csv", "train_predictions.csv", "test_predictions.csv")
@@ -506,6 +563,23 @@ def get_errors(
         for i in indices if rows[i].get("sub_key") != "upper"
     ]
 
+    # pq_dist vs 誤差 散布図（最大 1000 点）
+    pq_dist_scatter = [
+        {"x": round(rows[i]["pq_dist"], 1), "y": round(rows[i]["abs_error_px"], 3)}
+        for i in indices
+    ]
+
+    # part × point_index MAE ヒートマップ
+    heatmap_data: Dict[str, Dict[str, list]] = {}
+    for r in rows:
+        part = r.get("part_name", "?")
+        pt   = str(r.get("point_index", "?"))
+        heatmap_data.setdefault(part, {}).setdefault(pt, []).append(r["abs_error_px"])
+    heatmap = {
+        part: {pt: round(float(np.mean(v)), 3) for pt, v in sorted(pts.items())}
+        for part, pts in sorted(heatmap_data.items())
+    }
+
     return {
         "available":              True,
         "split":                  split,
@@ -527,6 +601,8 @@ def get_errors(
             "upper": resid_upper_px,
             "lower": resid_lower_px,
         },
+        "pq_dist_scatter": pq_dist_scatter,
+        "heatmap":         heatmap,
         "top_errors":    top_errors,
         "top_errors_px": top_errors_px,
     }

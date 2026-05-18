@@ -63,8 +63,7 @@ _ALLOWED_MODEL_DIRS = [
 # 画像グルーピングインデックス（ギャラリー用）
 _image_index: Optional[Dict[str, Dict[str, Any]]] = None  # image_path → {first_pos, total, annotated, skipped}
 _image_order: Optional[List[str]] = None  # 挿入順の画像パスリスト
-# ギャラリーソート用 per-image キャッシュ（遅延ロード）
-# col名 → {image_path → min_value}
+# DB 由来のギャラリーソートキャッシュ（遅延ロード）: col名 → {image_path → value}
 _gallery_sort_cache: Dict[str, Optional[Dict[str, float]]] = {
     "eye_scale": None,
     "norm_eye_scale": None,
@@ -84,6 +83,7 @@ _MAX_THUMBNAIL_CACHE = 500
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """アプリケーション起動時にモデルとサンプルを読み込む。"""
+    _setup_file_logging()
     _try_load_infer_model()
     _db.init_db()
     _build_image_index()
@@ -122,6 +122,14 @@ _imagenet_std_t = None
 # EXP固有predictor（create_predictor()が提供する callable）
 _active_predictor = None
 _active_infer_mode = "default"  # "default" | "exp_native"
+
+# 推論時のパッチ抽出・ラベル正規化パラメータ（experiment.json から読み込む）
+# _predict_t はこれらを使い、モデル出力を WebUI の t_norm [T_MIN, T_MAX] に変換する
+_infer_patch_size: tuple = PATCH_SIZE
+_infer_patch_t_min: float = T_MIN
+_infer_patch_t_max: float = T_MAX
+_infer_label_t_min: float = T_MIN
+_infer_label_t_max: float = T_MAX
 
 
 def _find_model_paths() -> List[Path]:
@@ -185,19 +193,71 @@ def _load_exp_predictor(infer_script: Path, models_dir: Path):
         return None
 
 
-def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "default") -> None:
+def _load_exp_params(models_dir: Path) -> dict:
+    """experiment.json からパッチ抽出・ラベル正規化パラメータを読み込む。
+
+    Returns: patch_size, patch_t_min, patch_t_max, label_t_min, label_t_max を含む dict。
+             読み込み失敗時は空 dict（デフォルト値が使われる）。
+    """
+    import json as _json
+    exp_json = models_dir / "experiment.json"
+    if not exp_json.exists():
+        return {}
+    try:
+        with open(exp_json, encoding="utf-8") as f:
+            data = _json.load(f)
+        hp = data.get("hyperparameters", {})
+        params: dict = {}
+        if "patch_h" in hp and "patch_w" in hp:
+            params["patch_size"] = (int(hp["patch_h"]), int(hp["patch_w"]))
+        if "patch_t_min" in hp:
+            params["patch_t_min"] = float(hp["patch_t_min"])
+        if "patch_t_max" in hp:
+            params["patch_t_max"] = float(hp["patch_t_max"])
+        # label_t_min/max が null なら patch 範囲と同じ（train.py の挙動に合わせる）
+        lt_min = hp.get("label_t_min")
+        lt_max = hp.get("label_t_max")
+        params["label_t_min"] = float(lt_min) if lt_min is not None else params.get("patch_t_min", T_MIN)
+        params["label_t_max"] = float(lt_max) if lt_max is not None else params.get("patch_t_max", T_MAX)
+        logger.info(
+            "experiment.json 読み込み: patch_size=%s patch_t=[%.1f,%.1f] label_t=[%.1f,%.1f]",
+            params.get("patch_size", PATCH_SIZE),
+            params.get("patch_t_min", T_MIN), params.get("patch_t_max", T_MAX),
+            params["label_t_min"], params["label_t_max"],
+        )
+        return params
+    except Exception as exc:
+        logger.warning("experiment.json の読み込みに失敗しました: %s", exc)
+        return {}
+
+
+def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "default", patch_params: Optional[dict] = None) -> None:
     """モデルをロードしてグローバル状態を一括で更新する。
 
     predictor と infer_mode も同一ロック内で設定することで
     _active_predictor / _active_infer_mode の TOCTOU を防止する。
+    patch_params: experiment.json から読み込んだパッチ・ラベルパラメータ。
     """
     global _infer_models, _infer_device, _active_model_paths, _imagenet_mean_t, _imagenet_std_t, _active_predictor, _active_infer_mode
+    global _infer_patch_size, _infer_patch_t_min, _infer_patch_t_max, _infer_label_t_min, _infer_label_t_max
+    # パッチパラメータを解決（patch_params が指定されていれば優先、なければデフォルト）
+    new_patch_size  = tuple(patch_params["patch_size"])  if patch_params and "patch_size"  in patch_params else PATCH_SIZE
+    new_pt_min      = patch_params["patch_t_min"]        if patch_params and "patch_t_min"  in patch_params else T_MIN
+    new_pt_max      = patch_params["patch_t_max"]        if patch_params and "patch_t_max"  in patch_params else T_MAX
+    new_lt_min      = patch_params["label_t_min"]        if patch_params and "label_t_min"  in patch_params else T_MIN
+    new_lt_max      = patch_params["label_t_max"]        if patch_params and "label_t_max"  in patch_params else T_MAX
+
     if not model_paths:
         with _models_lock:
             _infer_models = []
             _active_model_paths = []
             _active_predictor = predictor
             _active_infer_mode = infer_mode
+            _infer_patch_size  = new_patch_size
+            _infer_patch_t_min = new_pt_min
+            _infer_patch_t_max = new_pt_max
+            _infer_label_t_min = new_lt_min
+            _infer_label_t_max = new_lt_max
         logger.info("モデルをクリアしました。推論補助は無効")
         return
     try:
@@ -235,7 +295,15 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
             _imagenet_std_t  = std_t
             _active_predictor = predictor
             _active_infer_mode = infer_mode
-        logger.info("%d 個のモデルをアンサンブルとして使用します", len(loaded))
+            _infer_patch_size  = new_patch_size
+            _infer_patch_t_min = new_pt_min
+            _infer_patch_t_max = new_pt_max
+            _infer_label_t_min = new_lt_min
+            _infer_label_t_max = new_lt_max
+        logger.info(
+            "%d 個のモデルをアンサンブルとして使用します (patch=%s t_patch=[%.1f,%.1f] t_label=[%.1f,%.1f])",
+            len(loaded), new_patch_size, new_pt_min, new_pt_max, new_lt_min, new_lt_max,
+        )
     except Exception as exc:
         logger.warning("推論モデルの読み込みに失敗しました: %s", exc)
 
@@ -250,17 +318,28 @@ def _predict_t(
     qx: float, qy: float,
     is_upper: float,
 ) -> Optional[float]:
+    """モデルで t を推論し、WebUI の t_norm [T_MIN, T_MAX] で返す。
+
+    モデルの出力は [label_t_min, label_t_max] で正規化された t_norm_label。
+    これを物理 t_raw に戻し、さらに WebUI の [T_MIN, T_MAX] で再正規化して返す。
+    EXP固有predictor は自前で変換を行うため、この変換をスキップする。
+    """
     # グローバル状態のスナップショットをロック下で取得してからロックを解放し推論を実行
     with _models_lock:
         predictor = _active_predictor
         if predictor is None and not _infer_models:
             return None
-        models = list(_infer_models) if predictor is None else []
-        device = _infer_device
-        mean_t = _imagenet_mean_t
-        std_t  = _imagenet_std_t
+        models   = list(_infer_models) if predictor is None else []
+        device   = _infer_device
+        mean_t   = _imagenet_mean_t
+        std_t    = _imagenet_std_t
+        ps       = _infer_patch_size
+        pt_min   = _infer_patch_t_min
+        pt_max   = _infer_patch_t_max
+        lt_min   = _infer_label_t_min
+        lt_max   = _infer_label_t_max
 
-    # EXP固有predictorを優先使用
+    # EXP固有predictorを優先使用（変換は predictor 側で行う）
     if predictor is not None:
         try:
             return predictor(image_rgb, px, py, qx, qy, is_upper)
@@ -270,13 +349,17 @@ def _predict_t(
 
     try:
         import torch
-        patch = extract_patch(image_rgb, px, py, qx, qy)
+        patch = extract_patch(image_rgb, px, py, qx, qy, patch_size=ps, t_min=pt_min, t_max=pt_max)
         x = torch.from_numpy(patch.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
         x = (x - mean_t) / std_t
         is_upper_t = torch.tensor([[is_upper]], dtype=torch.float32, device=device)
         with torch.no_grad():
             preds = [model(x, is_upper_t).item() for model in models]
-        return float(sum(preds) / len(preds))
+        t_norm_label = float(sum(preds) / len(preds))
+
+        # ラベル正規化範囲 [lt_min, lt_max] → 物理 t_raw → WebUI t_norm [T_MIN, T_MAX]
+        t_raw = t_norm_label * (lt_max - lt_min) + lt_min
+        return (t_raw - T_MIN) / (T_MAX - T_MIN)
     except TypeError as exc:
         logger.error("モデル呼び出しの引数エラー（バグ）: %s", exc)
         raise
@@ -293,6 +376,17 @@ _thumbnail_cache: OrderedDict[str, str] = OrderedDict()
 # Image index (in-memory gallery cache built from DB)
 # ---------------------------------------------------------------------------
 
+def _is_numeric(val: Any) -> bool:
+    """値が float に変換できるか確認する。"""
+    if val is None or val == "":
+        return False
+    try:
+        float(val)
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
 def _build_image_index() -> None:
     """DB から画像パス単位のグループインデックスを構築する。"""
     global _image_index, _image_order, _gallery_sort_cache
@@ -301,13 +395,13 @@ def _build_image_index() -> None:
 
 
 def _ensure_gallery_sort_loaded(col: str) -> Dict[str, float]:
-    """ギャラリーソート用 per-image min キャッシュを返す（未ロードなら DB から取得）。"""
+    """DB 由来のギャラリーソートキャッシュを返す（未ロードなら取得）。"""
     global _gallery_sort_cache
     if _gallery_sort_cache.get(col) is None:
         logger.info("gallery sort cache loading: %s", col)
         _gallery_sort_cache[col] = _db.get_col_min_per_image(col)
         logger.info("gallery sort cache ready: %s (%d images)", col, len(_gallery_sort_cache[col]))
-    return _gallery_sort_cache[col] or {}
+    return _gallery_sort_cache.get(col) or {}
 
 
 def _build_sample_feature_fields(sample: Dict[str, Any]) -> Dict[str, Any]:
@@ -540,6 +634,9 @@ def select_models(body: ModelSelectRequest):
         if infer_script:
             exp_native_predictor = _load_exp_predictor(infer_script, resolved_dir)
 
+        # experiment.json からパッチ・ラベルパラメータを読み込む
+        exp_params = _load_exp_params(resolved_dir)
+
     elif body.paths:
         paths = [Path(p) for p in body.paths]
         invalid = [str(p) for p in paths if not _is_allowed_model_path(p)]
@@ -548,13 +645,15 @@ def select_models(body: ModelSelectRequest):
                 status_code=400,
                 detail=f"許可されていないパスが含まれています: {invalid}",
             )
+        # paths 指定の場合は最初のファイルの親ディレクトリから experiment.json を探す
+        exp_params = _load_exp_params(paths[0].parent) if paths else {}
     else:
         raise HTTPException(status_code=400, detail="exp_dir または paths を指定してください")
 
     # predictor と infer_mode を一括で渡して TOCTOU を防止
     active_predictor = exp_native_predictor
     active_mode = "exp_native" if exp_native_predictor is not None else "default"
-    _reload_models(paths, predictor=active_predictor, infer_mode=active_mode)
+    _reload_models(paths, predictor=active_predictor, infer_mode=active_mode, patch_params=exp_params)
     if exp_native_predictor is not None:
         logger.info("EXP固有predictor をアクティブにしました")
 
@@ -563,6 +662,11 @@ def select_models(body: ModelSelectRequest):
         "loaded_count": len(_infer_models),
         "active": [str(p) for p in _active_model_paths],
         "infer_mode": _active_infer_mode,
+        "patch_size": list(_infer_patch_size),
+        "patch_t_min": _infer_patch_t_min,
+        "patch_t_max": _infer_patch_t_max,
+        "label_t_min": _infer_label_t_min,
+        "label_t_max": _infer_label_t_max,
     }
 
 
@@ -889,12 +993,9 @@ def get_gallery(
 
     sort_by:
       "idx"                  — デフォルト（DB挿入順）
-      "eye_scale_asc"        — eye_scale 昇順（小→大）
-      "eye_scale_desc"       — eye_scale 降順（大→小）
-      "norm_eye_scale_asc"   — 正規化 eye_scale 昇順
-      "norm_eye_scale_desc"  — 正規化 eye_scale 降順
-      "lap_var_asc"          — lap_var 昇順（ブレが多い→少ない）
-      "lap_var_desc"         — lap_var 降順（シャープ→ブレ）
+      "eye_scale_asc/desc"   — eye_scale
+      "norm_eye_scale_asc/desc" — 正規化 eye_scale
+      "lap_var_asc/desc"     — lap_var
     """
     if _image_index is None or _image_order is None:
         _build_image_index()
@@ -906,23 +1007,22 @@ def get_gallery(
     elif skip_filter == "skipped":
         filtered_order = [p for p in _image_order if _image_index[p].get("skipped", False)]
 
-    # ソート（DB カラムの per-image MIN を使用）
+    # ソート: (col, reverse, missing_sentinel)
     _SORT_COL_MAP = {
-        "eye_scale_asc":       ("eye_scale",      False),
-        "eye_scale_desc":      ("eye_scale",      True),
-        "norm_eye_scale_asc":  ("norm_eye_scale", False),
-        "norm_eye_scale_desc": ("norm_eye_scale", True),
-        "lap_var_asc":         ("lap_var",        False),
-        "lap_var_desc":        ("lap_var",        True),
+        "eye_scale_asc":       ("eye_scale",      False, float("inf")),
+        "eye_scale_desc":      ("eye_scale",      True,  float("inf")),
+        "norm_eye_scale_asc":  ("norm_eye_scale", False, float("inf")),
+        "norm_eye_scale_desc": ("norm_eye_scale", True,  float("inf")),
+        "lap_var_asc":         ("lap_var",        False, float("inf")),
+        "lap_var_desc":        ("lap_var",        True,  float("inf")),
     }
     sort_col_info = _SORT_COL_MAP.get(sort_by)
-    sort_index: Dict[str, float] = {}
     if sort_col_info:
-        col, reverse = sort_col_info
+        col, reverse, missing = sort_col_info
         sort_index = _ensure_gallery_sort_loaded(col)
         filtered_order = sorted(
             filtered_order,
-            key=lambda p: sort_index.get(p, float("inf")),
+            key=lambda p: sort_index.get(p, missing),
             reverse=reverse,
         )
 
@@ -934,10 +1034,10 @@ def get_gallery(
     end = min(start + per_page, total_images)
     page_images = filtered_order[start:end]
 
-    # 表示用に全ソートキャッシュを取得（バッジ表示用）
-    es_index  = _gallery_sort_cache.get("eye_scale")  or {}
-    nes_index = _gallery_sort_cache.get("norm_eye_scale") or {}
-    lv_index  = _gallery_sort_cache.get("lap_var")    or {}
+    # 表示用キャッシュ（ロード済みのみ; バッジ表示用）
+    es_index  = _gallery_sort_cache.get("eye_scale")       or {}
+    nes_index = _gallery_sort_cache.get("norm_eye_scale")  or {}
+    lv_index  = _gallery_sort_cache.get("lap_var")         or {}
 
     items = []
     for image_path in page_images:
@@ -952,9 +1052,9 @@ def get_gallery(
             "annotated":       entry["annotated"],
             "first_idx":       entry["first_pos"],
             "skipped":         entry.get("skipped", False),
-            "eye_scale":       round(es,  1) if es  is not None else None,
-            "norm_eye_scale":  round(nes, 5) if nes is not None else None,
-            "lap_var":         round(lv,  1) if lv  is not None else None,
+            "eye_scale":       round(es,  1)  if es  is not None else None,
+            "norm_eye_scale":  round(nes, 5)  if nes is not None else None,
+            "lap_var":         round(lv,  1)  if lv  is not None else None,
         })
 
     return {
@@ -1130,9 +1230,9 @@ def _render_eye_crop(
     if crop.size == 0:
         return None
 
-    # 色設定: t_true=緑系, t_pred=橙系
-    color_upper = (  0, 0, 255)
-    color_lower = (  0, 0,  255)
+    # 色設定: upper/lower ともに青 (BGR)
+    color_upper = (0, 0, 255)
+    color_lower = color_upper
 
     # 先に拡大してから描画（拡大後の座標で thickness=1 にすることで線を細く保つ）
     crop_h, crop_w = crop.shape[:2]
@@ -1287,13 +1387,14 @@ async def open_image(idx: int) -> Dict[str, Any]:
 
 
 
-if __name__ == "__main__":
-    import uvicorn
-    sys.stdout.reconfigure(encoding='utf-8')
-    sys.stderr.reconfigure(encoding='utf-8')
+def _setup_file_logging() -> None:
+    """ログファイルハンドラを登録する。lifespan で呼ばれるため任意の起動方法で有効。"""
     logging.basicConfig(level=logging.INFO)
     log_dir = Path(__file__).parent.parent / "logs"
     log_dir.mkdir(exist_ok=True)
+    root = logging.getLogger()
+    if any(isinstance(h, logging.handlers.TimedRotatingFileHandler) for h in root.handlers):
+        return
     _file_handler = logging.handlers.TimedRotatingFileHandler(
         log_dir / "annotator.log",
         when="midnight",
@@ -1301,5 +1402,12 @@ if __name__ == "__main__":
         encoding="utf-8",
     )
     _file_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
-    logging.getLogger().addHandler(_file_handler)
+    root.addHandler(_file_handler)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+    _setup_file_logging()
     uvicorn.run(app, host="127.0.0.1", port=8000)
