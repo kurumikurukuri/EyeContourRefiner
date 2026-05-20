@@ -38,6 +38,9 @@ class TrainConfig:
     num_conv_layers: int = 3
     use_t_weighted_sampler: bool = False
     t_weight_alpha: float = 3.0
+    use_pq_weighted_sampler: bool = False
+    pq_weight_alpha: float = 3.0
+    pq_threshold: float = 0.10
     use_t_weighted_loss: bool = False
     t_loss_alpha: float = 3.0
     loss_epsilon: float = 0.01  # dead_zone 損失のデッドゾーン幅（正規化 t スケール）
@@ -56,6 +59,8 @@ class TrainConfig:
     patch_h: int = 64
     patch_w: int = 128
     aug_flags: int = 0x4F  # AUG_ALL: 全オーグメンテーション有効
+    use_aux_face_shape: bool = False
+    num_workers: int = 0
 
 
 @dataclass
@@ -91,9 +96,12 @@ def train_one_epoch(
     use_distance_from_center: bool = False,
     use_norm_eye_scale: bool = False,
     use_logit_target: bool = False,
+    use_aux_face_shape: bool = False,
     t_loss_alpha: float = 3.0,
     loss_epsilon: float = 0.01,
     loss_delta: float = 0.05,
+    pq_weight_alpha: float = 3.0,
+    pq_threshold: float = 0.10,
 ) -> tuple[float, float]:
     """1エポック訓練を実行する。
 
@@ -110,17 +118,21 @@ def train_one_epoch(
     total_elements = 0
     n_batches = 0
 
-    for x, is_upper, pq_ratio, y, weight, _, dist_from_center, norm_eye_scale in loader:
-        x = x.to(device)
-        is_upper = is_upper.to(device)
-        y = y.to(device)
-        w_train = weight.to(device)
+    for batch in loader:
+        x          = batch[0].to(device)
+        is_upper   = batch[1].to(device)
+        pq_ratio   = batch[2]
+        y          = batch[3].to(device)
+        w_train    = batch[4].to(device)
+        dist_from_center  = batch[6]
+        norm_eye_scale    = batch[7]
 
         optimizer.zero_grad()
         pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
-        dfc_dev = dist_from_center.to(device) if use_distance_from_center else None
-        nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
-        pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev)
+        dfc_dev      = dist_from_center.to(device) if use_distance_from_center else None
+        nes_dev      = norm_eye_scale.to(device) if use_norm_eye_scale else None
+        aux_dev      = batch[8].to(device) if use_aux_face_shape else None
+        pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev, aux_dev)
 
         y_target = torch.logit(y.clamp(1e-4, 1 - 1e-4)) if use_logit_target else y
         if loss_fn_name in ("t", "dead_zone"):
@@ -128,6 +140,10 @@ def train_one_epoch(
         elif loss_fn_name == "t_weighted":
             t_w = 1.0 + t_loss_alpha * (y - 0.5).abs()
             loss = loss_fn(pred, y_target, t_w)
+        elif loss_fn_name == "pq_weighted":
+            pq_vals = pq_ratio.to(device) if not use_pq_ratio else pq_ratio_dev
+            pq_w = 1.0 + pq_weight_alpha * torch.clamp(pq_threshold - pq_vals, min=0.0) / pq_threshold
+            loss = loss_fn(pred, y_target, pq_w)
         else:
             loss = loss_fn(pred, y_target, w_train)
 
@@ -155,6 +171,7 @@ def validate_one_epoch(
     use_distance_from_center: bool = False,
     use_norm_eye_scale: bool = False,
     use_logit_target: bool = False,
+    use_aux_face_shape: bool = False,
 ) -> EpochResult:
     """1エポック検証を実行する。
 
@@ -168,13 +185,20 @@ def validate_one_epoch(
     all_rel_weights: list[torch.Tensor] = []
 
     with torch.no_grad():
-        for x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale in loader:
-            x = x.to(device)
-            is_upper = is_upper.to(device)
+        for batch in loader:
+            x               = batch[0].to(device)
+            is_upper        = batch[1].to(device)
+            pq_ratio        = batch[2]
+            y               = batch[3]
+            weight          = batch[4]
+            val_weight      = batch[5]
+            dist_from_center  = batch[6]
+            norm_eye_scale    = batch[7]
             pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
-            dfc_dev = dist_from_center.to(device) if use_distance_from_center else None
-            nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
-            pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev)
+            dfc_dev      = dist_from_center.to(device) if use_distance_from_center else None
+            nes_dev      = norm_eye_scale.to(device) if use_norm_eye_scale else None
+            aux_dev      = batch[8].to(device) if use_aux_face_shape else None
+            pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev, aux_dev)
             if use_logit_target:
                 pred = torch.sigmoid(pred)
             all_preds.append(pred.cpu())

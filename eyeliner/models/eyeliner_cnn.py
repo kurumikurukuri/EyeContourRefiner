@@ -14,6 +14,8 @@ class EyelinerCNN(nn.Module):
     出力: (B, 1) スカラー t ∈ [0, 1]（P-Q ライン上の正規化位置）
     """
 
+    AUX_INPUT_DIM = 11  # pq_angle_cos/sin, polar_cos/sin, yaw/pitch/roll sin/cos, is_upper
+
     def __init__(
         self,
         use_pq_ratio: bool = False,
@@ -24,6 +26,7 @@ class EyelinerCNN(nn.Module):
         use_norm_eye_scale: bool = False,
         use_is_upper: bool = True,
         dropout_rate: float = 0.3,
+        use_aux_face_shape: bool = False,
     ) -> None:
         super().__init__()
         self.use_pq_ratio = use_pq_ratio
@@ -34,6 +37,8 @@ class EyelinerCNN(nn.Module):
         self.use_norm_eye_scale = use_norm_eye_scale
         self.use_is_upper = use_is_upper
         self.dropout_rate = dropout_rate
+        self.use_aux_face_shape = use_aux_face_shape
+        self.aux_input_dim = self.AUX_INPUT_DIM if use_aux_face_shape else 0
 
         def _bn(channels: int) -> nn.Module:
             return nn.BatchNorm2d(channels) if use_batchnorm else nn.Identity()
@@ -50,7 +55,8 @@ class EyelinerCNN(nn.Module):
         self.features = nn.Sequential(*layers)
 
         cnn_flat = channels[-1] * 32
-        scalar_in = int(use_is_upper) + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale)
+        aux_dim = self.AUX_INPUT_DIM if use_aux_face_shape else 0
+        scalar_in = int(use_is_upper) + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale) + aux_dim
         regressor_layers: list[nn.Module] = [
             nn.Linear(cnn_flat + scalar_in, 64),
             nn.ReLU(),
@@ -68,6 +74,7 @@ class EyelinerCNN(nn.Module):
         pq_ratio: torch.Tensor | None = None,
         dist_from_center: torch.Tensor | None = None,
         norm_eye_scale: torch.Tensor | None = None,
+        aux_features: torch.Tensor | None = None,
     ) -> torch.Tensor:
         feat = self.features(x).view(x.size(0), -1)   # (B, 4096)
         scalars = [feat]
@@ -82,5 +89,8 @@ class EyelinerCNN(nn.Module):
         if self.use_norm_eye_scale:
             val = norm_eye_scale if norm_eye_scale is not None else torch.zeros(x.size(0), 1, device=x.device)
             scalars.append(val)
+        if self.use_aux_face_shape:
+            aux = aux_features if aux_features is not None else torch.zeros(x.size(0), self.AUX_INPUT_DIM, device=x.device)
+            scalars.append(aux)
         feat = torch.cat(scalars, dim=1)
         return self.regressor(feat)                     # (B, 1)

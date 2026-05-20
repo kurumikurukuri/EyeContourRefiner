@@ -97,6 +97,7 @@ class EyelinerPatchDataset(Dataset):
         use_t_norm: bool = True,
         label_t_min: float | None = None,
         label_t_max: float | None = None,
+        use_aux_face_shape: bool = False,
     ) -> None:
         self.records = records
         self.augment_data = augment_data
@@ -108,6 +109,7 @@ class EyelinerPatchDataset(Dataset):
         self._label_t_min = label_t_min if label_t_min is not None else patch_t_min
         self._label_t_max = label_t_max if label_t_max is not None else patch_t_max
         self.use_t_norm = use_t_norm
+        self.use_aux_face_shape = use_aux_face_shape
         self.patch_perp_scale = patch_perp_scale
         self.patch_size = patch_size
         self._image_cache: dict[str, np.ndarray] = {}
@@ -199,6 +201,8 @@ class EyelinerPatchDataset(Dataset):
         weight = torch.tensor([float(rec["weight"])], dtype=torch.float32)
         val_weight = torch.tensor([float(rec["val_weight"])], dtype=torch.float32)
         pi = int(rec.get("point_index", 3))
+        degree = (pi + 1) * 22.5 if is_upper_val == 1.0 else (pi + 9) * 22.5
+        rad = degree * math.pi / 180.0
         dist_from_center = torch.tensor([min(pi, 6 - pi) / 3.0], dtype=torch.float32)
 
         eye_scale = float(rec.get("eye_scale", 1.0))
@@ -208,5 +212,21 @@ class EyelinerPatchDataset(Dataset):
             self._img_diag_map[image_path] = img_diag
         norm_eye_scale_val = eye_scale / img_diag if img_diag else 0.0
         norm_eye_scale = torch.tensor([norm_eye_scale_val], dtype=torch.float32)
+
+        if self.use_aux_face_shape:
+            aux = torch.tensor([
+                float(rec.get("pq_angle_cos", 1.0)),
+                float(rec.get("pq_angle_sin", 0.0)),
+                float(rec.get("position_polar_cos", math.cos(rad))),
+                float(rec.get("position_polar_sin", math.sin(rad))),
+                float(rec.get("face_yaw_sin", 0.0)),
+                float(rec.get("face_yaw_cos", 1.0)),
+                float(rec.get("face_pitch_sin", 0.0)),
+                float(rec.get("face_pitch_cos", 1.0)),
+                float(rec.get("face_roll_sin", 0.0)),
+                float(rec.get("face_roll_cos", 1.0)),
+                float(is_upper_val),
+            ], dtype=torch.float32)
+            return x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale, aux
 
         return x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale

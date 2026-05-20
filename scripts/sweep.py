@@ -33,6 +33,7 @@ def main() -> None:
     )
     parser.add_argument("--exp", required=True, help="実験番号（例: 001）")
     parser.add_argument("--configs", nargs="+", help="実行する設定名（省略時は全実験）")
+    parser.add_argument("--num_workers", type=int, default=None, help="DataLoader の num_workers（省略時は train_exp{n}.py のデフォルト）")
     args = parser.parse_args()
 
     exp_dir = find_exp_dir(args.exp)
@@ -44,6 +45,8 @@ def main() -> None:
     cmd = [sys.executable, str(script)]
     if args.configs:
         cmd += ["--configs"] + args.configs
+    if args.num_workers is not None:
+        cmd += ["--num_workers", str(args.num_workers)]
 
     print(f"[sweep] EXP{args.exp}: {script.relative_to(ROOT)}")
     result = subprocess.run(cmd)

@@ -11,7 +11,7 @@ import torch
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
-from eyeliner.data.weights import compute_eye_meta
+from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
 from eyeliner.models.ensemble import build_model, save_model
 from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import (
@@ -43,6 +43,7 @@ def run_kfold(
     holdout_path: str | Path | None = None,
     max_train_samples: int | None = None,
     mid_t_keep_ratio: float = 1.0,
+    db_path: "str | Path | None" = None,
 ) -> list[FoldResult]:
     """K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
 
@@ -65,6 +66,8 @@ def run_kfold(
 
     records = load_manifest(manifest_path)
     compute_eye_meta(records)
+    if config.use_aux_face_shape:
+        compute_aux_face_shape_meta(records, db_path)
 
     if max_train_samples is not None and len(records) > max_train_samples:
         original_count = len(records)
@@ -127,6 +130,7 @@ def run_kfold(
             use_t_norm=config.use_t_norm,
             label_t_min=config.label_t_min,
             label_t_max=config.label_t_max,
+            use_aux_face_shape=config.use_aux_face_shape,
         )
         val_ds = EyelinerPatchDataset(
             val_records, augment_data=False,
@@ -140,6 +144,7 @@ def run_kfold(
             use_t_norm=config.use_t_norm,
             label_t_min=config.label_t_min,
             label_t_max=config.label_t_max,
+            use_aux_face_shape=config.use_aux_face_shape,
         )
 
         if config.use_t_weighted_sampler:
@@ -149,16 +154,27 @@ def run_kfold(
             t_max_eff = config.label_t_max if config.label_t_max is not None else max(t_values)
             t_range = max(t_max_eff - t_min_eff, 1e-6)
             t_norm = [(t - t_min_eff) / t_range for t in t_values]
-            weights = [1.0 + config.t_weight_alpha * abs(tn - 0.5) for tn in t_norm]
-            sampler = WeightedRandomSampler(weights, num_samples=len(weights), replacement=True)
-            train_loader = DataLoader(train_ds, batch_size=config.batch_size, sampler=sampler)
+            sample_weights = [1.0 + config.t_weight_alpha * abs(tn - 0.5) for tn in t_norm]
+        else:
+            sample_weights = [1.0] * len(train_records)
+
+        if config.use_pq_weighted_sampler:
+            pq_values = [float(r.get("pq_ratio", 1.0)) for r in train_records]
+            pq_w = [1.0 + config.pq_weight_alpha * max(0.0, config.pq_threshold - pq) / config.pq_threshold for pq in pq_values]
+            sample_weights = [sw * pw for sw, pw in zip(sample_weights, pq_w)]
+
+        use_sampler = config.use_t_weighted_sampler or config.use_pq_weighted_sampler
+        dl_kwargs = {"num_workers": config.num_workers, "persistent_workers": config.num_workers > 0}
+        if use_sampler:
+            sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+            train_loader = DataLoader(train_ds, batch_size=config.batch_size, sampler=sampler, **dl_kwargs)
             logger.info(
-                "WeightedRandomSampler 有効: alpha=%.1f, weight range=[%.3f, %.3f]",
-                config.t_weight_alpha, min(weights), max(weights),
+                "WeightedRandomSampler 有効: weight range=[%.3f, %.3f]",
+                min(sample_weights), max(sample_weights),
             )
         else:
-            train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True)
-        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False)
+            train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
+        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
 
         model = build_model(
             config.backbone, pretrained=config.pretrained,
@@ -169,6 +185,7 @@ def run_kfold(
             use_norm_eye_scale=config.use_norm_eye_scale,
             use_is_upper=config.use_is_upper,
             dropout_rate=config.dropout_rate,
+            use_aux_face_shape=config.use_aux_face_shape,
         ).to(device)
 
         # Phase 1: バックボーン凍結（転移学習時のみ）
@@ -216,9 +233,12 @@ def run_kfold(
                 use_distance_from_center=config.use_distance_from_center,
                 use_norm_eye_scale=config.use_norm_eye_scale,
                 use_logit_target=config.use_logit_target,
+                use_aux_face_shape=config.use_aux_face_shape,
                 t_loss_alpha=config.t_loss_alpha,
                 loss_epsilon=config.loss_epsilon,
                 loss_delta=config.loss_delta,
+                pq_weight_alpha=config.pq_weight_alpha,
+                pq_threshold=config.pq_threshold,
             )
             result = validate_one_epoch(
                 model, val_loader, device,
@@ -226,6 +246,7 @@ def run_kfold(
                 use_distance_from_center=config.use_distance_from_center,
                 use_norm_eye_scale=config.use_norm_eye_scale,
                 use_logit_target=config.use_logit_target,
+                use_aux_face_shape=config.use_aux_face_shape,
             )
             current_lr = scheduler.get_last_lr()[0]
 
