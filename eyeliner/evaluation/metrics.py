@@ -28,29 +28,30 @@ def holdout_mae(
     use_pq_ratio: bool = False,
     use_distance_from_center: bool = False,
     use_norm_eye_scale: bool = False,
+    use_aux_face_shape: bool = False,
 ) -> float:
     """固定 Hold-out セットでの MAE 評価。汎化性能の不偏推定に使用する。
 
     注意: この値を見てハイパーパラメータを調整することは禁止。
          訓練完了後に一度だけ呼び出すこと。
-
-    Args:
-        use_pq_ratio:              モデルが pq_ratio を入力として受け取る場合 True
-        use_distance_from_center:  モデルが dist_from_center を入力として受け取る場合 True
-        use_norm_eye_scale:        モデルが norm_eye_scale を入力として受け取る場合 True
     """
     model.eval()
     all_preds: list[Tensor] = []
     all_labels: list[Tensor] = []
 
     with torch.no_grad():
-        for x, is_upper, pq_ratio, y, _w, _vw, dist_from_center, norm_eye_scale in holdout_loader:
-            x = x.to(device)
-            is_upper = is_upper.to(device)
+        for batch in holdout_loader:
+            x = batch[0].to(device)
+            is_upper = batch[1].to(device)
+            pq_ratio = batch[2]
+            y = batch[3]
+            dist_from_center = batch[6]
+            norm_eye_scale = batch[7]
             pq_ratio_dev = pq_ratio.to(device) if use_pq_ratio else None
             dist_dev = dist_from_center.to(device) if use_distance_from_center else None
             nes_dev = norm_eye_scale.to(device) if use_norm_eye_scale else None
-            pred = model(x, is_upper, pq_ratio_dev, dist_dev, nes_dev)
+            aux_dev = batch[8].to(device) if use_aux_face_shape else None
+            pred = model(x, is_upper, pq_ratio_dev, dist_dev, nes_dev, aux_dev)
             all_preds.append(pred.cpu())
             all_labels.append(y)
 

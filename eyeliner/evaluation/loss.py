@@ -67,6 +67,22 @@ def t_weighted_huber_loss(
     return (loss * t_weight).mean()
 
 
+def pq_weighted_huber_loss(
+    pred: Tensor,
+    y: Tensor,
+    pq_w: Tensor,
+    delta: float = 0.05,
+) -> Tensor:
+    """pq_ratio が小さいサンプルの損失を強調する Huber 損失。
+
+    pq_w は呼び出し元で計算済みの重みテンソル。
+    重み公式: 1.0 + alpha * max(0, threshold - pq_ratio) / threshold
+    """
+    dt = (pred - y).abs()
+    loss = torch.where(dt < delta, 0.5 * dt**2 / delta, dt - 0.5 * delta)
+    return (loss * pq_w).mean()
+
+
 def eye_normalized_smooth_l1_loss(
     pred: Tensor,
     y: Tensor,
@@ -87,6 +103,7 @@ def eye_normalized_smooth_l1_loss(
 LOSS_FN_REGISTRY: dict[str, Callable] = {
     "t": huber_t_loss,
     "t_weighted": t_weighted_huber_loss,
+    "pq_weighted": pq_weighted_huber_loss,
     "normalized_pixel": eye_normalized_smooth_l1_loss,
     "dead_zone": dead_zone_huber_loss,
 }

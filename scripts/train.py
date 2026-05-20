@@ -36,7 +36,7 @@ from eyeliner.evaluation.metrics import holdout_mae as compute_holdout_mae
 logger = logging.getLogger(__name__)
 
 BACKBONE_CHOICES = ["custom", "soft_argmax", "mobilenet_v3_small", "efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_v2_s", "efficientnet_v2_m", "resnet18"]
-LOSS_FN_CHOICES = ["t", "t_weighted", "normalized_pixel", "dead_zone"]
+LOSS_FN_CHOICES = ["t", "t_weighted", "pq_weighted", "normalized_pixel", "dead_zone"]
 
 
 def make_exp_name(args: argparse.Namespace) -> str:
@@ -92,6 +92,9 @@ def build_experiment_record(
             "num_conv_layers": args.num_conv_layers,
             "use_t_weighted_sampler": args.use_t_weighted_sampler,
             "t_weight_alpha": args.t_weight_alpha,
+            "use_pq_weighted_sampler": args.use_pq_weighted_sampler,
+            "pq_weight_alpha": args.pq_weight_alpha,
+            "pq_threshold": args.pq_threshold,
             "t_loss_alpha": args.t_loss_alpha,
             "loss_epsilon": args.loss_epsilon,
             "loss_delta": args.loss_delta,
@@ -247,6 +250,9 @@ def mode_kfold(args: argparse.Namespace) -> None:
         num_conv_layers=args.num_conv_layers,
         use_t_weighted_sampler=args.use_t_weighted_sampler,
         t_weight_alpha=args.t_weight_alpha,
+        use_pq_weighted_sampler=args.use_pq_weighted_sampler,
+        pq_weight_alpha=args.pq_weight_alpha,
+        pq_threshold=args.pq_threshold,
         t_loss_alpha=args.t_loss_alpha,
         loss_epsilon=args.loss_epsilon,
         loss_delta=args.loss_delta,
@@ -264,6 +270,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         patch_h=args.patch_h,
         patch_w=args.patch_w,
         aug_flags=args.aug_flags,
+        num_workers=args.num_workers,
     )
 
     # K-Fold 訓練
@@ -322,7 +329,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
                 label_t_min=args.label_t_min,
                 label_t_max=args.label_t_max,
             )
-            holdout_loader = DataLoader(holdout_ds, batch_size=args.batch, shuffle=False)
+            holdout_loader = DataLoader(holdout_ds, batch_size=args.batch, shuffle=False, num_workers=args.num_workers)
             holdout_mae_value = compute_holdout_mae(
                 ensemble, holdout_loader, device,
                 use_pq_ratio=args.use_pq_ratio,
@@ -472,6 +479,18 @@ def main() -> None:
         help="WeightedRandomSampler の重み係数 α（weight = 1 + α × |t - 0.5|, default: 3.0）",
     )
     parser.add_argument(
+        "--use_pq_weighted_sampler", action="store_true",
+        help="pq_ratio < threshold のサンプルを過剰サンプリングする WeightedRandomSampler を使用する",
+    )
+    parser.add_argument(
+        "--pq_weight_alpha", type=float, default=3.0,
+        help="pq_weighted sampler/loss の重み係数 α（default: 3.0）",
+    )
+    parser.add_argument(
+        "--pq_threshold", type=float, default=0.10,
+        help="pq_weighted sampler/loss の閾値（default: 0.10）",
+    )
+    parser.add_argument(
         "--t_loss_alpha", type=float, default=3.0,
         help="t_weighted 損失の重み係数 α（weight = 1 + α × |y - 0.5|, default: 3.0）",
     )
@@ -530,6 +549,10 @@ def main() -> None:
     parser.add_argument(
         "--mid_t_keep_ratio", type=float, default=1.0,
         help="訓練データのうち 0.5 < t < 0.9（易しいサンプル）を保持する割合（1.0 = 全件保持）",
+    )
+    parser.add_argument(
+        "--num_workers", type=int, default=0,
+        help="DataLoader の num_workers（default: 0）",
     )
 
     args = parser.parse_args()
