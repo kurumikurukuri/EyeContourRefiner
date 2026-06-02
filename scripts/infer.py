@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import cv2
+import math
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -50,7 +51,7 @@ from eyeliner.models.ensemble import EnsembleModel, create_ensemble_from_dir
 from eyeliner.models.ensemble import load_model as _load_model_from_ckpt
 from eyeliner.data.patch_utils import (
     T_MIN, T_MAX, PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
-    extract_patch, reconstruct_point,
+    extract_patch, reconstruct_point, compute_pq_rescale,
 )
 
 
@@ -143,10 +144,16 @@ def run_manifest(
     patch_size: tuple = PATCH_SIZE,
     use_t_norm: bool = True,
     t_quant_step: float | None = None,
+    pq_rescale_mode: str = "none",
+    pq_rescale_factor: float = 1.0,
 ) -> None:
     records = _load_manifest(manifest_path)
     if not records:
         raise ValueError("manifest に有効なサンプルが見つかりません。")
+
+    if pq_rescale_mode != "none":
+        from eyeliner.data.weights import compute_eye_meta
+        compute_eye_meta(records)
 
     import gc
     if torch.cuda.is_available():
@@ -173,6 +180,12 @@ def run_manifest(
             py = float(rec["py"])
             qx = float(rec["qx"])
             qy = float(rec["qy"])
+            orig_pq_dist = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+
+            # P'Q' 再設定: パッチ抽出・モデル入力を P'Q' 座標系で行う
+            px, py, qx, qy, _, pq_prime_dist = compute_pq_rescale(
+                px, py, qx, qy, 0.0, rec, pq_rescale_mode, pq_rescale_factor
+            )
 
             bgr = cv2.imread(image_path)
             if bgr is None:
@@ -188,14 +201,20 @@ def run_manifest(
                 patch_t_min=patch_t_min, patch_t_max=patch_t_max,
                 patch_perp_scale=patch_perp_scale,
                 patch_size=patch_size,
-                use_t_norm=use_t_norm,
+                use_t_norm=True,  # 常に [0,1] 出力
             )
             # label 範囲（None のときは crop 範囲にフォールバック）
             eff_label_min = label_t_min if label_t_min is not None else patch_t_min
             eff_label_max = label_t_max if label_t_max is not None else patch_t_max
             label_range = eff_label_max - eff_label_min
 
-            if use_t_norm:
+            if pq_rescale_mode != "none":
+                # モデル出力は P'Q' 座標系の t'_norm ∈ [0,1]
+                pred_t_norm = float(np.clip(t_pred, 0.0, 1.0))
+                pred_t_prime_raw = pred_t_norm * label_range + eff_label_min  # P'Q' 系の t'
+                # 原座標系 PQ の t に戻す: t = 0.5 + (t' - 0.5) * |P'Q'| / |PQ|
+                pred_t_raw = 0.5 + (pred_t_prime_raw - 0.5) * pq_prime_dist / max(orig_pq_dist, 1e-6)
+            elif use_t_norm:
                 # t_pred はモデル出力の [0,1] 正規化済み値
                 pred_t_norm = float(np.clip(t_pred, 0.0, 1.0))
                 pred_t_raw = pred_t_norm * label_range + eff_label_min
@@ -205,14 +224,22 @@ def run_manifest(
                 pred_t_norm = (pred_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
 
             pred_t_raw_quant = _quantize(pred_t_raw, t_quant_step)
-            rx_pred, ry_pred = reconstruct_point(px, py, qx, qy, pred_t_raw)
+            # rx_pred / ry_pred は元の PQ 座標で再構築（pred_t_raw は元 PQ 系）
+            orig_px, orig_py = float(rec["px"]), float(rec["py"])
+            orig_qx, orig_qy = float(rec["qx"]), float(rec["qy"])
+            rx_pred, ry_pred = reconstruct_point(orig_px, orig_py, orig_qx, orig_qy, pred_t_raw)
 
-            # true_t: manifest の t は生の物理 t 値
+            # true_t: manifest の t は生の物理 t 値（元 PQ 系）
             t_stored = rec.get("t", "")
             try:
                 true_t_raw = float(t_stored)
                 true_t_raw_quant = _quantize(true_t_raw, t_quant_step)
-                true_t_norm = (true_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
+                if pq_rescale_mode != "none":
+                    # true_t を P'Q' 座標系に変換してから true_t_norm を計算
+                    true_t_prime = 0.5 + (true_t_raw - 0.5) * orig_pq_dist / max(pq_prime_dist, 1e-6)
+                    true_t_norm = (true_t_prime - eff_label_min) / label_range if label_range != 0 else 0.0
+                else:
+                    true_t_norm = (true_t_raw - eff_label_min) / label_range if label_range != 0 else 0.0
                 true_t_raw_str       = f"{true_t_raw:.6f}"
                 true_t_raw_quant_str = f"{true_t_raw_quant:.6f}"
                 true_t_norm_str      = f"{true_t_norm:.6f}"
@@ -227,7 +254,7 @@ def run_manifest(
                 "part_name":        rec.get("part_name", ""),
                 "sub_key":          rec.get("sub_key", ""),
                 "point_index":      rec.get("point_index", ""),
-                "px": px, "py": py, "qx": qx, "qy": qy,
+                "px": rec["px"], "py": rec["py"], "qx": rec["qx"], "qy": rec["qy"],
                 "true_t_raw":       true_t_raw_str,
                 "true_t_raw_quant": true_t_raw_quant_str,
                 "true_t_norm":      true_t_norm_str,
@@ -459,6 +486,15 @@ def main() -> None:
         "--round_t", type=int, default=None,
         help="(後方互換) --t_quant_step = 10**(-round_t) に翻訳される。新規は --t_quant_step を使うこと",
     )
+    parser.add_argument(
+        "--pq_rescale_mode", type=str, default="none",
+        choices=["none", "eye_height", "eye_scale", "mean_pq_dist"],
+        help="P'Q' 再設定の基準特徴量（none=無効, eye_height, eye_scale, mean_pq_dist）",
+    )
+    parser.add_argument(
+        "--pq_rescale_factor", type=float, default=1.0,
+        help="P'Q' 再設定の定数倍 k（xxx = feature × k）",
+    )
     args = parser.parse_args()
 
     # --round_t エイリアス
@@ -496,6 +532,8 @@ def main() -> None:
             patch_size=patch_size,
             use_t_norm=use_t_norm,
             t_quant_step=args.t_quant_step,
+            pq_rescale_mode=args.pq_rescale_mode,
+            pq_rescale_factor=args.pq_rescale_factor,
         )
     else:
         run_single(

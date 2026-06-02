@@ -1,0 +1,42 @@
+{
+  "exp_name": "EXP019_gate",
+  "timestamp": "2026-06-03T01:28:38.283760",
+  "hyperparameters": {
+    "gate_experts": [
+      "X0_baseline",
+      "X1_eye_height",
+      "X2_eye_scale",
+      "X3_mean_pq"
+    ],
+    "gate_lr": 0.001,
+    "gate_batch_size": 64,
+    "gate_epochs": 50,
+    "gate_patience": 10,
+    "gate_seed": 42,
+    "gate_weight_decay": 0.0001,
+    "gate_num_conv_layers": 4,
+    "gate_use_batchnorm": true,
+    "gate_dropout_rate": 0.1,
+    "gate_band_weight": 20.0,
+    "gate_aux_dim": 3
+  },
+  "results": {
+    "best_val_mae": 0.08883806318044662,
+    "best_epoch": 1,
+    "test_mae_gate": 0.08883806318044662,
+    "test_mae_mean": 0.08886642754077911,
+    "n_test_samples": 3430,
+    "test_mae_X0": 0.0952063798904419,
+    "test_mae_X1": 0.0974433571100235,
+    "test_mae_X2": 0.093007892370224,
+    "test_mae_X3": 0.09590226411819458,
+    "mean_w_X0": 0.21783247590065002,
+    "std_w_X0": 0.030403610318899155,
+    "mean_w_X1": 0.2928805351257324,
+    "std_w_X1": 0.03112201951444149,
+    "mean_w_X2": 0.24928545951843262,
+    "std_w_X2": 0.00904206931591034,
+    "mean_w_X3": 0.24000154435634613,
+    "std_w_X3": 0.007484854198992252
+  }
+}

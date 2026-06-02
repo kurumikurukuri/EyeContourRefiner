@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional
 # プロジェクトルートを sys.path に追加（python annotator/server.py で起動した場合に必要）
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import math
 import cv2
 import numpy as np
 from fastapi import FastAPI, HTTPException, Query
@@ -41,6 +42,7 @@ from eyeliner.data.patch_utils import (
     T_MAX,
     build_display_patch,
     extract_patch,
+    get_pq_prime_dist,
     overlay_landmarks,
     reconstruct_point,
 )
@@ -130,6 +132,8 @@ _infer_patch_t_min: float = T_MIN
 _infer_patch_t_max: float = T_MAX
 _infer_label_t_min: float = T_MIN
 _infer_label_t_max: float = T_MAX
+_infer_pq_rescale_mode: str = "none"
+_infer_pq_rescale_factor: float = 1.0
 
 
 def _find_model_paths() -> List[Path]:
@@ -219,11 +223,14 @@ def _load_exp_params(models_dir: Path) -> dict:
         lt_max = hp.get("label_t_max")
         params["label_t_min"] = float(lt_min) if lt_min is not None else params.get("patch_t_min", T_MIN)
         params["label_t_max"] = float(lt_max) if lt_max is not None else params.get("patch_t_max", T_MAX)
+        params["pq_rescale_mode"] = str(hp.get("pq_rescale_mode", "none"))
+        params["pq_rescale_factor"] = float(hp.get("pq_rescale_factor", 1.0))
         logger.info(
-            "experiment.json 読み込み: patch_size=%s patch_t=[%.1f,%.1f] label_t=[%.1f,%.1f]",
+            "experiment.json 読み込み: patch_size=%s patch_t=[%.1f,%.1f] label_t=[%.1f,%.1f] pq_rescale=%s×%.2f",
             params.get("patch_size", PATCH_SIZE),
             params.get("patch_t_min", T_MIN), params.get("patch_t_max", T_MAX),
             params["label_t_min"], params["label_t_max"],
+            params["pq_rescale_mode"], params["pq_rescale_factor"],
         )
         return params
     except Exception as exc:
@@ -240,12 +247,21 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
     """
     global _infer_models, _infer_device, _active_model_paths, _imagenet_mean_t, _imagenet_std_t, _active_predictor, _active_infer_mode
     global _infer_patch_size, _infer_patch_t_min, _infer_patch_t_max, _infer_label_t_min, _infer_label_t_max
+    global _infer_pq_rescale_mode, _infer_pq_rescale_factor
     # パッチパラメータを解決（patch_params が指定されていれば優先、なければデフォルト）
     new_patch_size  = tuple(patch_params["patch_size"])  if patch_params and "patch_size"  in patch_params else PATCH_SIZE
     new_pt_min      = patch_params["patch_t_min"]        if patch_params and "patch_t_min"  in patch_params else T_MIN
     new_pt_max      = patch_params["patch_t_max"]        if patch_params and "patch_t_max"  in patch_params else T_MAX
     new_lt_min      = patch_params["label_t_min"]        if patch_params and "label_t_min"  in patch_params else T_MIN
     new_lt_max      = patch_params["label_t_max"]        if patch_params and "label_t_max"  in patch_params else T_MAX
+    new_pq_mode     = patch_params["pq_rescale_mode"]    if patch_params and "pq_rescale_mode"   in patch_params else "none"
+    new_pq_factor   = patch_params["pq_rescale_factor"]  if patch_params and "pq_rescale_factor" in patch_params else 1.0
+
+    if new_pq_mode == "eye_height":
+        logger.warning(
+            "pq_rescale_mode='eye_height': DB に eye_height カラムがないため逆変換は無効です。"
+            "予測が P'Q' 空間のまま WebUI に表示されます（精度低下）。"
+        )
 
     if not model_paths:
         with _models_lock:
@@ -258,6 +274,8 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
             _infer_patch_t_max = new_pt_max
             _infer_label_t_min = new_lt_min
             _infer_label_t_max = new_lt_max
+            _infer_pq_rescale_mode   = new_pq_mode
+            _infer_pq_rescale_factor = new_pq_factor
         logger.info("モデルをクリアしました。推論補助は無効")
         return
     try:
@@ -300,9 +318,12 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
             _infer_patch_t_max = new_pt_max
             _infer_label_t_min = new_lt_min
             _infer_label_t_max = new_lt_max
+            _infer_pq_rescale_mode   = new_pq_mode
+            _infer_pq_rescale_factor = new_pq_factor
         logger.info(
-            "%d 個のモデルをアンサンブルとして使用します (patch=%s t_patch=[%.1f,%.1f] t_label=[%.1f,%.1f])",
+            "%d 個のモデルをアンサンブルとして使用します (patch=%s t_patch=[%.1f,%.1f] t_label=[%.1f,%.1f] pq_rescale=%s×%.2f)",
             len(loaded), new_patch_size, new_pt_min, new_pt_max, new_lt_min, new_lt_max,
+            new_pq_mode, new_pq_factor,
         )
     except Exception as exc:
         logger.warning("推論モデルの読み込みに失敗しました: %s", exc)
@@ -312,16 +333,46 @@ def _try_load_infer_model() -> None:
     _reload_models(_find_model_paths())
 
 
+def _get_pq_prime(
+    sample: dict,
+    orig_pq_dist: float,
+    pq_rescale_mode: str,
+    pq_rescale_factor: float,
+    eye_pq_dists: Optional[List[float]] = None,
+) -> float:
+    """pq_rescale モードに応じた pq_prime を返す。逆変換不可時は orig_pq_dist を返す。"""
+    if pq_rescale_mode == "none":
+        return orig_pq_dist
+    if pq_rescale_mode == "eye_scale":
+        return get_pq_prime_dist(sample, orig_pq_dist, pq_rescale_mode, pq_rescale_factor)
+    if pq_rescale_mode == "mean_pq_dist":
+        if eye_pq_dists:
+            mean_pq = sum(eye_pq_dists) / len(eye_pq_dists)
+        else:
+            mean_pq = _db.get_mean_pq_dist_for_eye(
+                sample["image_path"],
+                sample.get("face_index", 0),
+                sample["part_name"],
+            )
+        if mean_pq is None or mean_pq <= 0:
+            return orig_pq_dist
+        return max(mean_pq * pq_rescale_factor, 1.0)
+    # eye_height: DB に eye_height がないため逆変換不可
+    return orig_pq_dist
+
+
 def _predict_t(
     image_rgb: np.ndarray,
     px: float, py: float,
     qx: float, qy: float,
     is_upper: float,
+    *,
+    pq_prime: Optional[float] = None,
 ) -> Optional[float]:
     """モデルで t を推論し、WebUI の t_norm [T_MIN, T_MAX] で返す。
 
-    モデルの出力は [label_t_min, label_t_max] で正規化された t_norm_label。
-    これを物理 t_raw に戻し、さらに WebUI の [T_MIN, T_MAX] で再正規化して返す。
+    モデルの出力は [label_t_min, label_t_max] で正規化された t_prime_norm（pq_rescale 時は t' 空間）。
+    pq_prime が指定された場合、t' → t_raw の逆変換を適用してから WebUI 正規化する。
     EXP固有predictor は自前で変換を行うため、この変換をスキップする。
     """
     # グローバル状態のスナップショットをロック下で取得してからロックを解放し推論を実行
@@ -329,15 +380,15 @@ def _predict_t(
         predictor = _active_predictor
         if predictor is None and not _infer_models:
             return None
-        models   = list(_infer_models) if predictor is None else []
-        device   = _infer_device
-        mean_t   = _imagenet_mean_t
-        std_t    = _imagenet_std_t
-        ps       = _infer_patch_size
-        pt_min   = _infer_patch_t_min
-        pt_max   = _infer_patch_t_max
-        lt_min   = _infer_label_t_min
-        lt_max   = _infer_label_t_max
+        models      = list(_infer_models) if predictor is None else []
+        device      = _infer_device
+        mean_t      = _imagenet_mean_t
+        std_t       = _imagenet_std_t
+        ps          = _infer_patch_size
+        pt_min      = _infer_patch_t_min
+        pt_max      = _infer_patch_t_max
+        lt_min      = _infer_label_t_min
+        lt_max      = _infer_label_t_max
 
     # EXP固有predictorを優先使用（変換は predictor 側で行う）
     if predictor is not None:
@@ -357,8 +408,21 @@ def _predict_t(
             preds = [model(x, is_upper_t).item() for model in models]
         t_norm_label = float(sum(preds) / len(preds))
 
-        # ラベル正規化範囲 [lt_min, lt_max] → 物理 t_raw → WebUI t_norm [T_MIN, T_MAX]
-        t_raw = t_norm_label * (lt_max - lt_min) + lt_min
+        # t_prime_norm → t_prime（pq_rescale 空間）
+        t_prime = t_norm_label * (lt_max - lt_min) + lt_min
+
+        # pq_rescale 逆変換: t_prime → t_raw
+        # t_prime = 0.5 + (t_raw - 0.5) * orig_pq / pq_prime
+        # => t_raw = 0.5 + (t_prime - 0.5) * pq_prime / orig_pq
+        if pq_prime is not None:
+            orig_pq = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+            if orig_pq > 1e-6:
+                t_raw = 0.5 + (t_prime - 0.5) * pq_prime / orig_pq
+            else:
+                t_raw = t_prime
+        else:
+            t_raw = t_prime
+
         return (t_raw - T_MIN) / (T_MAX - T_MIN)
     except TypeError as exc:
         logger.error("モデル呼び出しの引数エラー（バグ）: %s", exc)
@@ -850,7 +914,9 @@ def get_sample(idx: int):
 
     # 推論補助
     is_upper = 1.0 if sample.get("sub_key", "") == "upper" else 0.0
-    t_pred = _predict_t(image_rgb, px, py, qx, qy, is_upper)
+    orig_pq = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+    pq_prime_val = _get_pq_prime(sample, orig_pq, _infer_pq_rescale_mode, _infer_pq_rescale_factor)
+    t_pred = _predict_t(image_rgb, px, py, qx, qy, is_upper, pq_prime=pq_prime_val)
 
     total, annotated = _db.count_samples()
 
@@ -945,12 +1011,20 @@ def apply_pred_eye(idx: int):
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
+    # mean_pq_dist 逆変換用: targets はすべて同一眼グループなので一括計算
+    eye_pq_dists = [
+        math.sqrt((float(s["qx"]) - float(s["px"])) ** 2 + (float(s["qy"]) - float(s["py"])) ** 2)
+        for s in targets
+    ]
     updates: List[tuple] = []
     for s in targets:
         is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
+        orig_pq = math.sqrt((float(s["qx"]) - float(s["px"])) ** 2 + (float(s["qy"]) - float(s["py"])) ** 2)
+        pq_prime_val = _get_pq_prime(s, orig_pq, _infer_pq_rescale_mode, _infer_pq_rescale_factor, eye_pq_dists)
         t_norm = _predict_t(
             image_rgb, float(s["px"]), float(s["py"]),
             float(s["qx"]), float(s["qy"]), is_upper,
+            pq_prime=pq_prime_val,
         )
         if t_norm is not None:
             t_raw = t_norm * (T_MAX - T_MIN) + T_MIN
@@ -1166,6 +1240,7 @@ def _render_eye_crop(
     image_rgb: np.ndarray,
     eye_samples: List[Dict[str, Any]],
     use_pred: bool,
+    eye_scale: Optional[float] = None,
 ) -> Optional[str]:
     """
     眼领域のクロップにアイラインを描画して base64 JPEG を返す。
@@ -1181,6 +1256,12 @@ def _render_eye_crop(
     # sub_key ごとに point_index 順に並べた R 点を収集
     points_by_sub: Dict[str, List[tuple]] = {"upper": [], "lower": []}
 
+    # mean_pq_dist 逆変換用: eye_samples は同一眼グループ全点なので一括計算
+    eye_pq_dists = [
+        math.sqrt((float(s["qx"]) - float(s["px"])) ** 2 + (float(s["qy"]) - float(s["py"])) ** 2)
+        for s in eye_samples
+    ]
+
     for s in sorted(eye_samples, key=lambda x: x["point_index"]):
         px, py = float(s["px"]), float(s["py"])
         qx, qy = float(s["qx"]), float(s["qy"])
@@ -1188,7 +1269,9 @@ def _render_eye_crop(
 
         if use_pred:
             is_upper_val = 1.0 if sub == "upper" else 0.0
-            t_norm = _predict_t(image_rgb, px, py, qx, qy, is_upper_val)
+            orig_pq = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+            pq_prime_val = _get_pq_prime(s, orig_pq, _infer_pq_rescale_mode, _infer_pq_rescale_factor, eye_pq_dists)
+            t_norm = _predict_t(image_rgb, px, py, qx, qy, is_upper_val, pq_prime=pq_prime_val)
             if t_norm is None:
                 continue
             t_raw = t_norm * (T_MAX - T_MIN) + T_MIN
@@ -1245,19 +1328,25 @@ def _render_eye_crop(
     def to_crop(rx: float, ry: float) -> tuple:
         return (int((rx - x1) * scale), int((ry - y1) * scale))
 
+    # eye_scale に応じてドット・ライン太さをスケール
+    _BASE_EYE_SCALE = 60.0
+    _es_factor = max(1.0, (eye_scale or _BASE_EYE_SCALE) / _BASE_EYE_SCALE)
+    dot_radius = max(4, min(20, round(7 * _es_factor)))
+    line_thickness = max(1, min(5, round(_es_factor)))
+
     # upper: 実線
     upper_pts = [to_crop(rx, ry) for rx, ry in points_by_sub["upper"]]
     for i in range(len(upper_pts) - 1):
-        cv2.line(crop, upper_pts[i], upper_pts[i + 1], color_upper, 1, cv2.LINE_AA)
+        cv2.line(crop, upper_pts[i], upper_pts[i + 1], color_upper, line_thickness, cv2.LINE_AA)
     for pt in upper_pts:
-        cv2.circle(crop, pt, 7, color_upper, -1)
+        cv2.circle(crop, pt, dot_radius, color_upper, -1)
 
     # lower: 破線
     lower_pts = [to_crop(rx, ry) for rx, ry in points_by_sub["lower"]]
     for i in range(len(lower_pts) - 1):
-        _draw_dashed_line(crop, lower_pts[i], lower_pts[i + 1], color_lower, 1)
+        _draw_dashed_line(crop, lower_pts[i], lower_pts[i + 1], color_lower, line_thickness)
     for pt in lower_pts:
-        cv2.circle(crop, pt, 7, color_lower, -1)
+        cv2.circle(crop, pt, dot_radius, color_lower, -1)
 
     return _to_base64_png(crop)
 
@@ -1329,9 +1418,12 @@ def get_eyeliner_preview(idx: int):
     with _models_lock:
         has_model = len(_infer_models) > 0 or _active_predictor is not None
 
+    current_eye_scale = current.get("eye_scale")
+    es = float(current_eye_scale) if current_eye_scale is not None else None
+
     return {
-        "eye_true_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=False),
-        "eye_pred_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=True) if has_model else None,
+        "eye_true_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=False, eye_scale=es),
+        "eye_pred_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=True, eye_scale=es) if has_model else None,
         "side": side,
         "has_model": has_model,
     }

@@ -61,6 +61,8 @@ class TrainConfig:
     aug_flags: int = 0x4F  # AUG_ALL: 全オーグメンテーション有効
     use_aux_face_shape: bool = False
     num_workers: int = 0
+    pq_rescale_mode: str = "none"
+    pq_rescale_factor: float = 1.0
 
 
 @dataclass

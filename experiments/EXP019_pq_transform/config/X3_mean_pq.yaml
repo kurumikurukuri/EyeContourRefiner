@@ -1,0 +1,35 @@
+# EXP019 X3_mean_pq: P'Q' 再設定 — xxx = mean_pq_dist × 1.0
+# 同一目グループ（同一画像・part_name）内の pq_dist 平均値で PQ を再スケール
+# 中点 O を固定し |P'O|=|OQ'|=mean_pq_dist/2
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+t_weight_alpha: 3.0
+use_is_upper: true
+use_pq_weighted_sampler: false
+pq_weight_alpha: 3.0
+pq_threshold: 0.10
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -1.5
+patch_t_max: 2.5
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 64
+label_t_min: -1
+label_t_max: 2
+pq_rescale_mode: mean_pq_dist
+pq_rescale_factor: 1.0
+max_train_samples: null
+mid_t_keep_ratio: 1.0

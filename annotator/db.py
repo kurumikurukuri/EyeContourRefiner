@@ -198,6 +198,25 @@ def get_unannotated_samples_for_eye(
     return [_row_to_dict(r) for r in rows]
 
 
+def get_mean_pq_dist_for_eye(
+    image_path: str,
+    face_index: Optional[int],
+    part_name: str,
+    db_path: Path = DB_PATH,
+) -> Optional[float]:
+    """同一眼グループ全点の pq_dist 平均値を返す。pq_rescale_mode=mean_pq_dist の逆変換に使用。"""
+    import math as _math
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT px, py, qx, qy FROM samples WHERE image_path = ? AND face_index = ? AND part_name = ?",
+            (image_path, face_index if face_index is not None else 0, part_name),
+        ).fetchall()
+    if not rows:
+        return None
+    dists = [_math.sqrt((r["qx"] - r["px"]) ** 2 + (r["qy"] - r["py"]) ** 2) for r in rows]
+    return sum(dists) / len(dists)
+
+
 
 def delete_samples_by_image_paths(
     image_paths: List[str], db_path: Path = DB_PATH

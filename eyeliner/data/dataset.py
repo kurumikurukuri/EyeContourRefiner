@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 from eyeliner.data.augmentation import AUG_ALL, augment, augment_endpoints
 from eyeliner.data.patch_utils import (
     PATCH_SIZE, T_MIN, T_MAX, IMAGENET_MEAN, IMAGENET_STD,
-    extract_patch,
+    extract_patch, compute_pq_rescale,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +98,8 @@ class EyelinerPatchDataset(Dataset):
         label_t_min: float | None = None,
         label_t_max: float | None = None,
         use_aux_face_shape: bool = False,
+        pq_rescale_mode: str = "none",
+        pq_rescale_factor: float = 1.0,
     ) -> None:
         self.records = records
         self.augment_data = augment_data
@@ -110,6 +112,8 @@ class EyelinerPatchDataset(Dataset):
         self._label_t_max = label_t_max if label_t_max is not None else patch_t_max
         self.use_t_norm = use_t_norm
         self.use_aux_face_shape = use_aux_face_shape
+        self.pq_rescale_mode = pq_rescale_mode
+        self._pq_rescale_factor = pq_rescale_factor
         self.patch_perp_scale = patch_perp_scale
         self.patch_size = patch_size
         self._image_cache: dict[str, np.ndarray] = {}
@@ -142,9 +146,18 @@ class EyelinerPatchDataset(Dataset):
         px, py = float(rec["px"]), float(rec["py"])
         qx, qy = float(rec["qx"]), float(rec["qy"])
 
-        # manifest の t は生の物理 t 値（PQ 座標系）。
+        # P'Q' 再設定: 中点 O を固定し |P'O|=|OQ'|=xxx/2 に PQ を再スケール。
+        # t・クランプ・aug・パッチ抽出はすべて P'Q' 座標系で行う。
+        t_from_rec = float(rec["t"])
+        if self.pq_rescale_mode != "none":
+            px, py, qx, qy, t_from_rec, _ = compute_pq_rescale(
+                px, py, qx, qy, t_from_rec, rec,
+                self.pq_rescale_mode, self._pq_rescale_factor,
+            )
+
+        # manifest の t は生の物理 t 値（PQ 座標系）。pq_rescale 時は P'Q' 座標系の値。
         # label 範囲でクランプして正規化する（crop 範囲とは独立）。
-        t_actual = float(rec["t"])
+        t_actual = t_from_rec
         if self.t_quant_step is not None and self.t_quant_step > 0:
             t_actual = round(t_actual / self.t_quant_step) * self.t_quant_step
         if t_actual < self._label_t_min:

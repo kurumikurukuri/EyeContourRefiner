@@ -131,6 +131,8 @@ def run_kfold(
             label_t_min=config.label_t_min,
             label_t_max=config.label_t_max,
             use_aux_face_shape=config.use_aux_face_shape,
+            pq_rescale_mode=config.pq_rescale_mode,
+            pq_rescale_factor=config.pq_rescale_factor,
         )
         val_ds = EyelinerPatchDataset(
             val_records, augment_data=False,
@@ -145,6 +147,8 @@ def run_kfold(
             label_t_min=config.label_t_min,
             label_t_max=config.label_t_max,
             use_aux_face_shape=config.use_aux_face_shape,
+            pq_rescale_mode=config.pq_rescale_mode,
+            pq_rescale_factor=config.pq_rescale_factor,
         )
 
         if config.use_t_weighted_sampler:
