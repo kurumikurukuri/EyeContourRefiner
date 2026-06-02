@@ -1,0 +1,21 @@
+# EXP020 X1_independent (eye_scale): 生PQ + P'Q'(eye_scale) 独立2ブランチ
+# 枝A = EXP019 X0_baseline（生PQ, raw_t）
+# 枝B = EXP019 X2_eye_scale（P'Q' eye_scale×0.2, t_prime）
+# 枝別 patch/label/perp/factor は dual_branch_utils のプリセットで自動設定。
+# アンサンブルは生t空間で逆変換してから出力平均。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127

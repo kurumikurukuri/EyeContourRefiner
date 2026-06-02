@@ -13,8 +13,11 @@ import numpy as np
 
 PATCH_SIZE: Tuple[int, int] = (64, 128)  # (height, width)
 
-T_MIN: float = -1.0   # t の下限（Q を超えて外側 100%）
-T_MAX: float =  2.0   # t の上限（P を超えて外側 100%）
+# EXP020 の pq_rescale（P'Q' 座標系）導入に伴い拡張。invert_pq_rescale_t() で
+# P'Q' 座標系の t' を生 PQ 座標系に逆変換すると、pq_rescale_factor > 1 の場合に
+# 旧範囲 (-1.0, 2.0) を超える値になり得るため、それを許容できる範囲まで広げてある。
+T_MIN: float = -3.0   # t の下限（Q を超えて外側 300%）
+T_MAX: float =  4.0   # t の上限（P を超えて外側 300%）
 
 # ImageNet 正規化定数（学習・推論・サーバーで共通）
 IMAGENET_MEAN: list = [0.485, 0.456, 0.406]
@@ -94,8 +97,8 @@ def extract_patch(
         px, py: Landmark P in image pixel coordinates.
         qx, qy: Delta landmark Q in image pixel coordinates.
         patch_size: (height, width) of the output patch.
-        t_min: Lower bound of t range (default T_MIN=-0.5).
-        t_max: Upper bound of t range (default T_MAX=1.5).
+        t_min: Lower bound of t range (default T_MIN=-3.0).
+        t_max: Upper bound of t range (default T_MAX=4.0).
         perp_scale: 縦軸カバレッジ = perp_scale * |PQ| 画像ピクセル → patch_h パッチピクセル。
                     値を大きくすると目の上下をより広く取り込む（default: 1.0）。
 
@@ -189,10 +192,10 @@ def build_display_patch(
     disp_w = patch_w * display_scale
     disp_rgb = cv2.resize(patch_u8, (disp_w, disp_h), interpolation=cv2.INTER_NEAREST)
 
-    # P marker (blue) at t=1.0: x = (T_MAX-1)/(T_MAX-T_MIN) * (disp_w-1) ≈ 25%
+    # P marker (blue) at t=1.0: x = (T_MAX-1)/(T_MAX-T_MIN) * (disp_w-1) ≈ 43%
     p_x = int(round((T_MAX - 1.0) / (T_MAX - T_MIN) * (disp_w - 1)))
     cv2.line(disp_rgb, (p_x, 0), (p_x, disp_h - 1), (0, 0, 255), 2)
-    # Q marker (red) at t=0.0: x = (T_MAX-0)/(T_MAX-T_MIN) * (disp_w-1) ≈ 75%
+    # Q marker (red) at t=0.0: x = (T_MAX-0)/(T_MAX-T_MIN) * (disp_w-1) ≈ 57%
     q_x = int(round(T_MAX / (T_MAX - T_MIN) * (disp_w - 1)))
     cv2.line(disp_rgb, (q_x, 0), (q_x, disp_h - 1), (255, 0, 0), 2)
 
@@ -273,3 +276,20 @@ def get_pq_prime_dist(
     if val is None:
         return orig_pq_dist
     return max(float(val) * pq_rescale_factor, 1.0)
+
+
+def invert_pq_rescale_t(
+    t_prime: float,
+    pq_dist: float,
+    pq_prime_dist: float,
+) -> float:
+    """P'Q' 座標系の t' を生 PQ 座標系の t に戻す。
+
+    compute_pq_rescale の `t_ = 0.5 + (t - 0.5) * pq_dist / xxx` の逆変換。
+    （xxx == pq_prime_dist == |P'Q'| == eye_scale * factor）
+
+    pq_dist が 0 に近い場合は t_prime をそのまま返す（変換不能）。
+    """
+    if pq_dist <= 1e-6:
+        return t_prime
+    return 0.5 + (t_prime - 0.5) * pq_prime_dist / pq_dist

@@ -49,3 +49,6 @@ htmlcov/
 # Skip directories (Japanese-named)
 スキップ/
 誤差分析スキップ/
+
+# Experiment run logs
+experiments/*/log.txt
