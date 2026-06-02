@@ -1,0 +1,20 @@
+# EXP020 X2_crossfuse (eye_height): 生PQ + P'Q'(eye_height) cross-stitch融合
+# 枝A = EXP019 X0_baseline（生PQ, raw_t）
+# 枝B = EXP019 X1_eye_height（P'Q' eye_height×0.5, t_prime, perp=4.0）
+# 各 ConvBlock 後に CrossStitch で中間特徴を融合。枝別設定はプリセット。
+backbone: custom_dual
+fusion_mode: crossfuse
+pq_rescale_mode_b: eye_height
+loss_fn: t
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127

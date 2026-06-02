@@ -1,9 +1,9 @@
-"""LR スケジューラ設定。"""
+"""LR スケジューラの設定。"""
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
-import torch.optim as optim
+from torch import optim
 
 
 def make_optimizer_and_scheduler(
@@ -29,7 +29,7 @@ def make_optimizer_and_scheduler(
         params = list(model.parameters())
         base_lr = lr / 100
         max_lr = lr / 10
-    else:  # "full"
+    else:
         params = list(model.parameters())
         base_lr = lr / 10
         max_lr = lr

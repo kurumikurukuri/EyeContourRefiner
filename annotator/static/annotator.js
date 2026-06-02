@@ -1,10 +1,11 @@
 "use strict";
 
 // ---------------------------------------------------------------------------
-// Constants — annotator の物理 t 座標系 (utils/patch_utils.py T_MIN/T_MAX と同値)
+// Constants — annotator の物理 t 座標系 (eyeliner/data/patch_utils.py の T_MIN/T_MAX と同値)
 // ---------------------------------------------------------------------------
-const ANNOTATOR_T_MIN = -2.0;
-const ANNOTATOR_T_MAX =  3.0;
+// t の範囲: Q・P を超えて外側 300% まで（-3〜4）
+const ANNOTATOR_T_MIN = -3.0;
+const ANNOTATOR_T_MAX =  4.0;
 
 /** t_norm [0,1] → 物理 t 値 (PQ 座標系) */
 function toPhysicalT(tNorm) {
@@ -721,12 +722,12 @@ btnModelApply.addEventListener("click", async () => {
       body: JSON.stringify({ exp_dir: _selectedFolder }),
     });
     const modeLabel = result.infer_mode === "exp_native" ? " [EXP-native]" : (result.infer_mode === "dummy_t1" ? " [t=1 baseline]" : "");
-    // パッチサイズ・ラベル範囲がデフォルト（64×128, [-2,3]）と異なる場合は注記
+    // パッチサイズ・ラベル範囲がデフォルト（64×128, [-3,4]）と異なる場合は注記
     let patchNote = "";
     if (result.patch_size && (result.patch_size[0] !== 64 || result.patch_size[1] !== 128)) {
       patchNote += ` patch=${result.patch_size[0]}×${result.patch_size[1]}`;
     }
-    if (result.label_t_min !== undefined && (result.label_t_min !== -2.0 || result.label_t_max !== 3.0)) {
+    if (result.label_t_min !== undefined && (result.label_t_min !== ANNOTATOR_T_MIN || result.label_t_max !== ANNOTATOR_T_MAX)) {
       patchNote += ` label=[${result.label_t_min},${result.label_t_max}]`;
     }
     _folderData = { ..._folderData, active_dir: _selectedFolder, loaded_count: result.loaded_count, infer_mode: result.infer_mode };
