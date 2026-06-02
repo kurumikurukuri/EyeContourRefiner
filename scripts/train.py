@@ -109,6 +109,8 @@ def build_experiment_record(
             "label_t_min": args.label_t_min,
             "label_t_max": args.label_t_max,
             "dropout_rate": args.dropout_rate,
+            "pq_rescale_mode": args.pq_rescale_mode,
+            "pq_rescale_factor": args.pq_rescale_factor,
         },
         "data": {
             "data_version": data_version,
@@ -157,16 +159,21 @@ def _save_prediction_train_csv(
         use_t_norm=getattr(args, "use_t_norm", True),
         label_t_min=args.label_t_min,
         label_t_max=args.label_t_max,
+        use_aux_face_shape=getattr(args, "use_aux_face_shape", False),
+        pq_rescale_mode=args.pq_rescale_mode,
+        pq_rescale_factor=args.pq_rescale_factor,
     )
     loader = DataLoader(ds, batch_size=args.batch, shuffle=False)
 
     all_preds: list[float] = []
+    all_trues: list[float] = []
     ensemble.eval()
     with torch.no_grad():
         for batch in loader:
             x = batch[0].to(device)
             is_upper = batch[1].to(device)
             pq_ratio = batch[2].to(device)
+            y_true = batch[3]  # dataset が正規化した t（pq_rescale/eyeh 変換済み）
             kwargs = {"pq_ratio": pq_ratio}
             if args.use_distance_from_center:
                 kwargs["dist_from_center"] = batch[6].to(device)
@@ -174,24 +181,21 @@ def _save_prediction_train_csv(
                 kwargs["norm_eye_scale"] = batch[7].to(device)
             pred = ensemble(x, is_upper, **kwargs)
             all_preds.extend(pred.squeeze(-1).cpu().tolist())
+            all_trues.extend(y_true.squeeze(-1).cpu().tolist())
 
     csv_path = exp_dir / "prediction_train.csv"
     fieldnames = ["idx", "image_path", "part_name", "sub_key", "point_index", "t_true", "t_pred"]
     with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        eff_label_min = args.label_t_min if args.label_t_min is not None else args.patch_t_min
-        eff_label_max = args.label_t_max if args.label_t_max is not None else args.patch_t_max
-        for rec, t_pred in zip(train_records, all_preds):
-            t_actual = float(rec["t"])
-            t_norm = (t_actual - eff_label_min) / (eff_label_max - eff_label_min)
+        for rec, t_true, t_pred in zip(train_records, all_trues, all_preds):
             writer.writerow({
                 "idx":         rec.get("idx", ""),
                 "image_path":  rec["image_path"],
                 "part_name":   rec.get("part_name", ""),
                 "sub_key":     rec.get("sub_key", ""),
                 "point_index": rec.get("point_index", ""),
-                "t_true":      f"{t_norm:.6f}",
+                "t_true":      f"{t_true:.6f}",
                 "t_pred":      f"{t_pred:.6f}",
             })
     logger.info("prediction_train.csv 保存: %s  (n=%d)", csv_path, len(all_preds))
@@ -271,6 +275,8 @@ def mode_kfold(args: argparse.Namespace) -> None:
         patch_w=args.patch_w,
         aug_flags=args.aug_flags,
         num_workers=args.num_workers,
+        pq_rescale_mode=args.pq_rescale_mode,
+        pq_rescale_factor=args.pq_rescale_factor,
     )
 
     # K-Fold 訓練
@@ -328,6 +334,8 @@ def mode_kfold(args: argparse.Namespace) -> None:
                 use_t_norm=args.use_t_norm,
                 label_t_min=args.label_t_min,
                 label_t_max=args.label_t_max,
+                pq_rescale_mode=args.pq_rescale_mode,
+                pq_rescale_factor=args.pq_rescale_factor,
             )
             holdout_loader = DataLoader(holdout_ds, batch_size=args.batch, shuffle=False, num_workers=args.num_workers)
             holdout_mae_value = compute_holdout_mae(
@@ -553,6 +561,15 @@ def main() -> None:
     parser.add_argument(
         "--num_workers", type=int, default=0,
         help="DataLoader の num_workers（default: 0）",
+    )
+    parser.add_argument(
+        "--pq_rescale_mode", type=str, default="none",
+        choices=["none", "eye_height", "eye_scale", "mean_pq_dist"],
+        help="P'Q' 再設定の基準特徴量（none=無効, eye_height, eye_scale, mean_pq_dist）",
+    )
+    parser.add_argument(
+        "--pq_rescale_factor", type=float, default=1.0,
+        help="P'Q' 再設定の定数倍 k（xxx = feature × k）",
     )
 
     args = parser.parse_args()

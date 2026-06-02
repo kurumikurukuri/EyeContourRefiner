@@ -1,0 +1,35 @@
+# EXP019 X1_eye_height: P'Q' 再設定 — xxx = eye_height × 0.5
+# 中点 O を固定し |P'O|=|OQ'|=eye_height/2 に PQ を再スケール後、
+# t'・パッチ抽出・aug をすべて P'Q' 座標系で行う
+backbone: custom
+loss_fn: t
+use_pq_ratio: false
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_t_weighted_sampler: false
+t_weight_alpha: 3.0
+use_is_upper: true
+use_pq_weighted_sampler: false
+pq_weight_alpha: 3.0
+pq_threshold: 0.10
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 4.0
+patch_h: 64
+patch_w: 64
+label_t_min: -0.25
+label_t_max: 1.25
+pq_rescale_mode: eye_height
+pq_rescale_factor: 0.5
+max_train_samples: null
+mid_t_keep_ratio: 1.0

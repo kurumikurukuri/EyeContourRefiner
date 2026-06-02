@@ -5,6 +5,7 @@ and the training pipeline.
 Mirrors the logic in the main library's patch_extractor.py so that
 this repository can be used standalone without installing the library.
 """
+import math
 from typing import Tuple
 
 import cv2
@@ -217,3 +218,58 @@ def overlay_landmarks(
         cv2.circle(out, (int(rx), int(ry)), 2, (0, 255, 0), -1)  # R green
     cv2.line(out, (int(px), int(py)), (int(qx), int(qy)), (200, 200, 0), 1)
     return out
+
+
+# ---------------------------------------------------------------------------
+# P'Q' rescale utilities (shared across dataset, infer, annotator)
+# ---------------------------------------------------------------------------
+
+def compute_pq_rescale(
+    px: float, py: float, qx: float, qy: float,
+    t: float,
+    rec: dict,
+    pq_rescale_mode: str,
+    pq_rescale_factor: float,
+) -> tuple[float, float, float, float, float, float]:
+    """P'Q' 座標系に変換する。pq_rescale_mode=='none' の場合は入力をそのまま返す。
+
+    Returns: (px', py', qx', qy', t', pq_prime_dist)
+    """
+    orig_pq_dist = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+    if pq_rescale_mode == "none" or orig_pq_dist <= 1e-6:
+        return px, py, qx, qy, t, orig_pq_dist
+    if pq_rescale_mode == "eye_height":
+        xxx = float(rec.get("eye_height", orig_pq_dist)) * pq_rescale_factor
+    elif pq_rescale_mode == "mean_pq_dist":
+        xxx = float(rec.get("mean_pq_dist", orig_pq_dist)) * pq_rescale_factor
+    else:  # eye_scale
+        xxx = float(rec.get("eye_scale", orig_pq_dist)) * pq_rescale_factor
+    xxx = max(xxx, 1.0)
+    ox, oy = (px + qx) / 2.0, (py + qy) / 2.0
+    ux, uy = (qx - px) / orig_pq_dist, (qy - py) / orig_pq_dist
+    px_ = ox - (xxx / 2.0) * ux
+    py_ = oy - (xxx / 2.0) * uy
+    qx_ = ox + (xxx / 2.0) * ux
+    qy_ = oy + (xxx / 2.0) * uy
+    t_ = 0.5 + (t - 0.5) * orig_pq_dist / xxx
+    return px_, py_, qx_, qy_, t_, xxx
+
+
+def get_pq_prime_dist(
+    rec: dict,
+    orig_pq_dist: float,
+    pq_rescale_mode: str,
+    pq_rescale_factor: float,
+) -> float:
+    """逆変換用に P'Q' 長さを返す。対応するフィールドが rec に存在しない場合は orig_pq_dist を返す。"""
+    if pq_rescale_mode == "none":
+        return orig_pq_dist
+    if pq_rescale_mode == "eye_height":
+        val = rec.get("eye_height")
+    elif pq_rescale_mode == "mean_pq_dist":
+        val = rec.get("mean_pq_dist")
+    else:  # eye_scale
+        val = rec.get("eye_scale")
+    if val is None:
+        return orig_pq_dist
+    return max(float(val) * pq_rescale_factor, 1.0)

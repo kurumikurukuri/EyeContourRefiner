@@ -1,0 +1,38 @@
+{
+  "exp_name": "EXP019_gate_2exp",
+  "run": 1,
+  "description": "2 experts (X0+X2), num_conv_layers=2, no aux features, band_weight=0",
+  "timestamp": "2026-06-02T23:57:00",
+  "hyperparameters": {
+    "gate_experts": ["X0_baseline", "X2_eye_scale"],
+    "gate_lr": 0.001,
+    "gate_batch_size": 64,
+    "gate_epochs": 30,
+    "gate_patience": 10,
+    "gate_seed": 42,
+    "gate_weight_decay": 0.0001,
+    "gate_num_conv_layers": 2,
+    "gate_use_batchnorm": true,
+    "gate_dropout_rate": 0.3,
+    "gate_band_weight": 0,
+    "gate_aux_dim": 0
+  },
+  "results": {
+    "best_val_mae": 0.091346,
+    "best_epoch": 3,
+    "test_mae_gate": 0.091346,
+    "test_mae_X0": 0.095206,
+    "test_mae_X2": 0.093008,
+    "test_mae_mean": 0.090319,
+    "n_test_samples": 3388,
+    "mean_weight": 0.727,
+    "weight_std": 0.050
+  },
+  "band_breakdown": {
+    "t<0":    {"N": 61,  "X0": 0.5088, "X2": 0.3297, "mean": 0.4020, "gate": 0.4410},
+    "[0,0.5)": {"N": 432, "X0": 0.1200, "X2": 0.1082, "mean": 0.1092, "gate": 0.1120},
+    "[0.5,1.0)": {"N": 2614, "X0": 0.0777, "X2": 0.0819, "mean": 0.0766, "gate": 0.0763},
+    "[1.0,1.2]": {"N": 267, "X0": 0.1083, "X2": 0.1010, "mean": 0.1000, "gate": 0.1026},
+    "t>1.2":  {"N": 56,  "X0": 0.2094, "X2": 0.1969, "mean": 0.1996, "gate": 0.1999}
+  }
+}

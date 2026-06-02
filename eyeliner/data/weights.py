@@ -15,19 +15,28 @@ def compute_eye_meta(records: list[dict]) -> None:
     """
     eye_points: dict[tuple, list[tuple[float, float]]] = defaultdict(list)
     eye_count: dict[tuple, int] = defaultdict(int)
+    pq_dist_sum: dict[tuple, float] = defaultdict(float)
 
     for rec in records:
         key = (rec["image_path"], rec.get("face_index", 0), rec["part_name"])
         eye_points[key].append((float(rec["px"]), float(rec["py"])))
         eye_points[key].append((float(rec["qx"]), float(rec["qy"])))
         eye_count[key] += 1
+        pq_dist_sum[key] += math.sqrt(
+            (float(rec["qx"]) - float(rec["px"])) ** 2
+            + (float(rec["qy"]) - float(rec["py"])) ** 2
+        )
 
     eye_scale_map: dict[tuple, float] = {}
+    eye_height_map: dict[tuple, float] = {}
+    mean_pq_dist_map: dict[tuple, float] = {}
     for key, pts in eye_points.items():
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         scale = math.sqrt((max(xs) - min(xs)) ** 2 + (max(ys) - min(ys)) ** 2)
-        eye_scale_map[key] = max(scale, 1.0)  # ゼロ除算防止
+        eye_scale_map[key] = max(scale, 1.0)
+        eye_height_map[key] = max(max(ys) - min(ys), 1.0)
+        mean_pq_dist_map[key] = max(pq_dist_sum[key] / eye_count[key], 1.0)
 
     for rec in records:
         key = (rec["image_path"], rec.get("face_index", 0), rec["part_name"])
@@ -41,6 +50,8 @@ def compute_eye_meta(records: list[dict]) -> None:
         rec["val_weight"] = pq_dist / n_pq
         rec["pq_ratio"] = pq_dist / eye_scale
         rec["eye_scale"] = eye_scale
+        rec["eye_height"] = eye_height_map[key]
+        rec["mean_pq_dist"] = mean_pq_dist_map[key]
 
 
 def compute_aux_face_shape_meta(records: list[dict], db_path: "str | Path | None" = None) -> None:
