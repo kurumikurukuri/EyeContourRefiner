@@ -228,6 +228,38 @@ class TestModelEnsembleRawT:
 
 
 # ===========================================================
+# 3c. build_baseline_cmd が pq_rescale_factor を渡す（baseline 経由のバグ回帰）
+# ===========================================================
+
+class TestBaselineCmdPassesFactor:
+
+    def _cfg(self, mode: str, factor: float | None) -> dict:
+        cfg = {
+            "loss_fn": "t", "lr": 1e-3, "weight_decay": 1e-4, "epochs": 200,
+            "batch": 32, "k": 3, "patience": 50, "seed": 42,
+            "patch_t_min": -0.5, "patch_t_max": 1.5, "patch_perp_scale": 2.0,
+            "patch_h": 64, "patch_w": 64, "label_t_min": -0.25, "label_t_max": 1.25,
+            "pq_rescale_mode": mode,
+        }
+        if factor is not None:
+            cfg["pq_rescale_factor"] = factor
+        return cfg
+
+    def test_eye_scale_passes_factor(self):
+        from train_exp020 import build_baseline_cmd
+        cmd = build_baseline_cmd("X0_eye_scale_baseline", self._cfg("eye_scale", 0.2))
+        assert "--pq_rescale_mode" in cmd
+        i = cmd.index("--pq_rescale_factor")
+        assert cmd[i + 1] == "0.2", "eye_scale baseline に factor=0.2 が渡らない（旧バグ）"
+
+    def test_none_omits_rescale_flags(self):
+        from train_exp020 import build_baseline_cmd
+        cmd = build_baseline_cmd("X0_none_baseline", self._cfg("none", None))
+        assert "--pq_rescale_mode" not in cmd
+        assert "--pq_rescale_factor" not in cmd
+
+
+# ===========================================================
 # 4. round-trip: dataset → 完璧予測 → 生 t 復元
 # ===========================================================
 

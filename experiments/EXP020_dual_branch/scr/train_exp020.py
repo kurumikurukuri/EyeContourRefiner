@@ -70,6 +70,7 @@ from dual_branch_utils import (  # noqa: E402
 ALL_CONFIGS = [
     "X0_none_baseline",
     "X0_eye_scale_baseline",
+    "X0_eye_height_baseline",
     "X1_independent_none_eye_scale",
     "X1_independent_none_eye_height",
     "X2_crossfuse_none_eye_scale",
@@ -134,6 +135,8 @@ def build_baseline_cmd(config_name: str, cfg: dict, num_workers: int = 0) -> lis
     pq_mode = cfg.get("pq_rescale_mode", "none")
     if pq_mode != "none":
         cmd += ["--pq_rescale_mode", pq_mode]
+        # factor を渡さないと scripts/train.py のデフォルト 1.0 になり EXP019 と不一致になる。
+        cmd += ["--pq_rescale_factor", str(cfg.get("pq_rescale_factor", 1.0))]
     if num_workers > 0:
         cmd += ["--num_workers", str(num_workers)]
     return cmd
