@@ -1,0 +1,28 @@
+# EXP020 X0_eye_height_baseline: P'Q'(eye_height) 単一CNN（比較基準）
+# EXP019 X1_eye_height と同一設定（pq_rescale_factor=0.5, perp=4.0, t' 空間 label 範囲）
+backbone: custom
+loss_fn: t
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_is_upper: true
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 4.0
+patch_h: 64
+patch_w: 64
+label_t_min: -0.25
+label_t_max: 1.25
+max_train_samples: null
+mid_t_keep_ratio: 1.0
+pq_rescale_mode: eye_height
+pq_rescale_factor: 0.5
