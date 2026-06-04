@@ -1,0 +1,952 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tolerance Calibration — EyelinerDetecter</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --border: #0f3460;
+    --text: #e0e0e0;
+    --dim: #a0a0b8;
+    --accent: #1a78c2;
+    --accent-light: #4fc3f7;
+    --green: #28a745;
+    --green-bright: #00e676;
+    --yellow: #ffc107;
+    --orange: #ff9800;
+    --red: #f44336;
+    --magenta: #e040fb;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text);
+    min-height: 100vh; display: flex; flex-direction: column;
+  }
+
+  /* Header */
+  #header {
+    background: var(--card); border-bottom: 1px solid var(--border);
+    padding: 10px 20px; display: flex; align-items: center; gap: 16px;
+    flex-wrap: wrap;
+  }
+  #header h1 { font-size: 1.2rem; color: var(--accent-light); white-space: nowrap; }
+  #progress { color: var(--dim); font-size: 0.9rem; white-space: nowrap; }
+  .header-btn {
+    background: var(--border); color: var(--text); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 6px 14px; cursor: pointer; font-size: 0.85rem;
+    transition: background 0.2s;
+  }
+  .header-btn:hover { background: var(--accent); }
+  .header-btn.primary { background: var(--accent); border-color: var(--accent-light); }
+  .header-btn.primary:hover { background: #1e88d2; }
+  .header-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .spacer { flex: 1; }
+
+  /* Main layout */
+  #main {
+    display: flex; flex: 1; gap: 0; overflow: hidden;
+  }
+
+  /* Left: image viewer */
+  #image-panel {
+    flex: 1; display: flex; flex-direction: column; align-items: center;
+    padding: 10px 16px; gap: 8px; min-width: 0; overflow-y: auto;
+  }
+  .img-section {
+    display: flex; flex-direction: column; align-items: center; gap: 4px;
+  }
+  .img-section .section-label {
+    font-size: 0.75rem; color: var(--dim); text-transform: uppercase; letter-spacing: 1px;
+  }
+  .img-box {
+    border: 2px solid var(--border); border-radius: 8px;
+    background: #000; line-height: 0; display: inline-block;
+  }
+  #eye-crop-img { display: block; max-width: 100%; max-height: 50vh; }
+  #patch-img { display: block; max-width: 100%; max-height: 28vh; cursor: crosshair; }
+
+  #t-slider-container { width: 100%; max-width: 768px; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  #t-slider { width: 100%; height: 8px; accent-color: var(--accent-light); cursor: pointer; }
+  #slider-labels { display: flex; justify-content: space-between; width: 100%; font-size: 0.75rem; color: var(--dim); }
+  .key-hint { font-size: 0.75rem; color: var(--dim); text-align: center; }
+
+  #t-display {
+    font-size: 0.9rem; color: var(--text);
+    display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+  }
+  #t-display span { color: var(--accent-light); font-weight: 600; }
+
+  /* Legend */
+  .legend {
+    display: flex; gap: 12px; flex-wrap: wrap; justify-content: center;
+    font-size: 0.72rem; color: var(--dim);
+  }
+  .legend .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 3px; vertical-align: middle; }
+  .legend .dot.p { background: #0080ff; }
+  .legend .dot.q { background: #ff0000; }
+  .legend .dot.r { background: #00ff00; }
+  .legend .dot.l { background: #ffff00; }
+  .legend .dot.u { background: #ff00ff; }
+
+  /* Right: controls */
+  #ctrl-panel {
+    width: 340px; background: var(--card); border-left: 1px solid var(--border);
+    padding: 12px; display: flex; flex-direction: column; gap: 8px;
+    overflow-y: auto;
+  }
+  .ctrl-section {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px;
+  }
+  .ctrl-section h3 { font-size: 0.85rem; color: var(--accent-light); margin-bottom: 6px; }
+  .ctrl-row { display: flex; justify-content: space-between; align-items: center; margin: 3px 0; font-size: 0.82rem; }
+  .ctrl-row .label { color: var(--dim); }
+  .ctrl-row .value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .nav-btns { display: flex; gap: 6px; }
+  .nav-btns button {
+    flex: 1; background: var(--border); color: var(--text);
+    border: 1px solid var(--accent); border-radius: 6px;
+    padding: 6px; cursor: pointer; font-size: 0.85rem; transition: background 0.2s;
+  }
+  .nav-btns button:hover { background: var(--accent); }
+  .nav-btns button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+  .mark-btn {
+    width: 100%; padding: 8px; border-radius: 6px; border: 2px solid;
+    font-size: 0.85rem; font-weight: 600; cursor: pointer; transition: background 0.2s;
+    margin-bottom: 4px;
+  }
+  .mark-btn.lower {
+    background: transparent; color: var(--yellow); border-color: var(--yellow);
+  }
+  .mark-btn.lower:hover { background: rgba(255, 193, 7, 0.15); }
+  .mark-btn.lower.marked { background: rgba(255, 193, 7, 0.25); }
+  .mark-btn.upper {
+    background: transparent; color: var(--magenta); border-color: var(--magenta);
+  }
+  .mark-btn.upper:hover { background: rgba(224, 64, 251, 0.15); }
+  .mark-btn.upper.marked { background: rgba(224, 64, 251, 0.25); }
+
+  .mark-value { font-size: 0.82rem; padding: 3px 8px; background: var(--bg); border-radius: 4px; margin: 2px 0; }
+  .mark-value.lower { border-left: 3px solid var(--yellow); }
+  .mark-value.upper { border-left: 3px solid var(--magenta); }
+  .mark-value .clear-mark {
+    float: right; background: none; border: none; color: var(--red);
+    cursor: pointer; font-size: 0.78rem; padding: 0 4px;
+  }
+
+  .computed { font-size: 0.82rem; margin-top: 6px; }
+  .computed .ratio { font-size: 1.05rem; font-weight: 700; color: var(--green-bright); }
+
+  /* Summary modal */
+  #summary-overlay {
+    display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+    z-index: 100; justify-content: center; align-items: center; padding: 20px;
+  }
+  #summary-overlay.open { display: flex; }
+  #summary-box {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    max-width: 1100px; max-height: 85vh; width: 100%; overflow-y: auto; padding: 24px;
+  }
+  #summary-box h2 { color: var(--accent-light); margin-bottom: 16px; }
+  .stats-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+  .stat-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; text-align: center; min-width: 80px; flex: 1;
+  }
+  .stat-card .stat-label { font-size: 0.72rem; color: var(--dim); }
+  .stat-card .stat-value { font-size: 1.2rem; font-weight: 700; color: var(--accent-light); }
+  .stat-card .stat-value.highlight { color: var(--green-bright); }
+
+  #results-table {
+    width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-bottom: 12px;
+  }
+  #results-table th {
+    background: var(--border); color: var(--dim); padding: 5px 7px;
+    text-align: right; position: sticky; top: 0;
+  }
+  #results-table th:first-child { text-align: left; }
+  #results-table td {
+    padding: 3px 7px; border-bottom: 1px solid var(--border); text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  #results-table td:first-child { text-align: left; }
+  #results-table tr:hover { background: rgba(255,255,255,0.03); }
+
+  .summary-actions { display: flex; gap: 10px; margin-top: 10px; }
+  #close-summary {
+    background: var(--border); color: var(--text); border: 1px solid var(--accent);
+    border-radius: 6px; padding: 8px 20px; cursor: pointer;
+  }
+
+  /* Status bar */
+  #status {
+    padding: 5px 14px; font-size: 0.78rem; color: var(--dim);
+    border-top: 1px solid var(--border); background: var(--card);
+  }
+
+  @media (max-width: 900px) {
+    #main { flex-direction: column; }
+    #ctrl-panel { width: 100%; max-height: 35vh; }
+    #eye-crop-img { max-height: 30vh; }
+    #patch-img { max-height: 20vh; }
+  }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🎯 Tolerance Calibration</h1>
+  <span id="progress">Loading...</span>
+  <span class="spacer"></span>
+  <button class="header-btn primary" id="btn-summary" disabled title="View summary (S)">📊 Summary</button>
+  <button class="header-btn" id="btn-export" disabled title="Export CSV (E)">📥 Export CSV</button>
+</div>
+
+<div id="main">
+  <!-- Left: Images -->
+  <div id="image-panel">
+    <!-- Eye crop -->
+    <div class="img-section">
+      <div class="section-label">👁️ Eye Region Crop</div>
+      <div class="img-box">
+        <img id="eye-crop-img" src="" alt="Eye crop">
+      </div>
+    </div>
+
+    <!-- Patch -->
+    <div class="img-section">
+      <div class="section-label">🔍 Rotated Patch (P→Q aligned)</div>
+      <div class="img-box">
+        <img id="patch-img" src="" alt="Eye patch">
+      </div>
+    </div>
+
+    <!-- Slider -->
+    <div id="t-slider-container">
+      <input type="range" id="t-slider" min="0" max="1" step="0.001" value="0.5">
+      <div id="slider-labels">
+        <span>t=1 (P / thicker)</span><span>t=0 (Q / thinner)</span>
+      </div>
+    </div>
+
+    <div id="t-display">
+      t = <span id="val-t">0.500</span>
+      | R = (<span id="val-rx">-</span>, <span id="val-ry">-</span>)
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+      <span><span class="dot p"></span>P (outer)</span>
+      <span><span class="dot q"></span>Q (inner)</span>
+      <span><span class="dot r"></span>R (current t)</span>
+      <span><span class="dot l"></span>L (lower bound)</span>
+      <span><span class="dot u"></span>U (upper bound)</span>
+    </div>
+
+    <div class="key-hint">
+      ← → navigate &nbsp;|&nbsp; Click patch to set t &nbsp;|&nbsp; L mark lower &nbsp;|&nbsp; U mark upper &nbsp;|&nbsp; R reset &nbsp;|&nbsp; S summary &nbsp;|&nbsp; E export
+    </div>
+  </div>
+
+  <!-- Right: Controls -->
+  <div id="ctrl-panel">
+    <div class="ctrl-section">
+      <h3>📋 Navigation</h3>
+      <div class="nav-btns">
+        <button id="btn-prev" disabled>← Prev</button>
+        <button id="btn-next" disabled>Next →</button>
+      </div>
+      <div class="ctrl-row" style="margin-top:6px">
+        <span class="label">Sample</span>
+        <span class="value" id="nav-idx">- / 100</span>
+      </div>
+    </div>
+
+    <div class="ctrl-section">
+      <h3>ℹ️ Sample Info</h3>
+      <div class="ctrl-row"><span class="label">idx</span><span class="value"><a id="info-idx" href="#" target="_blank">-</a></span></div>
+      <div class="ctrl-row"><span class="label">eye_scale</span><span class="value" id="info-eye-scale">-</span></div>
+      <div class="ctrl-row"><span class="label">PQ dist</span><span class="value" id="info-pq-dist">- px</span></div>
+      <div class="ctrl-row"><span class="label">t annotated</span><span class="value" id="info-t-annotated">-</span></div>
+      <div class="ctrl-row"><span class="label">image</span><span class="value" id="info-image" style="font-size:0.68rem;word-break:break-all">-</span></div>
+    </div>
+
+    <div class="ctrl-section">
+      <h3>🎯 Marks</h3>
+      <button class="mark-btn lower" id="btn-mark-lower">📏 Mark Lower (L)</button>
+      <div class="mark-value lower" id="display-lower" style="display:none">
+        Lower: t = <span class="value" id="val-lower">-</span>
+        <button class="clear-mark" id="clear-lower">✕</button>
+      </div>
+      <button class="mark-btn upper" id="btn-mark-upper">📏 Mark Upper (U)</button>
+      <div class="mark-value upper" id="display-upper" style="display:none">
+        Upper: t = <span class="value" id="val-upper">-</span>
+        <button class="clear-mark" id="clear-upper">✕</button>
+      </div>
+      <button class="header-btn" id="btn-reset-marks" style="width:100%;margin-top:4px">↺ Reset both (R)</button>
+    </div>
+
+    <div class="ctrl-section" id="computed-section" style="display:none">
+      <h3>📐 Computed</h3>
+      <div class="computed">
+        <div class="ctrl-row"><span class="label">Δt range (norm)</span><span class="value" id="comp-dt-norm">-</span></div>
+        <div class="ctrl-row"><span class="label">pixel range</span><span class="value" id="comp-px-range">- px</span></div>
+        <div class="ctrl-row"><span class="label">eye_scale</span><span class="value" id="comp-eye-scale">-</span></div>
+        <div class="ctrl-row">
+          <span class="label">ratio</span>
+          <span class="value ratio" id="comp-ratio">-</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="status">Ready</div>
+
+<!-- Summary Modal -->
+<div id="summary-overlay">
+  <div id="summary-box">
+    <h2>📊 Calibration Results</h2>
+    <div class="stats-grid" id="stats-grid"></div>
+    <canvas id="histogram" width="700" height="220" style="width:100%;max-width:700px;height:220px;margin-bottom:16px;border-radius:8px;background:var(--bg)"></canvas>
+    <div style="overflow-x:auto">
+      <table id="results-table"><thead><tr>
+        <th>idx</th><th>t_annotated</th><th>t_lower</th><th>t_upper</th>
+        <th>Δt_norm</th><th>pq_dist</th><th>px_range</th><th>eye_scale</th><th>ratio</th>
+      </tr></thead><tbody id="results-tbody"></tbody></table>
+    </div>
+    <div class="summary-actions">
+      <button class="header-btn primary" id="btn-export-modal">📥 Export CSV</button>
+      <button id="close-summary">Close</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Constants (match server)
+// ---------------------------------------------------------------------------
+const T_MIN = -3.0;
+const T_MAX = 4.0;
+const T_RANGE = T_MAX - T_MIN;
+
+// ---------------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------------
+const state = {
+  samples: [],
+  currentIndex: 0,
+  marks: {},        // { idx: { t_lower: float|null, t_upper: float|null } }
+  currentT: 0.5,
+  patchAborter: null,
+  eyeAborter: null,
+};
+
+// ---------------------------------------------------------------------------
+// DOM refs
+// ---------------------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const eyeCropImg = $('eye-crop-img');
+const patchImg = $('patch-img');
+const tSlider = $('t-slider');
+const btnPrev = $('btn-prev');
+const btnNext = $('btn-next');
+const btnSummary = $('btn-summary');
+const btnExport = $('btn-export');
+const btnMarkLower = $('btn-mark-lower');
+const btnMarkUpper = $('btn-mark-upper');
+const btnResetMarks = $('btn-reset-marks');
+const summaryOverlay = $('summary-overlay');
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function computeR(px, py, qx, qy, tNorm) {
+  const tRaw = T_MIN + tNorm * T_RANGE;
+  return {
+    rx: tRaw * px + (1 - tRaw) * qx,
+    ry: tRaw * py + (1 - tRaw) * qy,
+  };
+}
+
+function computePixelRange(tLower, tUpper, pqDist) {
+  const dtNorm = Math.abs(tUpper - tLower);
+  const dtRaw = dtNorm * T_RANGE;
+  return { dtNorm, dtRaw, pixelRange: dtRaw * pqDist };
+}
+
+function formatT(v) {
+  if (v == null) return '-';
+  return v.toFixed(4);
+}
+
+function marksQueryParams(marks) {
+  let q = '';
+  if (marks.t_lower != null) q += `&t_lower=${marks.t_lower}`;
+  if (marks.t_upper != null) q += `&t_upper=${marks.t_upper}`;
+  return q;
+}
+
+// ---------------------------------------------------------------------------
+// API calls
+// ---------------------------------------------------------------------------
+async function apiFetch(url, signal) {
+  const res = await fetch(url, { signal });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`HTTP ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+async function loadSamples() {
+  setStatus('Loading samples...');
+  const data = await apiFetch('/api/samples');
+  state.samples = data.samples;
+  state.marks = {};
+  for (const s of data.samples) {
+    state.marks[s.idx] = { t_lower: null, t_upper: null };
+  }
+
+  // Try to restore saved marks (server first, then localStorage)
+  const sampleIdxSet = new Set(data.samples.map(s => s.idx));
+  let restored = false;
+  try {
+    const saved = await apiFetch('/api/marks/load');
+    if (saved.marks && saved.sample_idxs) {
+      // Check if saved samples match current samples
+      const savedSet = new Set(saved.sample_idxs.map(Number));
+      if (savedSet.size === sampleIdxSet.size && [...savedSet].every(id => sampleIdxSet.has(id))) {
+        for (const [idxStr, m] of Object.entries(saved.marks)) {
+          const idx = Number(idxStr);
+          if (state.marks[idx]) {
+            state.marks[idx].t_lower = m.t_lower;
+            state.marks[idx].t_upper = m.t_upper;
+          }
+        }
+        restored = true;
+        setStatus(`Loaded ${data.samples.length} samples (restored saved marks)`);
+      }
+    }
+  } catch (e) { /* server file not found, try localStorage */ }
+
+  if (!restored) {
+    // Fall back to localStorage
+    const local = localStorage.getItem('tolerance_marks');
+    if (local) {
+      try {
+        const parsed = JSON.parse(local);
+        if (parsed.sample_idxs) {
+          const savedSet = new Set(parsed.sample_idxs);
+          if (savedSet.size === sampleIdxSet.size && [...savedSet].every(id => sampleIdxSet.has(id))) {
+            for (const [idxStr, m] of Object.entries(parsed.marks)) {
+              const idx = Number(idxStr);
+              if (state.marks[idx]) {
+                state.marks[idx].t_lower = m.t_lower;
+                state.marks[idx].t_upper = m.t_upper;
+              }
+            }
+            setStatus(`Loaded ${data.samples.length} samples (restored from browser)`);
+            restored = true;
+          }
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  if (!restored) {
+    setStatus(`Loaded ${data.samples.length} samples (${data.total_available} available)`);
+  }
+  state.currentIndex = 0;
+  await loadCurrentSample();
+}
+
+async function persistMarks() {
+  // Save to localStorage immediately
+  const marksMap = {};
+  for (const [idx, m] of Object.entries(state.marks)) {
+    marksMap[idx] = { t_lower: m.t_lower, t_upper: m.t_upper };
+  }
+  localStorage.setItem('tolerance_marks', JSON.stringify({
+    sample_idxs: state.samples.map(s => s.idx),
+    marks: marksMap,
+  }));
+
+  // Save to server (fire-and-forget)
+  const samples = state.samples.map(s => ({
+    idx: s.idx,
+    t_lower: state.marks[s.idx].t_lower,
+    t_upper: state.marks[s.idx].t_upper,
+  }));
+  fetch('/api/marks/save', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ samples }),
+  }).catch(() => {}); // silent fail
+}
+
+async function loadImages(tNorm) {
+  const sample = state.samples[state.currentIndex];
+  const marks = state.marks[sample.idx];
+  const mq = marksQueryParams(marks);
+
+  // Abort previous requests
+  if (state.patchAborter) state.patchAborter.abort();
+  if (state.eyeAborter) state.eyeAborter.abort();
+  state.patchAborter = new AbortController();
+  state.eyeAborter = new AbortController();
+
+  // Load patch
+  try {
+    const patchData = await apiFetch(`/api/patch/${sample.idx}?t=${tNorm}${mq}`, state.patchAborter.signal);
+    patchImg.src = 'data:image/png;base64,' + patchData.patch_b64;
+    $('val-rx').textContent = patchData.rx.toFixed(1);
+    $('val-ry').textContent = patchData.ry.toFixed(1);
+  } catch (e) {
+    if (e.name !== 'AbortError') { console.error('Patch error:', e); }
+  }
+
+  // Load eye crop
+  try {
+    const eyeData = await apiFetch(`/api/eye_crop/${sample.idx}?t=${tNorm}${mq}`, state.eyeAborter.signal);
+    eyeCropImg.src = 'data:image/png;base64,' + eyeData.eye_b64;
+  } catch (e) {
+    if (e.name !== 'AbortError') { console.error('Eye crop error:', e); }
+  }
+}
+
+async function loadCurrentSample() {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+
+  state.currentT = sample.t_norm;
+  tSlider.value = 1 - state.currentT;
+  updateTDisplay();
+
+  $('nav-idx').textContent = `${state.currentIndex + 1} / ${state.samples.length}`;
+  const annotatorUrl = `http://127.0.0.1:8000/?idx=${sample.idx}`;
+  $('info-idx').href = annotatorUrl;
+  $('info-idx').textContent = sample.idx;
+  $('info-eye-scale').textContent = sample.eye_scale.toFixed(1);
+  $('info-pq-dist').textContent = sample.pq_dist.toFixed(2) + ' px';
+  $('info-t-annotated').textContent = formatT(sample.t);
+  $('info-image').textContent = sample.image_path.split('/').pop();
+
+  updateMarksDisplay();
+  await loadImages(state.currentT);
+
+  btnPrev.disabled = state.currentIndex === 0;
+  btnNext.disabled = state.currentIndex >= state.samples.length - 1;
+}
+
+function updateTDisplay() {
+  $('val-t').textContent = state.currentT.toFixed(3);
+  const sample = state.samples[state.currentIndex];
+  if (sample) {
+    const r = computeR(sample.px, sample.py, sample.qx, sample.qy, state.currentT);
+    $('val-rx').textContent = r.rx.toFixed(1);
+    $('val-ry').textContent = r.ry.toFixed(1);
+  }
+}
+
+function updateMarksDisplay() {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  const marks = state.marks[sample.idx];
+
+  if (marks.t_lower != null) {
+    $('display-lower').style.display = 'block';
+    $('val-lower').textContent = formatT(marks.t_lower);
+    btnMarkLower.classList.add('marked');
+    btnMarkLower.textContent = '📏 Mark Lower (L) ✓';
+  } else {
+    $('display-lower').style.display = 'none';
+    btnMarkLower.classList.remove('marked');
+    btnMarkLower.textContent = '📏 Mark Lower (L)';
+  }
+
+  if (marks.t_upper != null) {
+    $('display-upper').style.display = 'block';
+    $('val-upper').textContent = formatT(marks.t_upper);
+    btnMarkUpper.classList.add('marked');
+    btnMarkUpper.textContent = '📏 Mark Upper (U) ✓';
+  } else {
+    $('display-upper').style.display = 'none';
+    btnMarkUpper.classList.remove('marked');
+    btnMarkUpper.textContent = '📏 Mark Upper (U)';
+  }
+
+  if (marks.t_lower != null && marks.t_upper != null) {
+    $('computed-section').style.display = 'block';
+    const result = computePixelRange(marks.t_lower, marks.t_upper, sample.pq_dist);
+    $('comp-dt-norm').textContent = result.dtNorm.toFixed(4);
+    $('comp-px-range').textContent = result.pixelRange.toFixed(2) + ' px';
+    $('comp-eye-scale').textContent = sample.eye_scale.toFixed(1);
+    $('comp-ratio').textContent = (result.pixelRange / sample.eye_scale).toFixed(4);
+  } else {
+    $('computed-section').style.display = 'none';
+  }
+
+  updateProgress();
+}
+
+function updateProgress() {
+  let marked = 0;
+  for (const idx in state.marks) {
+    const m = state.marks[idx];
+    if (m.t_lower != null && m.t_upper != null) marked++;
+  }
+  $('progress').textContent = `Marked: ${marked} / ${state.samples.length}`;
+  const allMarked = marked === state.samples.length;
+  btnSummary.disabled = !allMarked;
+  btnExport.disabled = !allMarked;
+}
+
+function setStatus(msg) {
+  $('status').textContent = msg;
+}
+
+// ---------------------------------------------------------------------------
+// Event handlers
+// ---------------------------------------------------------------------------
+function setT(tNorm) {
+  state.currentT = Math.max(0, Math.min(1, tNorm));
+  tSlider.value = 1 - state.currentT;
+  updateTDisplay();
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => loadImages(state.currentT), 50);
+}
+
+let debounceTimer = null;
+tSlider.addEventListener('input', () => {
+  setT(1 - parseFloat(tSlider.value));
+});
+
+// Click on patch image to set t
+patchImg.addEventListener('click', (e) => {
+  const rect = patchImg.getBoundingClientRect();
+  const clickX = e.clientX - rect.left;
+  const displayW = rect.width;
+  if (displayW === 0 || patchImg.naturalWidth === 0) return;
+  // Map display pixel to natural pixel, then to t
+  const naturalX = clickX * (patchImg.naturalWidth / displayW);
+  const tNorm = 1.0 - naturalX / (patchImg.naturalWidth - 1);
+  setT(tNorm);
+});
+
+btnPrev.addEventListener('click', () => {
+  if (state.currentIndex > 0) { state.currentIndex--; loadCurrentSample(); }
+});
+
+btnNext.addEventListener('click', () => {
+  if (state.currentIndex < state.samples.length - 1) { state.currentIndex++; loadCurrentSample(); }
+});
+
+btnMarkLower.addEventListener('click', () => markLower());
+btnMarkUpper.addEventListener('click', () => markUpper());
+
+function markLower() {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  state.marks[sample.idx].t_lower = state.currentT;
+  updateMarksDisplay();
+  loadImages(state.currentT);
+  persistMarks();
+  setStatus(`Lower bound marked: t = ${state.currentT.toFixed(4)}`);
+}
+
+function markUpper() {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  state.marks[sample.idx].t_upper = state.currentT;
+  updateMarksDisplay();
+  loadImages(state.currentT);
+  persistMarks();
+  setStatus(`Upper bound marked: t = ${state.currentT.toFixed(4)}`);
+}
+
+function resetMarks() {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  state.marks[sample.idx] = { t_lower: null, t_upper: null };
+  updateMarksDisplay();
+  loadImages(state.currentT);
+  persistMarks();
+  setStatus('Marks reset');
+}
+
+$('clear-lower').addEventListener('click', () => {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  state.marks[sample.idx].t_lower = null;
+  updateMarksDisplay();
+  loadImages(state.currentT);
+  persistMarks();
+});
+
+$('clear-upper').addEventListener('click', () => {
+  const sample = state.samples[state.currentIndex];
+  if (!sample) return;
+  state.marks[sample.idx].t_upper = null;
+  updateMarksDisplay();
+  loadImages(state.currentT);
+  persistMarks();
+});
+
+btnResetMarks.addEventListener('click', resetMarks);
+
+// ---------------------------------------------------------------------------
+// Summary
+// ---------------------------------------------------------------------------
+btnSummary.addEventListener('click', async () => {
+  const marksList = [];
+  for (const s of state.samples) {
+    const m = state.marks[s.idx];
+    if (m.t_lower == null || m.t_upper == null) {
+      alert(`Sample idx=${s.idx} is not fully marked.`);
+      return;
+    }
+    marksList.push({ idx: s.idx, t_lower: m.t_lower, t_upper: m.t_upper });
+  }
+
+  setStatus('Computing summary...');
+  try {
+    const res = await fetch('/api/submit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ marks: marksList }),
+    });
+    if (!res.ok) { const body = await res.text(); throw new Error(body); }
+    const data = await res.json();
+    renderSummary(data);
+    summaryOverlay.classList.add('open');
+    setStatus('Summary ready');
+  } catch (e) {
+    alert('Submit error: ' + e.message);
+    setStatus('Submit failed');
+  }
+});
+
+function renderSummary(data) {
+  const { summary, results } = data;
+  const statKeys = [
+    { key: 'count', label: 'Samples' },
+    { key: 'mean_ratio', label: 'Mean Ratio', highlight: true },
+    { key: 'median_ratio', label: 'Median Ratio' },
+    { key: 'std_ratio', label: 'Std Dev' },
+    { key: 'p75_ratio', label: 'P75 Ratio' },
+    { key: 'p90_ratio', label: 'P90 Ratio', highlight: true },
+    { key: 'p95_ratio', label: 'P95 Ratio', highlight: true },
+    { key: 'min_ratio', label: 'Min Ratio' },
+    { key: 'max_ratio', label: 'Max Ratio' },
+  ];
+  $('stats-grid').innerHTML = statKeys.map(s => `
+    <div class="stat-card">
+      <div class="stat-label">${s.label}</div>
+      <div class="stat-value${s.highlight ? ' highlight' : ''}">${summary[s.key]}</div>
+    </div>
+  `).join('');
+
+  $('results-tbody').innerHTML = results.map(r => `
+    <tr>
+      <td><a href="http://127.0.0.1:8000/?idx=${r.idx}" target="_blank">${r.idx}</a></td>
+      <td>${formatT(r.t_annotated)}</td>
+      <td>${formatT(r.t_lower)}</td>
+      <td>${formatT(r.t_upper)}</td>
+      <td>${r.t_range_norm.toFixed(4)}</td>
+      <td>${r.pq_dist.toFixed(2)}</td>
+      <td>${r.pixel_range.toFixed(2)}</td>
+      <td>${r.eye_scale.toFixed(1)}</td>
+      <td style="font-weight:700;color:var(--green-bright)">${r.ratio.toFixed(4)}</td>
+    </tr>
+  `).join('');
+
+  drawHistogram(results.map(r => r.ratio));
+}
+
+function drawHistogram(ratios) {
+  const canvas = $('histogram');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const pad = { top: 16, right: 20, bottom: 28, left: 48 };
+  const pw = W - pad.left - pad.right;
+  const ph = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Determine bins
+  const minR = Math.min(...ratios), maxR = Math.max(...ratios);
+  const margin = (maxR - minR) * 0.1 || 0.005;
+  const lo = Math.max(0, minR - margin);
+  const hi = maxR + margin;
+  const nBins = Math.max(1, Math.round(Math.log2(ratios.length) + 1));
+  const binW = (hi - lo) / nBins;
+  const bins = new Array(nBins).fill(0);
+  for (const r of ratios) {
+    const i = Math.min(nBins - 1, Math.floor((r - lo) / binW));
+    bins[i]++;
+  }
+  const maxCount = Math.max(...bins);
+
+  // Draw axes
+  ctx.strokeStyle = '#a0a0b8';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(pad.left, pad.top);
+  ctx.lineTo(pad.left, pad.top + ph);
+  ctx.lineTo(pad.left + pw, pad.top + ph);
+  ctx.stroke();
+
+  // Y axis labels
+  ctx.fillStyle = '#a0a0b8';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + ph - (i / 4) * ph;
+    const v = Math.round((i / 4) * maxCount);
+    ctx.fillText(v, pad.left - 6, y + 4);
+    ctx.beginPath();
+    ctx.moveTo(pad.left, y);
+    ctx.lineTo(pad.left + pw, y);
+    ctx.strokeStyle = '#1a1a3e';
+    ctx.stroke();
+  }
+
+  // X axis labels
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#a0a0b8';
+  for (let i = 0; i <= nBins; i++) {
+    const x = pad.left + (i / nBins) * pw;
+    ctx.fillText((lo + i * binW).toFixed(3), x, pad.top + ph + 14);
+  }
+  ctx.fillText('ratio', pad.left + pw / 2, pad.top + ph + 26);
+
+  // Draw bars
+  for (let i = 0; i < nBins; i++) {
+    const x = pad.left + (i / nBins) * pw + 1;
+    const barW = pw / nBins - 2;
+    const barH = maxCount > 0 ? (bins[i] / maxCount) * ph : 0;
+    const y = pad.top + ph - barH;
+
+    // Gradient from accent to green
+    const grad = ctx.createLinearGradient(x, y, x, pad.top + ph);
+    grad.addColorStop(0, '#4fc3f7');
+    grad.addColorStop(1, '#1a78c2');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x, y, barW, barH);
+
+    // Count label on top
+    if (bins[i] > 0) {
+      ctx.fillStyle = '#e0e0e0';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText(bins[i], x + barW / 2, y - 4);
+    }
+  }
+
+  // Draw percentile markers
+  const pcts = [
+    { p: 50, color: '#ffc107', label: 'p50' },
+    { p: 90, color: '#00e676', label: 'p90' },
+    { p: 95, color: '#ff9800', label: 'p95' },
+  ];
+  const sorted = [...ratios].sort((a, b) => a - b);
+  for (const { p, color, label } of pcts) {
+    const k = (p / 100) * (sorted.length - 1);
+    const f = Math.floor(k);
+    const c = k - f;
+    const val = f + 1 < sorted.length ? sorted[f] + c * (sorted[f + 1] - sorted[f]) : sorted[f];
+    const x = pad.left + ((val - lo) / (hi - lo)) * pw;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(x, pad.top);
+    ctx.lineTo(x, pad.top + ph);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = color;
+    ctx.font = 'bold 10px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(label, x, pad.top - 3);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Export
+// ---------------------------------------------------------------------------
+btnExport.addEventListener('click', () => exportCSV());
+$('btn-export-modal').addEventListener('click', () => exportCSV());
+
+function exportCSV() {
+  window.open('/api/export_csv', '_blank');
+}
+
+// ---------------------------------------------------------------------------
+// Modal close
+// ---------------------------------------------------------------------------
+$('close-summary').addEventListener('click', () => summaryOverlay.classList.remove('open'));
+summaryOverlay.addEventListener('click', (e) => {
+  if (e.target === summaryOverlay) summaryOverlay.classList.remove('open');
+});
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts
+// ---------------------------------------------------------------------------
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+
+  switch (e.key.toLowerCase()) {
+    case 'arrowleft':
+      e.preventDefault();
+      if (state.currentIndex > 0) { state.currentIndex--; loadCurrentSample(); }
+      break;
+    case 'arrowright':
+      e.preventDefault();
+      if (state.currentIndex < state.samples.length - 1) { state.currentIndex++; loadCurrentSample(); }
+      break;
+    case 'l':
+      e.preventDefault(); markLower();
+      break;
+    case 'u':
+      e.preventDefault(); markUpper();
+      break;
+    case 'r':
+      e.preventDefault(); resetMarks();
+      break;
+    case 's':
+      if (!e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (!btnSummary.disabled) btnSummary.click();
+      }
+      break;
+    case 'e':
+      if (!e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        if (!btnExport.disabled) exportCSV();
+      }
+      break;
+    case 'escape':
+      summaryOverlay.classList.remove('open');
+      break;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+loadSamples().catch(e => {
+  setStatus('Failed to load samples: ' + e.message);
+  console.error(e);
+});
+</script>
+
+</body>
+</html>
