@@ -116,6 +116,7 @@ def dashboard():
 _infer_models: List = []  # K-Fold アンサンブル用（複数モデルを保持）
 _infer_device = None
 _active_model_paths: List[Path] = []
+_active_predictor_dir: Optional[Path] = None  # EXP native predictor 使用時のアクティブディレクトリ
 
 # ImageNet 正規化テンソル（デバイスに配置後に設定）
 _imagenet_mean_t = None
@@ -134,6 +135,7 @@ _infer_label_t_min: float = T_MIN
 _infer_label_t_max: float = T_MAX
 _infer_pq_rescale_mode: str = "none"
 _infer_pq_rescale_factor: float = 1.0
+_infer_patch_perp_scale: float = 1.0
 
 
 def _find_model_paths() -> List[Path]:
@@ -223,14 +225,26 @@ def _load_exp_params(models_dir: Path) -> dict:
         lt_max = hp.get("label_t_max")
         params["label_t_min"] = float(lt_min) if lt_min is not None else params.get("patch_t_min", T_MIN)
         params["label_t_max"] = float(lt_max) if lt_max is not None else params.get("patch_t_max", T_MAX)
-        params["pq_rescale_mode"] = str(hp.get("pq_rescale_mode", "none"))
-        params["pq_rescale_factor"] = float(hp.get("pq_rescale_factor", 1.0))
+        # デュアルブランチ形式の場合 branch_b の設定を使う（pq_prime 計算に必要）
+        branch_b_hp = hp.get("branch_b") or {}
+        raw_mode   = hp.get("pq_rescale_mode")   or branch_b_hp.get("pq_rescale_mode",   "none")
+        raw_factor = hp.get("pq_rescale_factor")
+        if raw_factor is None:
+            raw_factor = branch_b_hp.get("pq_rescale_factor", 1.0)
+        params["pq_rescale_mode"]   = str(raw_mode)
+        params["pq_rescale_factor"] = float(raw_factor)
+        raw_perp = hp.get("patch_perp_scale")
+        if raw_perp is None:
+            raw_perp = (hp.get("branch_a") or {}).get("patch_perp_scale")
+        params["patch_perp_scale"] = float(raw_perp) if raw_perp is not None else 1.0
         logger.info(
-            "experiment.json 読み込み: patch_size=%s patch_t=[%.1f,%.1f] label_t=[%.1f,%.1f] pq_rescale=%s×%.2f",
+            "experiment.json 読み込み: patch_size=%s patch_t=[%.1f,%.1f] label_t=[%.1f,%.1f]"
+            " pq_rescale=%s×%.2f perp_scale=%.1f",
             params.get("patch_size", PATCH_SIZE),
             params.get("patch_t_min", T_MIN), params.get("patch_t_max", T_MAX),
             params["label_t_min"], params["label_t_max"],
             params["pq_rescale_mode"], params["pq_rescale_factor"],
+            params["patch_perp_scale"],
         )
         return params
     except Exception as exc:
@@ -238,16 +252,23 @@ def _load_exp_params(models_dir: Path) -> dict:
         return {}
 
 
-def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "default", patch_params: Optional[dict] = None) -> None:
+def _reload_models(
+    model_paths: List[Path],
+    predictor=None,
+    infer_mode: str = "default",
+    patch_params: Optional[dict] = None,
+    predictor_dir: Optional[Path] = None,
+) -> None:
     """モデルをロードしてグローバル状態を一括で更新する。
 
     predictor と infer_mode も同一ロック内で設定することで
     _active_predictor / _active_infer_mode の TOCTOU を防止する。
     patch_params: experiment.json から読み込んだパッチ・ラベルパラメータ。
+    predictor_dir: EXP native predictor 使用時のモデルディレクトリ（UI の active_dir 表示用）。
     """
     global _infer_models, _infer_device, _active_model_paths, _imagenet_mean_t, _imagenet_std_t, _active_predictor, _active_infer_mode
     global _infer_patch_size, _infer_patch_t_min, _infer_patch_t_max, _infer_label_t_min, _infer_label_t_max
-    global _infer_pq_rescale_mode, _infer_pq_rescale_factor
+    global _infer_pq_rescale_mode, _infer_pq_rescale_factor, _infer_patch_perp_scale, _active_predictor_dir
     # パッチパラメータを解決（patch_params が指定されていれば優先、なければデフォルト）
     new_patch_size  = tuple(patch_params["patch_size"])  if patch_params and "patch_size"  in patch_params else PATCH_SIZE
     new_pt_min      = patch_params["patch_t_min"]        if patch_params and "patch_t_min"  in patch_params else T_MIN
@@ -256,19 +277,19 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
     new_lt_max      = patch_params["label_t_max"]        if patch_params and "label_t_max"  in patch_params else T_MAX
     new_pq_mode     = patch_params["pq_rescale_mode"]    if patch_params and "pq_rescale_mode"   in patch_params else "none"
     new_pq_factor   = patch_params["pq_rescale_factor"]  if patch_params and "pq_rescale_factor" in patch_params else 1.0
+    new_perp_scale  = patch_params["patch_perp_scale"]   if patch_params and "patch_perp_scale"  in patch_params else 1.0
 
-    if new_pq_mode == "eye_height":
-        logger.warning(
-            "pq_rescale_mode='eye_height': DB に eye_height カラムがないため逆変換は無効です。"
-            "予測が P'Q' 空間のまま WebUI に表示されます（精度低下）。"
-        )
-
-    if not model_paths:
+    # infer_mode == "exp_native" のとき、model_paths は EXP native predictor が
+    # 既に .pt を内部で管理しているため二重読みしない。
+    # paths が渡された場合も EyelinerCNN として読もうとして失敗し predictor が
+    # 破棄されるバグを防ぐため、exp_native モードでは paths を無視する。
+    if not model_paths or infer_mode == "exp_native":
         with _models_lock:
             _infer_models = []
             _active_model_paths = []
             _active_predictor = predictor
             _active_infer_mode = infer_mode
+            _active_predictor_dir = predictor_dir
             _infer_patch_size  = new_patch_size
             _infer_patch_t_min = new_pt_min
             _infer_patch_t_max = new_pt_max
@@ -276,7 +297,11 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
             _infer_label_t_max = new_lt_max
             _infer_pq_rescale_mode   = new_pq_mode
             _infer_pq_rescale_factor = new_pq_factor
-        logger.info("モデルをクリアしました。推論補助は無効")
+            _infer_patch_perp_scale  = new_perp_scale
+        if not model_paths:
+            logger.info("モデルをクリアしました。推論補助は無効")
+        else:
+            logger.info("exp_native モード: .pt の二重読みをスキップし predictor を保持します")
         return
     try:
         import torch
@@ -301,6 +326,7 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
                 _active_model_paths = []
                 _active_predictor = None
                 _active_infer_mode = "default"
+                _active_predictor_dir = None
             return
         # モデルロード完了後に一括でグローバル状態を更新（部分更新による不整合を防止）
         mean_t = torch.tensor(IMAGENET_MEAN).view(3, 1, 1).to(device)
@@ -320,10 +346,12 @@ def _reload_models(model_paths: List[Path], predictor=None, infer_mode: str = "d
             _infer_label_t_max = new_lt_max
             _infer_pq_rescale_mode   = new_pq_mode
             _infer_pq_rescale_factor = new_pq_factor
+            _infer_patch_perp_scale  = new_perp_scale
         logger.info(
-            "%d 個のモデルをアンサンブルとして使用します (patch=%s t_patch=[%.1f,%.1f] t_label=[%.1f,%.1f] pq_rescale=%s×%.2f)",
+            "%d 個のモデルをアンサンブルとして使用します (patch=%s t_patch=[%.1f,%.1f]"
+            " t_label=[%.1f,%.1f] pq_rescale=%s×%.2f perp=%.1f)",
             len(loaded), new_patch_size, new_pt_min, new_pt_max, new_lt_min, new_lt_max,
-            new_pq_mode, new_pq_factor,
+            new_pq_mode, new_pq_factor, new_perp_scale,
         )
     except Exception as exc:
         logger.warning("推論モデルの読み込みに失敗しました: %s", exc)
@@ -357,8 +385,15 @@ def _get_pq_prime(
         if mean_pq is None or mean_pq <= 0:
             return orig_pq_dist
         return max(mean_pq * pq_rescale_factor, 1.0)
-    # eye_height: DB に eye_height がないため逆変換不可
-    return orig_pq_dist
+    # eye_height: DB から全点 y 座標を集めて算出する
+    eye_height = _db.get_eye_height_for_eye(
+        sample["image_path"],
+        sample.get("face_index", 0),
+        sample["part_name"],
+    )
+    if eye_height is None or eye_height <= 0:
+        return orig_pq_dist
+    return max(eye_height * pq_rescale_factor, 1.0)
 
 
 def _predict_t(
@@ -377,7 +412,7 @@ def _predict_t(
     """
     # グローバル状態のスナップショットをロック下で取得してからロックを解放し推論を実行
     with _models_lock:
-        predictor = _active_predictor
+        predictor   = _active_predictor
         if predictor is None and not _infer_models:
             return None
         models      = list(_infer_models) if predictor is None else []
@@ -389,18 +424,38 @@ def _predict_t(
         pt_max      = _infer_patch_t_max
         lt_min      = _infer_label_t_min
         lt_max      = _infer_label_t_max
+        perp_scale  = _infer_patch_perp_scale
 
     # EXP固有predictorを優先使用（変換は predictor 側で行う）
     if predictor is not None:
         try:
-            return predictor(image_rgb, px, py, qx, qy, is_upper)
+            return predictor(image_rgb, px, py, qx, qy, is_upper, pq_prime=pq_prime)
         except Exception as exc:
             logger.warning("EXP固有predictor の推論に失敗しました: %s", exc)
             return None
 
     try:
         import torch
-        patch = extract_patch(image_rgb, px, py, qx, qy, patch_size=ps, t_min=pt_min, t_max=pt_max)
+        orig_pq = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
+
+        # pq_rescale モデルはパッチを P'Q' 座標系で抽出する。
+        # pq_prime が orig_pq と異なるとき P'Q' を再計算してパッチ抽出に使う。
+        if pq_prime is not None and abs(pq_prime - orig_pq) > 1e-6 and orig_pq > 1e-6:
+            ox = (px + qx) / 2.0
+            oy = (py + qy) / 2.0
+            ux = (qx - px) / orig_pq
+            uy = (qy - py) / orig_pq
+            px_e = ox - (pq_prime / 2.0) * ux
+            py_e = oy - (pq_prime / 2.0) * uy
+            qx_e = ox + (pq_prime / 2.0) * ux
+            qy_e = oy + (pq_prime / 2.0) * uy
+        else:
+            px_e, py_e, qx_e, qy_e = px, py, qx, qy
+
+        patch = extract_patch(
+            image_rgb, px_e, py_e, qx_e, qy_e,
+            patch_size=ps, t_min=pt_min, t_max=pt_max, perp_scale=perp_scale,
+        )
         x = torch.from_numpy(patch.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
         x = (x - mean_t) / std_t
         is_upper_t = torch.tensor([[is_upper]], dtype=torch.float32, device=device)
@@ -414,12 +469,8 @@ def _predict_t(
         # pq_rescale 逆変換: t_prime → t_raw
         # t_prime = 0.5 + (t_raw - 0.5) * orig_pq / pq_prime
         # => t_raw = 0.5 + (t_prime - 0.5) * pq_prime / orig_pq
-        if pq_prime is not None:
-            orig_pq = math.sqrt((qx - px) ** 2 + (qy - py) ** 2)
-            if orig_pq > 1e-6:
-                t_raw = 0.5 + (t_prime - 0.5) * pq_prime / orig_pq
-            else:
-                t_raw = t_prime
+        if pq_prime is not None and orig_pq > 1e-6:
+            t_raw = 0.5 + (t_prime - 0.5) * pq_prime / orig_pq
         else:
             t_raw = t_prime
 
@@ -557,7 +608,7 @@ DUMMY_T1_DIR = "__dummy_t1__"
 
 def _make_dummy_t1_predictor():
     """常に t=1.0 を返すダミー予測器。"""
-    def predict(image_rgb, px, py, qx, qy, is_upper):
+    def predict(image_rgb, px, py, qx, qy, is_upper, pq_prime=None):
         return 0.6666
     return predict
 
@@ -624,6 +675,13 @@ def get_model_folders():
             active_dir = str(parent.relative_to(_PROJECT_ROOT))
         except ValueError:
             active_dir = str(parent)
+    elif _active_predictor_dir is not None:
+        # EXP native predictor 使用時は _active_model_paths が空になるため
+        # _active_predictor_dir からアクティブディレクトリを取得する
+        try:
+            active_dir = str(_active_predictor_dir.relative_to(_PROJECT_ROOT))
+        except ValueError:
+            active_dir = str(_active_predictor_dir)
 
     return {
         "folders": folders,
@@ -715,9 +773,20 @@ def select_models(body: ModelSelectRequest):
         raise HTTPException(status_code=400, detail="exp_dir または paths を指定してください")
 
     # predictor と infer_mode を一括で渡して TOCTOU を防止
+    # exp_native_predictor がある場合は .pt の二重読みを避けるため paths=[] を渡す。
+    # predictor は既に models_dir を参照して内部でモデルを保持しているため、
+    # _reload_models に生の .pt パスを渡すと EyelinerCNN として読み込もうとして
+    # 失敗し _active_predictor = None にリセットされるバグを防ぐ。
     active_predictor = exp_native_predictor
     active_mode = "exp_native" if exp_native_predictor is not None else "default"
-    _reload_models(paths, predictor=active_predictor, infer_mode=active_mode, patch_params=exp_params)
+    reload_paths = [] if exp_native_predictor is not None else paths
+    _reload_models(
+        reload_paths,
+        predictor=active_predictor,
+        infer_mode=active_mode,
+        patch_params=exp_params,
+        predictor_dir=resolved_dir if exp_native_predictor is not None else None,
+    )
     if exp_native_predictor is not None:
         logger.info("EXP固有predictor をアクティブにしました")
 

@@ -218,6 +218,29 @@ def get_mean_pq_dist_for_eye(
 
 
 
+def get_eye_height_for_eye(
+    image_path: str,
+    face_index: Optional[int],
+    part_name: str,
+    db_path: Path = DB_PATH,
+) -> Optional[float]:
+    """同一眼グループ全点の P/Q y 座標から eye_height を算出して返す。
+
+    eye_height = max(all_ys) - min(all_ys)（weights.py の compute_eye_meta と同定義）。
+    pq_rescale_mode='eye_height' の逆変換 (WebUI) に使用。
+    該当行がない場合は None を返す。最小値は 1.0。
+    """
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT py, qy FROM samples WHERE image_path = ? AND face_index = ? AND part_name = ?",
+            (image_path, face_index if face_index is not None else 0, part_name),
+        ).fetchall()
+    if not rows:
+        return None
+    ys = [r["py"] for r in rows] + [r["qy"] for r in rows]
+    return max(max(ys) - min(ys), 1.0)
+
+
 def delete_samples_by_image_paths(
     image_paths: List[str], db_path: Path = DB_PATH
 ) -> int:
