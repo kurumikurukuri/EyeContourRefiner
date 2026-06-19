@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import AUG_ALL, augment, augment_endpoints
+from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
 from eyeliner.data.patch_utils import (
     PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
@@ -67,6 +67,7 @@ class EyelinerPatchDualDataset(Dataset):
         cfg_b: BranchConfig,
         augment_data: bool = False,
         aug_flags: int = AUG_ALL,
+        endpoint_blend_range: float = ENDPOINT_BLEND_RANGE,
         preload_images: bool = True,
         norm_mean: list | None = None,
         norm_std: list | None = None,
@@ -76,6 +77,7 @@ class EyelinerPatchDualDataset(Dataset):
         self.cfg_b = cfg_b
         self.augment_data = augment_data
         self.aug_flags = aug_flags
+        self.endpoint_blend_range = endpoint_blend_range
         self._image_cache: dict[str, np.ndarray] = {}
 
         _mean = norm_mean if norm_mean is not None else IMAGENET_MEAN
@@ -115,6 +117,7 @@ class EyelinerPatchDualDataset(Dataset):
                 label_t_min=self.cfg_a.label_t_min,
                 label_t_max=self.cfg_a.label_t_max,
                 aug_flags=self.aug_flags,
+                endpoint_blend_range=self.endpoint_blend_range,
             )
         else:
             px_a, py_a, qx_a, qy_a, t_aug = px_raw, py_raw, qx_raw, qy_raw, t_raw

@@ -13,7 +13,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import AUG_ALL, augment, augment_endpoints
+from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
 from eyeliner.data.patch_utils import (
     PATCH_SIZE, T_MIN, T_MAX, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
@@ -100,6 +100,7 @@ class EyelinerPatchDataset(Dataset):
         use_aux_face_shape: bool = False,
         pq_rescale_mode: str = "none",
         pq_rescale_factor: float = 1.0,
+        endpoint_blend_range: float = ENDPOINT_BLEND_RANGE,
     ) -> None:
         self.records = records
         self.augment_data = augment_data
@@ -114,6 +115,7 @@ class EyelinerPatchDataset(Dataset):
         self.use_aux_face_shape = use_aux_face_shape
         self.pq_rescale_mode = pq_rescale_mode
         self._pq_rescale_factor = pq_rescale_factor
+        self.endpoint_blend_range = endpoint_blend_range
         self.patch_perp_scale = patch_perp_scale
         self.patch_size = patch_size
         self._image_cache: dict[str, np.ndarray] = {}
@@ -173,6 +175,7 @@ class EyelinerPatchDataset(Dataset):
                 label_t_min=self._label_t_min,
                 label_t_max=self._label_t_max,
                 aug_flags=self.aug_flags,
+                endpoint_blend_range=self.endpoint_blend_range,
             )
 
         if self.use_t_norm:

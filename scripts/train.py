@@ -36,7 +36,11 @@ from eyeliner.evaluation.metrics import holdout_mae as compute_holdout_mae
 logger = logging.getLogger(__name__)
 
 BACKBONE_CHOICES = ["custom", "soft_argmax", "mobilenet_v3_small", "efficientnet_b0", "efficientnet_b1", "efficientnet_b2", "efficientnet_v2_s", "efficientnet_v2_m", "resnet18"]
-LOSS_FN_CHOICES = ["t", "t_weighted", "pq_weighted", "normalized_pixel", "dead_zone"]
+LOSS_FN_CHOICES = [
+    "t", "t_weighted", "pq_weighted", "normalized_pixel", "dead_zone",
+    # EXP021: 空間 × カーネル直積
+    "t_l1", "wing", "error_ratio", "error_ratio_huber", "wing_px",
+]
 
 
 def make_exp_name(args: argparse.Namespace) -> str:
@@ -111,6 +115,8 @@ def build_experiment_record(
             "dropout_rate": args.dropout_rate,
             "pq_rescale_mode": args.pq_rescale_mode,
             "pq_rescale_factor": args.pq_rescale_factor,
+            "aug_flags": args.aug_flags,
+            "endpoint_blend_range": args.endpoint_blend_range,
         },
         "data": {
             "data_version": data_version,
@@ -277,6 +283,7 @@ def mode_kfold(args: argparse.Namespace) -> None:
         num_workers=args.num_workers,
         pq_rescale_mode=args.pq_rescale_mode,
         pq_rescale_factor=args.pq_rescale_factor,
+        endpoint_blend_range=args.endpoint_blend_range,
     )
 
     # K-Fold 訓練
@@ -570,6 +577,10 @@ def main() -> None:
     parser.add_argument(
         "--pq_rescale_factor", type=float, default=1.0,
         help="P'Q' 再設定の定数倍 k（xxx = feature × k）",
+    )
+    parser.add_argument(
+        "--endpoint_blend_range", type=float, default=0.25,
+        help="ENDPOINT_BLEND aug の a,b サンプリング範囲 [-r, r]（default: 0.25）",
     )
 
     args = parser.parse_args()

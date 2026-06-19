@@ -1,0 +1,27 @@
+# EXP021 base: P'Q'(eye_scale × 0.2) 座標系 単一CNN。EXP020 X0_eye_scale_baseline と同一設定。
+# loss_fn は train_exp021.py が 6 損失で上書きする。
+# 注意: 本系統は patch/label が t' 空間。推論は infer_exp021 が t'→生t へ逆変換する。
+backbone: custom
+loss_fn: t
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+use_is_upper: true
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 127
+patch_t_min: -0.5
+patch_t_max: 1.5
+patch_perp_scale: 2.0
+patch_h: 64
+patch_w: 64
+label_t_min: -0.25
+label_t_max: 1.25
+pq_rescale_mode: eye_scale
+pq_rescale_factor: 0.2

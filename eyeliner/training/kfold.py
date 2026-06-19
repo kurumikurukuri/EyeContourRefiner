@@ -100,6 +100,15 @@ def run_kfold(
     use_transfer = config.backbone not in {"custom", "soft_argmax"}
     effective_freeze = config.freeze_epochs if use_transfer else 0
 
+    # 目正規化px空間の損失用: 残差を raw t 単位へ戻す係数 (label_t_max - label_t_min)。
+    # t_norm 無効時は残差が既に raw t なので 1.0。label_t_* 未指定時は patch_t_* に従う。
+    if config.use_t_norm:
+        _lt_min = config.label_t_min if config.label_t_min is not None else config.patch_t_min
+        _lt_max = config.label_t_max if config.label_t_max is not None else config.patch_t_max
+        label_range = max(_lt_max - _lt_min, 1e-6)
+    else:
+        label_range = 1.0
+
     if k_folds == 1:
         # k=1: GroupShuffleSplit による固定 80/20 分割（CV なし・高速）
         gss = GroupShuffleSplit(n_splits=1, test_size=0.2, random_state=config.seed)
@@ -133,6 +142,7 @@ def run_kfold(
             use_aux_face_shape=config.use_aux_face_shape,
             pq_rescale_mode=config.pq_rescale_mode,
             pq_rescale_factor=config.pq_rescale_factor,
+            endpoint_blend_range=config.endpoint_blend_range,
         )
         val_ds = EyelinerPatchDataset(
             val_records, augment_data=False,
@@ -243,6 +253,7 @@ def run_kfold(
                 loss_delta=config.loss_delta,
                 pq_weight_alpha=config.pq_weight_alpha,
                 pq_threshold=config.pq_threshold,
+                label_range=label_range,
             )
             result = validate_one_epoch(
                 model, val_loader, device,

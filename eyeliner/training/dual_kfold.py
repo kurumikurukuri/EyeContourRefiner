@@ -1,0 +1,380 @@
+"""デュアルブランチ K-Fold CV オーケストレーション。
+
+eyeliner.training.kfold（単一ブランチ）に対応するデュアルブランチ版。
+旧 experiments/EXP020_dual_branch/scr/train_exp020.py の train_dual() から
+抽出（EXP020/EXP021 双方が import して再利用するため共有化）。
+
+run_kfold() と異なり、モジュール定数（旧 MANIFEST_TRAIN 等）には一切依存せず、
+manifest パス・出力先をすべて明示的な引数で受け取る。
+"""
+from __future__ import annotations
+
+import gc
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+import torch
+from sklearn.model_selection import GroupKFold
+from torch.utils.data import DataLoader
+
+from eyeliner.data.dataset import load_manifest
+from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
+from eyeliner.data.weights import compute_eye_meta
+from eyeliner.evaluation.loss import get_loss_fn
+from eyeliner.models.dual_ensemble import (
+    get_dual_model,
+    load_dual_model,
+    save_dual_model,
+)
+from eyeliner.training.dual_branch import (
+    branch_pred_to_raw_t,
+    build_branch_configs,
+    ensemble_raw_t,
+    fold_ensemble_raw_t,
+    model_pred_raw_t,
+    normalize_to_branch_a,
+)
+from eyeliner.training.kfold import FoldResult
+from eyeliner.training.scheduler import make_optimizer_and_scheduler
+from eyeliner.training.trainer import set_seed
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DualTrainConfig:
+    """デュアルブランチ訓練設定（ハイパーパラメータ）。"""
+
+    fusion_mode: str = "independent"
+    pq_rescale_mode_b: str = "eye_scale"
+    lr: float = 1e-3
+    weight_decay: float = 1e-4
+    epochs: int = 200
+    batch_size: int = 32
+    k: int = 3
+    patience: int = 50
+    seed: int = 42
+    num_conv_layers: int = 4
+    use_sigmoid: bool = True
+    use_batchnorm: bool = True
+    dropout_rate: float = 0.3
+    aug_flags: int = 127
+    endpoint_blend_range: float = 0.25
+    loss_fn: str = "t"
+    num_workers: int = 0
+
+
+@dataclass
+class DualKfoldResult:
+    """run_dual_kfold() の戻り値。"""
+
+    fold_results: list[FoldResult]
+    n_train: int
+    n_holdout: int
+    train_images: list[str]
+    holdout_images: list[str]
+    cfg_a: BranchConfig
+    cfg_b: BranchConfig
+    holdout_mae: float | None = None
+    holdout_mae_raw: float | None = None
+
+
+def run_dual_kfold(
+    manifest_train: str | Path,
+    manifest_test: str | Path | None,
+    exp_dir: str | Path,
+    config: DualTrainConfig,
+) -> DualKfoldResult:
+    """デュアルブランチ K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
+
+    Args:
+        manifest_train: 訓練・CV 用 manifest.csv のパス
+        manifest_test:  Hold-out 用 manifest.csv のパス（None ならホールドアウト評価をスキップ）
+        exp_dir:        モデル・experiment.json を保存するディレクトリ
+        config:         訓練設定
+
+    Returns:
+        DualKfoldResult
+    """
+    set_seed(config.seed)
+    exp_dir = Path(exp_dir)
+    exp_dir.mkdir(parents=True, exist_ok=True)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info("デバイス: %s", device)
+    logger.info("fusion_mode: %s  rescale_b: %s", config.fusion_mode, config.pq_rescale_mode_b)
+
+    records = load_manifest(manifest_train)
+    compute_eye_meta(records)
+    n_train = len(records)
+    train_images = sorted({r["image_path"] for r in records})
+    logger.info("訓練サンプル: %d", n_train)
+
+    n_holdout = 0
+    holdout_images: list[str] = []
+    holdout_records: list[dict] | None = None
+    if manifest_test is not None and Path(manifest_test).exists():
+        holdout_records = load_manifest(manifest_test)
+        compute_eye_meta(holdout_records)
+        n_holdout = len(holdout_records)
+        holdout_images = sorted({r["image_path"] for r in holdout_records})
+        logger.info("hold-out: %d", n_holdout)
+    else:
+        logger.info("hold-out: なし")
+
+    dl_kwargs = {"num_workers": config.num_workers, "persistent_workers": config.num_workers > 0}
+
+    # 枝 A=EXP019 X0（生PQ, raw_t）, 枝 B=EXP019 X1/X2（P'Q', t_prime）を忠実に再現。
+    cfg_a, cfg_b = build_branch_configs(config.pq_rescale_mode_b)
+
+    groups = [r["image_path"] for r in records]
+    kf = GroupKFold(n_splits=config.k)
+    splits = list(kf.split(records, groups=groups))
+
+    fold_results: list[FoldResult] = []
+    loss_fn = get_loss_fn(config.loss_fn)
+
+    for fold, (train_idx, val_idx) in enumerate(splits):
+        logger.info("----- Fold %d/%d -----", fold + 1, config.k)
+
+        train_ds = EyelinerPatchDualDataset(
+            [records[i] for i in train_idx], cfg_a, cfg_b,
+            augment_data=True, aug_flags=config.aug_flags,
+            endpoint_blend_range=config.endpoint_blend_range,
+        )
+        val_ds = EyelinerPatchDualDataset(
+            [records[i] for i in val_idx], cfg_a, cfg_b,
+            augment_data=False, aug_flags=config.aug_flags,
+            endpoint_blend_range=config.endpoint_blend_range,
+        )
+        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
+        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
+
+        model = get_dual_model(
+            config.fusion_mode,
+            num_conv_layers=config.num_conv_layers,
+            use_sigmoid=config.use_sigmoid,
+            use_batchnorm=config.use_batchnorm,
+            dropout_rate=config.dropout_rate,
+        ).to(device)
+
+        optimizer, scheduler = make_optimizer_and_scheduler(
+            model, "full", config.lr, config.weight_decay,
+            len(train_loader), config.epochs,
+        )
+
+        best_mae = float("inf")
+        no_improve = 0
+        best_epoch = 0
+        model_path = exp_dir / f"eyeliner_detection_fold{fold + 1}.pt"
+
+        for epoch in range(config.epochs):
+            model.train()
+            total_loss = 0.0
+            n_batches = 0
+            for batch in train_loader:
+                x_a = batch[0].to(device)
+                x_b = batch[1].to(device)
+                is_upper = batch[2].to(device)
+                y_a = batch[4].to(device)
+                y_b = batch[5].to(device)
+                pq_dist = batch[12].to(device)
+                pq_prime = batch[13].to(device)
+
+                if config.fusion_mode == "attention":
+                    pred_a, pred_b, alpha = model(x_a, x_b, is_upper)
+                    t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime)
+                    t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime)
+                    ens_norm = normalize_to_branch_a(ensemble_raw_t(t_a, t_b, alpha), cfg_a)
+                    loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b) + loss_fn(ens_norm, y_a)
+                else:
+                    pred_a, pred_b = model(x_a, x_b, is_upper)
+                    loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b)
+
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+                scheduler.step()
+                total_loss += loss.item()
+                n_batches += 1
+            avg_loss = total_loss / max(n_batches, 1)
+
+            model.eval()
+            all_preds: list[torch.Tensor] = []
+            all_labels: list[torch.Tensor] = []
+            with torch.no_grad():
+                for batch in val_loader:
+                    x_a = batch[0].to(device)
+                    x_b = batch[1].to(device)
+                    is_upper = batch[2].to(device)
+                    y_a = batch[4]
+                    pq_dist = batch[12].to(device)
+                    pq_prime = batch[13].to(device)
+                    t_ens = model_pred_raw_t(
+                        model, x_a, x_b, is_upper, config.fusion_mode,
+                        cfg_a, cfg_b, pq_dist, pq_prime,
+                    )
+                    pred_norm = normalize_to_branch_a(t_ens, cfg_a)
+                    all_preds.append(pred_norm.cpu())
+                    all_labels.append(y_a)
+
+            preds_t = torch.cat(all_preds)
+            labels_t = torch.cat(all_labels)
+            val_mae = (preds_t - labels_t).abs().mean().item()
+
+            current_lr = scheduler.get_last_lr()[0]
+            logger.info(
+                "Fold %d Epoch %3d  loss=%.6f  val_mae=%.6f  lr=%.2e",
+                fold + 1, epoch + 1, avg_loss, val_mae, current_lr,
+            )
+
+            if val_mae < best_mae:
+                best_mae = val_mae
+                best_epoch = epoch + 1
+                no_improve = 0
+                save_dual_model(model, config.fusion_mode, config.__dict__, model_path)
+            else:
+                no_improve += 1
+                if no_improve >= config.patience:
+                    logger.info("Early stopping (fold %d, epoch %d)", fold + 1, epoch + 1)
+                    break
+
+        fold_results.append(FoldResult(
+            fold_idx=fold + 1,
+            best_val_mae=best_mae,
+            best_epoch=best_epoch,
+            model_path=str(model_path),
+        ))
+        logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold + 1, best_mae, best_epoch)
+
+        del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        gc.collect()
+
+    mean_mae = float(np.mean([r.best_val_mae for r in fold_results]))
+    logger.info("CV MAE: %.6f", mean_mae)
+
+    holdout_mae: float | None = None
+    holdout_mae_raw: float | None = None
+    if holdout_records is not None and len(holdout_records) > 0:
+        logger.info("Hold-out MAE 計算中...")
+        try:
+            fold_paths = sorted(exp_dir.glob("eyeliner_detection_fold*.pt"))
+            models = [load_dual_model(p).to(device) for p in fold_paths]
+            holdout_ds = EyelinerPatchDualDataset(
+                holdout_records, cfg_a, cfg_b, augment_data=False, aug_flags=config.aug_flags,
+                endpoint_blend_range=config.endpoint_blend_range,
+            )
+            holdout_loader = DataLoader(
+                holdout_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs,
+            )
+
+            label_range_a = cfg_a.label_t_max - cfg_a.label_t_min
+            abs_sum_norm = 0.0
+            abs_sum_raw = 0.0
+            count = 0
+            offset = 0
+            with torch.no_grad():
+                for batch in holdout_loader:
+                    x_a = batch[0].to(device)
+                    x_b = batch[1].to(device)
+                    is_upper = batch[2].to(device)
+                    pq_dist = batch[12].to(device)
+                    pq_prime = batch[13].to(device)
+                    bsz = x_a.shape[0]
+                    # 真値は生 t（クランプなし）を使う。batch[4]（y_a）は学習ロス用に
+                    # cfg_a.label 範囲へクランプ済みのため、holdout 指標には使わない
+                    # （クランプすると範囲外の t を持つサンプルの誤差が過小評価される）。
+                    t_true_raw = torch.tensor(
+                        [float(r["t"]) for r in holdout_records[offset:offset + bsz]],
+                        dtype=torch.float32,
+                    ).to(device).unsqueeze(1)
+                    offset += bsz
+                    t_ens = fold_ensemble_raw_t(
+                        models, x_a, x_b, is_upper, config.fusion_mode,
+                        cfg_a, cfg_b, pq_dist, pq_prime,
+                    )
+                    abs_err_raw = (t_ens - t_true_raw).abs()
+                    abs_sum_raw += abs_err_raw.sum().item()
+                    abs_sum_norm += (abs_err_raw / label_range_a).sum().item()
+                    count += t_true_raw.numel()
+            holdout_mae = abs_sum_norm / max(count, 1)
+            holdout_mae_raw = abs_sum_raw / max(count, 1)
+            logger.info("Hold-out MAE: %.6f（正規化） / %.6f（生t）", holdout_mae, holdout_mae_raw)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Hold-out MAE 計算失敗: %s", exc)
+
+    return DualKfoldResult(
+        fold_results=fold_results,
+        n_train=n_train,
+        n_holdout=n_holdout,
+        train_images=train_images,
+        holdout_images=holdout_images,
+        cfg_a=cfg_a,
+        cfg_b=cfg_b,
+        holdout_mae=holdout_mae,
+        holdout_mae_raw=holdout_mae_raw,
+    )
+
+
+def _branch_cfg_dict(cfg: BranchConfig) -> dict:
+    """BranchConfig を experiment.json 用の dict に変換する。"""
+    return {
+        "patch_t_min": cfg.patch_t_min,
+        "patch_t_max": cfg.patch_t_max,
+        "patch_perp_scale": cfg.patch_perp_scale,
+        "label_t_min": cfg.label_t_min,
+        "label_t_max": cfg.label_t_max,
+        "pq_rescale_mode": cfg.pq_rescale_mode,
+        "pq_rescale_factor": cfg.pq_rescale_factor,
+        "patch_size": list(cfg.patch_size),
+        "label_space": cfg.label_space,
+    }
+
+
+def build_dual_experiment_record(
+    config_name: str, config: DualTrainConfig, result: DualKfoldResult,
+) -> dict:
+    """run_dual_kfold() の結果から experiment.json 相当の dict を組み立てる。"""
+    return {
+        "exp_name": config_name,
+        "timestamp": datetime.now().isoformat(),
+        "hyperparameters": {
+            "fusion_mode": config.fusion_mode,
+            "rescale_b": config.pq_rescale_mode_b,
+            "branch_a": _branch_cfg_dict(result.cfg_a),
+            "branch_b": _branch_cfg_dict(result.cfg_b),
+            "num_conv_layers": config.num_conv_layers,
+            "use_sigmoid": config.use_sigmoid,
+            "use_batchnorm": config.use_batchnorm,
+            "dropout_rate": config.dropout_rate,
+            "lr": config.lr,
+            "weight_decay": config.weight_decay,
+            "epochs": config.epochs,
+            "batch": config.batch_size,
+            "k": config.k,
+            "patience": config.patience,
+            "seed": config.seed,
+            "aug_flags": config.aug_flags,
+            "endpoint_blend_range": float(config.endpoint_blend_range),
+            "loss_fn": config.loss_fn,
+        },
+        "data": {
+            "n_train_samples": result.n_train,
+            "n_holdout_samples": result.n_holdout,
+            "train_images": result.train_images,
+            "holdout_images": result.holdout_images,
+        },
+        "results": {
+            # MAE は枝A正規化空間（EXP019/020 X0 の正規化 MAE と直接比較可能）。
+            # 生 t MAE = normalized * (label_t_max - label_t_min)。
+            "cv_mae": float(np.mean([r.best_val_mae for r in result.fold_results])),
+            "cv_folds": [r.best_val_mae for r in result.fold_results],
+            "holdout_mae": result.holdout_mae,
+            "holdout_mae_raw_t": result.holdout_mae_raw,
+        },
+    }
