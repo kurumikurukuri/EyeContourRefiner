@@ -199,6 +199,25 @@ def _load_exp_predictor(infer_script: Path, models_dir: Path):
         return None
 
 
+def _load_generic_dual_predictor(models_dir: Path):
+    """experiment.json の fusion_mode を見て共有の汎用 dual predictor を構築する。
+
+    EXP固有の infer_exp*.py が存在しない、または create_predictor を実装していない
+    dual 実験（fusion_mode を持つ experiment.json）向けのフォールバック。
+    単一ブランチ実験（fusion_mode なし）では None を返し、通常の .pt 読み込みに委ねる。
+    """
+    try:
+        from eyeliner.models.dual_predictor import build_dual_predictor
+        predictor = build_dual_predictor(models_dir)
+        logger.info("共有 dual predictor を読み込みました: %s", models_dir)
+        return predictor
+    except (FileNotFoundError, ValueError):
+        return None
+    except Exception as exc:
+        logger.warning("共有 dual predictor の読み込みに失敗しました: %s", exc)
+        return None
+
+
 def _load_exp_params(models_dir: Path) -> dict:
     """experiment.json からパッチ抽出・ラベル正規化パラメータを読み込む。
 
@@ -755,6 +774,11 @@ def select_models(body: ModelSelectRequest):
         infer_script = _find_infer_script(resolved_dir)
         if infer_script:
             exp_native_predictor = _load_exp_predictor(infer_script, resolved_dir)
+
+        # infer_exp*.py が無い／create_predictor を実装していない dual 実験は
+        # 共有の汎用 dual predictor ローダーへフォールバックする（単一ブランチなら None）
+        if exp_native_predictor is None:
+            exp_native_predictor = _load_generic_dual_predictor(resolved_dir)
 
         # experiment.json からパッチ・ラベルパラメータを読み込む
         exp_params = _load_exp_params(resolved_dir)

@@ -82,3 +82,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP018_pq_and_arch | Y2_aux_face_shape | 3262 | 85.50 | 82.10 |
 | EXP019_pq_transform | X2_eye_scale | 3430 | 86.27 | 82.48 |
 | EXP020_dual_branch | X1_independent_none_eye_scale | 7308 | 88.04 | 84.59 |
+| EXP021_loss_aug_sweep | phase3_X1_t_l1_woflip | 7308 | 89.20 | 85.95 |

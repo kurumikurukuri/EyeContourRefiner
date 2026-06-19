@@ -103,6 +103,7 @@ def augment_endpoints(
     label_t_min: float,
     label_t_max: float,
     aug_flags: int = AUG_ALL,
+    endpoint_blend_range: float = ENDPOINT_BLEND_RANGE,
 ) -> tuple[float, float, float, float, float]:
     """端点 P, Q を独立に線形混合して擾乱を与える（アノテーション点 R は幾何保存）。
 
@@ -121,8 +122,8 @@ def augment_endpoints(
     if not (aug_flags & AUG_ENDPOINT_BLEND):
         return px, py, qx, qy, t
 
-    a = random.uniform(-ENDPOINT_BLEND_RANGE, ENDPOINT_BLEND_RANGE)
-    b = random.uniform(-ENDPOINT_BLEND_RANGE, ENDPOINT_BLEND_RANGE)
+    a = random.uniform(-endpoint_blend_range, endpoint_blend_range)
+    b = random.uniform(-endpoint_blend_range, endpoint_blend_range)
     denom = 1.0 - a - b
     new_t = (t - a) / denom
 

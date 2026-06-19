@@ -21,7 +21,7 @@ if str(_EXP020_SCR) not in sys.path:
 
 _EXP019_CFG = Path(__file__).parent.parent / "experiments" / "EXP019_pq_transform" / "config"
 
-from dual_branch_utils import (  # noqa: E402
+from eyeliner.training.dual_branch import (  # noqa: E402
     branch_a_x0,
     branch_b_eye_scale,
     branch_b_eye_height,

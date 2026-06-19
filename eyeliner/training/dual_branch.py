@@ -1,4 +1,4 @@
-"""EXP020 デュアルブランチ: 枝プリセット + t空間変換ユーティリティ。
+"""デュアルブランチ学習・推論: 枝プリセット + t空間変換ユーティリティ。
 
 設計方針（完全忠実版）:
     枝A = EXP019 X0_baseline（生PQ座標系, label_space="raw_t"）
@@ -6,6 +6,9 @@
 
 各枝は EXP019 の単一ブランチ設定を忠実に再現する。枝Bは t'（P'Q'座標系の t）を
 予測するため、アンサンブル前に必ず生 t へ逆変換してから合成する。
+
+旧 experiments/EXP020_dual_branch/scr/dual_branch_utils.py から移植
+（EXP020/EXP021 双方から再利用するため eyeliner/training/ へ共有化）。
 """
 from __future__ import annotations
 

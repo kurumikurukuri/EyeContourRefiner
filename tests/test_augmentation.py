@@ -141,3 +141,57 @@ class TestAugmentEndpoints:
             aug_flags=AUG_ENDPOINT_BLEND,
         )
         assert out == pytest.approx((px, py, qx, qy, t), abs=1e-9)
+
+
+class TestEndpointBlendRangeParam:
+    """EXP021 Phase2: endpoint_blend_range パラメータの sweep 対応。"""
+
+    def test_range_zero_is_identity(self):
+        """endpoint_blend_range=0.0 はフラグ ON でも identity（a,b∈[-0,0]=0）。"""
+        random.seed(0)
+        px, py, qx, qy, t = 10.0, 20.0, 30.0, 40.0, 0.5
+        for _ in range(20):
+            out = augment_endpoints(
+                px, py, qx, qy, t,
+                label_t_min=-0.5, label_t_max=1.5,
+                aug_flags=AUG_ENDPOINT_BLEND,
+                endpoint_blend_range=0.0,
+            )
+            assert out == pytest.approx((px, py, qx, qy, t), abs=1e-12)
+
+    def test_larger_range_perturbs_more(self):
+        """range が大きいほど平均摂動量（|Δt|）が大きい。"""
+        def mean_abs_dt(r, seed):
+            random.seed(seed)
+            total = 0.0
+            n = 400
+            for _ in range(n):
+                _, _, _, _, nt = augment_endpoints(
+                    0.0, 0.0, 100.0, 0.0, 0.5,
+                    label_t_min=-100.0, label_t_max=100.0,  # fallback 回避
+                    aug_flags=AUG_ENDPOINT_BLEND,
+                    endpoint_blend_range=r,
+                )
+                total += abs(nt - 0.5)
+            return total / n
+
+        small = mean_abs_dt(0.10, seed=1)
+        large = mean_abs_dt(0.50, seed=1)
+        assert large > small
+
+    def test_default_matches_module_constant(self):
+        """デフォルト引数は ENDPOINT_BLEND_RANGE と同じ挙動（同一シードで一致）。"""
+        random.seed(5)
+        out_default = augment_endpoints(
+            0.0, 0.0, 100.0, 0.0, 0.5,
+            label_t_min=-100.0, label_t_max=100.0,
+            aug_flags=AUG_ENDPOINT_BLEND,
+        )
+        random.seed(5)
+        out_explicit = augment_endpoints(
+            0.0, 0.0, 100.0, 0.0, 0.5,
+            label_t_min=-100.0, label_t_max=100.0,
+            aug_flags=AUG_ENDPOINT_BLEND,
+            endpoint_blend_range=ENDPOINT_BLEND_RANGE,
+        )
+        assert out_default == pytest.approx(out_explicit, abs=1e-12)

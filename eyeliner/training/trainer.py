@@ -63,6 +63,7 @@ class TrainConfig:
     num_workers: int = 0
     pq_rescale_mode: str = "none"
     pq_rescale_factor: float = 1.0
+    endpoint_blend_range: float = 0.25
 
 
 @dataclass
@@ -104,8 +105,12 @@ def train_one_epoch(
     loss_delta: float = 0.05,
     pq_weight_alpha: float = 3.0,
     pq_threshold: float = 0.10,
+    label_range: float = 1.0,
 ) -> tuple[float, float]:
     """1エポック訓練を実行する。
+
+    label_range は目正規化px空間の損失（error_ratio / error_ratio_huber / wing_px）で
+    残差を raw t 単位に戻すための係数 (label_t_max - label_t_min)。t空間損失では未使用。
 
     Returns:
         (avg_train_loss, avg_train_mae)
@@ -115,6 +120,9 @@ def train_one_epoch(
         loss_fn = get_loss_fn(loss_fn_name, epsilon=loss_epsilon, delta=loss_delta)
     else:
         loss_fn = get_loss_fn(loss_fn_name)
+
+    # 目正規化px空間の損失（pred-y を raw t × pq_ratio にスケールしてカーネルを適用）
+    PX_SPACE_LOSSES = ("error_ratio", "error_ratio_huber", "wing_px")
     total_loss = 0.0
     total_abs_error = 0.0
     total_elements = 0
@@ -137,8 +145,12 @@ def train_one_epoch(
         pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev, aux_dev)
 
         y_target = torch.logit(y.clamp(1e-4, 1 - 1e-4)) if use_logit_target else y
-        if loss_fn_name in ("t", "dead_zone"):
+        if loss_fn_name in ("t", "dead_zone", "t_l1", "wing"):
             loss = loss_fn(pred, y_target)
+        elif loss_fn_name in PX_SPACE_LOSSES:
+            # scale = (label_t_max - label_t_min) * pq_ratio で残差を目正規化px単位へ
+            scale = pq_ratio.to(device) * label_range
+            loss = loss_fn(pred, y_target, scale)
         elif loss_fn_name == "t_weighted":
             t_w = 1.0 + t_loss_alpha * (y - 0.5).abs()
             loss = loss_fn(pred, y_target, t_w)

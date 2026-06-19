@@ -1,4 +1,9 @@
-"""Dual モデルの保存・読み込み・アンサンブルユーティリティ。"""
+"""Dual モデルの保存・読み込み・アンサンブルユーティリティ。
+
+eyeliner.models.ensemble（単一ブランチ）に対応するデュアルブランチ版。
+旧 experiments/EXP020_dual_branch/scr/dual_model_io.py から移植
+（EXP020/EXP021 双方・推論スクリプト・WebUI から再利用するため共有化）。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -38,7 +43,7 @@ class DualEnsembleModel(nn.Module):
         return torch.stack(ensemble_preds).mean(0)
 
 
-def _get_model(fusion_mode: str, **model_kwargs) -> nn.Module:
+def get_dual_model(fusion_mode: str, **model_kwargs) -> nn.Module:
     """fusion_mode に応じたモデルインスタンスを生成する。"""
     if fusion_mode == "crossfuse":
         return CrossFuseDualModel(**model_kwargs)
@@ -64,7 +69,7 @@ def load_dual_model(path: Path) -> nn.Module:
     """チェックポイントから dual モデルを復元する。"""
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     fusion_mode = ckpt.get("fusion_mode", "independent")
-    model = _get_model(
+    model = get_dual_model(
         fusion_mode,
         num_conv_layers=ckpt.get("num_conv_layers", 4),
         use_sigmoid=ckpt.get("use_sigmoid", True),
@@ -81,7 +86,7 @@ def load_dual_fold_models(
 ) -> list[nn.Module]:
     """ディレクトリ内の fold モデルを読み込んでリストで返す。
 
-    アンサンブル合成は呼び出し側で生 t 空間で行う（dual_branch_utils.fold_ensemble_raw_t）。
+    アンサンブル合成は呼び出し側で生 t 空間で行う（eyeliner.training.dual_branch.fold_ensemble_raw_t）。
     枝A/B が異なる label_space を持つため、正規化空間での単純平均は不正。
     """
     fold_paths = sorted(models_dir.glob("eyeliner_detection_fold*.pt"))

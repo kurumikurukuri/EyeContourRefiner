@@ -28,10 +28,8 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[3]
 ANALYSIS_DIR = Path(__file__).resolve().parents[1]
-EXP_SCR_DIR = ROOT / "experiments" / "EXP020_dual_branch" / "scr"
 
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(EXP_SCR_DIR))
 
 import torch
 
@@ -43,8 +41,8 @@ from eyeliner.data.patch_utils import (
     compute_pq_rescale,
 )
 from eyeliner.data.weights import compute_eye_meta
-from dual_branch_utils import build_branch_configs, fold_ensemble_raw_t
-from dual_model_io import load_dual_fold_models
+from eyeliner.training.dual_branch import build_branch_configs, fold_ensemble_raw_t
+from eyeliner.models.dual_ensemble import load_dual_fold_models
 
 logger = logging.getLogger(__name__)
 
