@@ -65,6 +65,8 @@ class DualTrainConfig:
     endpoint_blend_range: float = 0.25
     loss_fn: str = "t"
     num_workers: int = 0
+    base_channel: int = 32
+    pool_width: int = 32
 
 
 @dataclass
@@ -153,13 +155,17 @@ def run_dual_kfold(
         train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
         val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
 
-        model = get_dual_model(
-            config.fusion_mode,
+        model_kwargs = dict(
             num_conv_layers=config.num_conv_layers,
             use_sigmoid=config.use_sigmoid,
             use_batchnorm=config.use_batchnorm,
             dropout_rate=config.dropout_rate,
-        ).to(device)
+        )
+        if config.fusion_mode != "crossfuse":
+            # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
+            model_kwargs["base_channel"] = config.base_channel
+            model_kwargs["pool_width"] = config.pool_width
+        model = get_dual_model(config.fusion_mode, **model_kwargs).to(device)
 
         optimizer, scheduler = make_optimizer_and_scheduler(
             model, "full", config.lr, config.weight_decay,
@@ -352,6 +358,8 @@ def build_dual_experiment_record(
             "use_sigmoid": config.use_sigmoid,
             "use_batchnorm": config.use_batchnorm,
             "dropout_rate": config.dropout_rate,
+            "base_channel": config.base_channel,
+            "pool_width": config.pool_width,
             "lr": config.lr,
             "weight_decay": config.weight_decay,
             "epochs": config.epochs,

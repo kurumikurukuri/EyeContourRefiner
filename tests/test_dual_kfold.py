@@ -160,6 +160,14 @@ class TestRunDualKfold:
         run_dual_kfold(manifest_train, manifest_test, custom_dir, _fast_config())
         assert len(list(custom_dir.glob("eyeliner_detection_fold*.pt"))) == 2
 
+    def test_runs_with_custom_base_channel_and_pool_width(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "cond_arch"
+        config = _fast_config(base_channel=16, pool_width=1)
+        result = run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+        assert len(result.fold_results) == 2
+        assert len(list(exp_dir.glob("eyeliner_detection_fold*.pt"))) == 2
+
 
 class TestBuildDualExperimentRecord:
 
@@ -178,6 +186,8 @@ class TestBuildDualExperimentRecord:
         assert hp["loss_fn"] == "t"
         assert hp["branch_a"] is not None
         assert hp["branch_b"] is not None
+        assert hp["base_channel"] == 32
+        assert hp["pool_width"] == 32
 
         data = record["data"]
         assert data["n_train_samples"] == 4

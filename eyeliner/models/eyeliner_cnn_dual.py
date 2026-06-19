@@ -7,13 +7,16 @@ import torch.nn as nn
 FUSION_MODES = ("shared", "independent", "attention")
 
 
-def _build_features(num_conv_layers: int, use_batchnorm: bool) -> tuple[nn.Sequential, int]:
+def _build_features(
+    num_conv_layers: int, use_batchnorm: bool,
+    base_channel: int = 32, pool_width: int = 32,
+) -> tuple[nn.Sequential, int]:
     """CNN特徴抽出器を構築する。
 
     Returns:
         (module, cnn_flat): モジュールとフラット特徴次元数
     """
-    channels = [32 * (2 ** i) for i in range(num_conv_layers)]
+    channels = [base_channel * (2 ** i) for i in range(num_conv_layers)]
     layers: list[nn.Module] = []
     in_ch = 3
     for i, out_ch in enumerate(channels):
@@ -24,8 +27,8 @@ def _build_features(num_conv_layers: int, use_batchnorm: bool) -> tuple[nn.Seque
         if i < num_conv_layers - 1:
             layers.append(nn.MaxPool2d(2))
         in_ch = out_ch
-    layers.append(nn.AdaptiveAvgPool2d((1, 32)))
-    return nn.Sequential(*layers), channels[-1] * 32
+    layers.append(nn.AdaptiveAvgPool2d((1, pool_width)))
+    return nn.Sequential(*layers), channels[-1] * pool_width
 
 
 def _build_head(in_dim: int, dropout_rate: float, use_sigmoid: bool) -> nn.Sequential:
@@ -68,6 +71,8 @@ class EyelinerCNNDual(nn.Module):
         use_sigmoid: bool = True,
         use_batchnorm: bool = True,
         dropout_rate: float = 0.3,
+        base_channel: int = 32,
+        pool_width: int = 32,
     ) -> None:
         super().__init__()
         if fusion_mode not in FUSION_MODES:
@@ -78,12 +83,20 @@ class EyelinerCNNDual(nn.Module):
         self.use_sigmoid = use_sigmoid
         self.use_batchnorm = use_batchnorm
         self.dropout_rate = dropout_rate
+        self.base_channel = base_channel
+        self.pool_width = pool_width
 
         if fusion_mode == "shared":
-            self.features, cnn_flat = _build_features(num_conv_layers, use_batchnorm)
+            self.features, cnn_flat = _build_features(
+                num_conv_layers, use_batchnorm, base_channel, pool_width,
+            )
         else:
-            self.features_a, cnn_flat = _build_features(num_conv_layers, use_batchnorm)
-            self.features_b, _ = _build_features(num_conv_layers, use_batchnorm)
+            self.features_a, cnn_flat = _build_features(
+                num_conv_layers, use_batchnorm, base_channel, pool_width,
+            )
+            self.features_b, _ = _build_features(
+                num_conv_layers, use_batchnorm, base_channel, pool_width,
+            )
 
         self._cnn_flat = cnn_flat
         head_in = cnn_flat + 1  # features + is_upper
