@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>t_pred hints browser</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+
+<div id="header">
+  <h1>t_pred hints browser</h1>
+  <div id="stats">
+    <span>総数: <strong id="stat-total">-</strong></span>
+    <span>極端値あり: <strong id="stat-extreme">-</strong></span>
+  </div>
+</div>
+
+<div id="filter-bar">
+  <label>min_t_max ≦: <input type="number" id="f-min-t-max" step="0.01" placeholder="(指定なし)" /></label>
+  <label>max_t_min ≧: <input type="number" id="f-max-t-min" step="0.01" placeholder="(指定なし)" /></label>
+  <label>n_extreme ≧: <input type="number" id="f-min-n-extreme" step="1" placeholder="(指定なし)" /></label>
+  <label>sort_by:
+    <select id="f-sort-by">
+      <option value="scanned_at">scanned_at</option>
+      <option value="min_t_pred">min_t_pred</option>
+      <option value="max_t_pred">max_t_pred</option>
+      <option value="n_extreme">n_extreme</option>
+      <option value="n_points">n_points</option>
+    </select>
+  </label>
+  <label>order:
+    <select id="f-order">
+      <option value="desc">desc</option>
+      <option value="asc">asc</option>
+    </select>
+  </label>
+  <button id="btn-apply">適用</button>
+</div>
+
+<table id="hints-table">
+  <thead>
+    <tr>
+      <th>image_path</th>
+      <th>part_name</th>
+      <th>min_t_pred</th>
+      <th>max_t_pred</th>
+      <th>n_extreme</th>
+      <th>n_points</th>
+      <th>プレビュー</th>
+      <th>annotator</th>
+    </tr>
+  </thead>
+  <tbody id="hints-tbody"></tbody>
+</table>
+
+<div id="pager">
+  <button id="btn-prev">← 前</button>
+  <span id="page-info"></span>
+  <button id="btn-next">次 →</button>
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
