@@ -61,6 +61,8 @@ def save_dual_model(
         "use_sigmoid": config.get("use_sigmoid", True),
         "use_batchnorm": config.get("use_batchnorm", True),
         "dropout_rate": config.get("dropout_rate", 0.3),
+        "base_channel": config.get("base_channel", 32),
+        "pool_width": config.get("pool_width", 32),
         "state_dict": model.state_dict(),
     }, path)
 
@@ -69,13 +71,17 @@ def load_dual_model(path: Path) -> nn.Module:
     """チェックポイントから dual モデルを復元する。"""
     ckpt = torch.load(path, map_location="cpu", weights_only=True)
     fusion_mode = ckpt.get("fusion_mode", "independent")
-    model = get_dual_model(
-        fusion_mode,
+    model_kwargs = dict(
         num_conv_layers=ckpt.get("num_conv_layers", 4),
         use_sigmoid=ckpt.get("use_sigmoid", True),
         use_batchnorm=ckpt.get("use_batchnorm", True),
         dropout_rate=ckpt.get("dropout_rate", 0.3),
     )
+    if fusion_mode != "crossfuse":
+        # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
+        model_kwargs["base_channel"] = ckpt.get("base_channel", 32)
+        model_kwargs["pool_width"] = ckpt.get("pool_width", 32)
+    model = get_dual_model(fusion_mode, **model_kwargs)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
     return model

@@ -1,0 +1,22 @@
+# EXP022 variant: base_channel=32, pool_width=1
+# EXP021 Phase3 ベスト構成（dual independent, loss=t_l1, aug=woflip(63), EBR=0.25）を
+# 土台に base_channel/pool_width のみ変更。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 1
