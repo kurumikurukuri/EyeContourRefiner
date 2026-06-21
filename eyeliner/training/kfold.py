@@ -12,7 +12,8 @@ from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
 from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
-from eyeliner.models.ensemble import build_model, save_model
+from eyeliner.models.ensemble import build_model, load_model, save_model
+from eyeliner.training.oof import OofPrediction
 from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import (
     TrainConfig,
@@ -33,6 +34,300 @@ class FoldResult:
     best_val_mae: float
     best_epoch: int
     model_path: str
+
+
+def _label_range_and_min(config: TrainConfig) -> tuple[float, float]:
+    """目正規化px空間の損失・OOF生t変換用の (label_range, label_t_min) を計算する。
+
+    t_norm 無効時は残差・予測が既に raw t なので range=1.0, min=0.0（無変換）。
+    label_t_* 未指定時は patch_t_* に従う。
+    """
+    if config.use_t_norm:
+        lt_min = config.label_t_min if config.label_t_min is not None else config.patch_t_min
+        lt_max = config.label_t_max if config.label_t_max is not None else config.patch_t_max
+        return max(lt_max - lt_min, 1e-6), lt_min
+    return 1.0, 0.0
+
+
+def _build_oof_predictions(
+    val_records: list[dict],
+    val_preds: torch.Tensor,
+    config: TrainConfig,
+    label_range: float,
+    label_t_min: float,
+    fold_idx: int,
+) -> list[OofPrediction]:
+    """検証セットの per-sample 予測（正規化空間）を生 t に変換し OofPrediction 化する。
+
+    val_loader は shuffle=False のため、val_preds の順序は val_records と一致する。
+    t_true は manifest の生 t（rec["t"]）をそのまま使う（infer_*.py と同じ convention）。
+    """
+    preds = val_preds.reshape(-1).tolist()
+    oof: list[OofPrediction] = []
+    for rec, pred_norm in zip(val_records, preds):
+        t_pred = pred_norm * label_range + label_t_min if config.use_t_norm else pred_norm
+        oof.append(OofPrediction(
+            idx=str(rec.get("idx", "")),
+            image_path=rec["image_path"],
+            part_name=rec.get("part_name", ""),
+            sub_key=rec.get("sub_key", ""),
+            point_index=str(rec.get("point_index", "")),
+            t_true=float(rec["t"]),
+            t_pred=float(t_pred),
+            fold_idx=fold_idx,
+        ))
+    return oof
+
+
+def _predict_records(
+    model_path: str | Path,
+    records: list[dict],
+    config: TrainConfig,
+    label_range: float,
+    label_t_min: float,
+    device: torch.device,
+    dl_kwargs: dict,
+    fold_idx: int,
+) -> list[OofPrediction]:
+    """保存済みモデルで records を推論し OOF 予測（生t）を生成する。
+
+    augment_data=False・shuffle=False の専用推論パス。_train_single_fold の早期終了判定
+    （別の検証セットを使う場合がある）とは独立しており、どの records 集合にも使える。
+    """
+    ds = EyelinerPatchDataset(
+        records, augment_data=False,
+        t_quant_step=config.t_quant_step,
+        norm_mean=config.norm_mean,
+        norm_std=config.norm_std,
+        patch_t_min=config.patch_t_min,
+        patch_t_max=config.patch_t_max,
+        patch_perp_scale=config.patch_perp_scale,
+        patch_size=(config.patch_h, config.patch_w),
+        use_t_norm=config.use_t_norm,
+        label_t_min=config.label_t_min,
+        label_t_max=config.label_t_max,
+        use_aux_face_shape=config.use_aux_face_shape,
+        pq_rescale_mode=config.pq_rescale_mode,
+        pq_rescale_factor=config.pq_rescale_factor,
+    )
+    loader = DataLoader(ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
+
+    model = load_model(model_path).to(device)
+    model.eval()
+
+    all_preds: list[torch.Tensor] = []
+    with torch.no_grad():
+        for batch in loader:
+            x                = batch[0].to(device)
+            is_upper         = batch[1].to(device)
+            pq_ratio         = batch[2]
+            dist_from_center = batch[6]
+            norm_eye_scale   = batch[7]
+            pq_ratio_dev = pq_ratio.to(device) if config.use_pq_ratio else None
+            dfc_dev      = dist_from_center.to(device) if config.use_distance_from_center else None
+            nes_dev      = norm_eye_scale.to(device) if config.use_norm_eye_scale else None
+            aux_dev      = batch[8].to(device) if config.use_aux_face_shape else None
+            pred = model(x, is_upper, pq_ratio_dev, dfc_dev, nes_dev, aux_dev)
+            if config.use_logit_target:
+                pred = torch.sigmoid(pred)
+            all_preds.append(pred.cpu())
+
+    preds = torch.cat(all_preds)
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    return _build_oof_predictions(records, preds, config, label_range, label_t_min, fold_idx)
+
+
+def _train_single_fold(
+    train_records: list[dict],
+    val_records: list[dict],
+    fold_idx: int,
+    exp_dir: Path,
+    config: TrainConfig,
+    label_range: float,
+    device: torch.device,
+    dl_kwargs: dict,
+    use_transfer: bool,
+    effective_freeze: int,
+) -> FoldResult:
+    """1 Fold 分の訓練を実行し、ベストモデル（val_mae 最小エポック）を exp_dir に保存する。
+
+    OOF 予測の生成はこの関数の責務外（_predict_records を別途呼ぶこと）。
+    train_records/val_records は早期終了の判定にのみ使われ、保存されるモデルは
+    val_records を一切学習に使わない。
+    """
+    train_ds = EyelinerPatchDataset(
+        train_records, augment_data=True,
+        aug_flags=config.aug_flags,
+        t_quant_step=config.t_quant_step,
+        norm_mean=config.norm_mean,
+        norm_std=config.norm_std,
+        patch_t_min=config.patch_t_min,
+        patch_t_max=config.patch_t_max,
+        patch_perp_scale=config.patch_perp_scale,
+        patch_size=(config.patch_h, config.patch_w),
+        use_t_norm=config.use_t_norm,
+        label_t_min=config.label_t_min,
+        label_t_max=config.label_t_max,
+        use_aux_face_shape=config.use_aux_face_shape,
+        pq_rescale_mode=config.pq_rescale_mode,
+        pq_rescale_factor=config.pq_rescale_factor,
+        endpoint_blend_range=config.endpoint_blend_range,
+    )
+    val_ds = EyelinerPatchDataset(
+        val_records, augment_data=False,
+        t_quant_step=config.t_quant_step,
+        norm_mean=config.norm_mean,
+        norm_std=config.norm_std,
+        patch_t_min=config.patch_t_min,
+        patch_t_max=config.patch_t_max,
+        patch_perp_scale=config.patch_perp_scale,
+        patch_size=(config.patch_h, config.patch_w),
+        use_t_norm=config.use_t_norm,
+        label_t_min=config.label_t_min,
+        label_t_max=config.label_t_max,
+        use_aux_face_shape=config.use_aux_face_shape,
+        pq_rescale_mode=config.pq_rescale_mode,
+        pq_rescale_factor=config.pq_rescale_factor,
+    )
+
+    if config.use_t_weighted_sampler:
+        t_values = [float(r["t"]) for r in train_records]
+        # t は生値（raw）のため、重み計算前に [0,1] に正規化する
+        t_min_eff = config.label_t_min if config.label_t_min is not None else min(t_values)
+        t_max_eff = config.label_t_max if config.label_t_max is not None else max(t_values)
+        t_range = max(t_max_eff - t_min_eff, 1e-6)
+        t_norm = [(t - t_min_eff) / t_range for t in t_values]
+        sample_weights = [1.0 + config.t_weight_alpha * abs(tn - 0.5) for tn in t_norm]
+    else:
+        sample_weights = [1.0] * len(train_records)
+
+    if config.use_pq_weighted_sampler:
+        pq_values = [float(r.get("pq_ratio", 1.0)) for r in train_records]
+        pq_w = [1.0 + config.pq_weight_alpha * max(0.0, config.pq_threshold - pq) / config.pq_threshold for pq in pq_values]
+        sample_weights = [sw * pw for sw, pw in zip(sample_weights, pq_w)]
+
+    use_sampler = config.use_t_weighted_sampler or config.use_pq_weighted_sampler
+    if use_sampler:
+        sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
+        train_loader = DataLoader(train_ds, batch_size=config.batch_size, sampler=sampler, **dl_kwargs)
+        logger.info(
+            "WeightedRandomSampler 有効: weight range=[%.3f, %.3f]",
+            min(sample_weights), max(sample_weights),
+        )
+    else:
+        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
+    val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
+
+    model = build_model(
+        config.backbone, pretrained=config.pretrained,
+        use_pq_ratio=config.use_pq_ratio, use_sigmoid=config.use_sigmoid,
+        use_batchnorm=config.use_batchnorm,
+        num_conv_layers=config.num_conv_layers,
+        use_distance_from_center=config.use_distance_from_center,
+        use_norm_eye_scale=config.use_norm_eye_scale,
+        use_is_upper=config.use_is_upper,
+        dropout_rate=config.dropout_rate,
+        use_aux_face_shape=config.use_aux_face_shape,
+    ).to(device)
+
+    # Phase 1: バックボーン凍結（転移学習時のみ）
+    if effective_freeze > 0:
+        model.freeze_backbone()
+        phase1_epochs = min(effective_freeze, config.epochs)
+        optimizer, scheduler = make_optimizer_and_scheduler(
+            model, "freeze", config.lr, config.weight_decay,
+            len(train_loader), phase1_epochs,
+        )
+    else:
+        optimizer, scheduler = make_optimizer_and_scheduler(
+            model, "full", config.lr, config.weight_decay,
+            len(train_loader), config.epochs,
+        )
+
+    best_mae = float("inf")
+    no_improve = 0
+    best_epoch = 0
+    phase_switched = False
+
+    for epoch in range(config.epochs):
+
+        # Phase 2 切り替え
+        if effective_freeze > 0 and not phase_switched and epoch >= effective_freeze:
+            remaining = config.epochs - effective_freeze
+            if remaining <= 0:
+                break
+            model.unfreeze_backbone()
+            optimizer, scheduler = make_optimizer_and_scheduler(
+                model, "finetune", config.lr, config.weight_decay,
+                len(train_loader), remaining,
+            )
+            phase_switched = True
+            no_improve = 0
+            logger.info(
+                "Fold %d Epoch %d: バックボーン解凍 → fine-tuning 開始",
+                fold_idx, epoch + 1,
+            )
+
+        train_loss, train_mae = train_one_epoch(
+            model, train_loader, optimizer, scheduler,
+            config.loss_fn, device,
+            use_pq_ratio=config.use_pq_ratio,
+            use_distance_from_center=config.use_distance_from_center,
+            use_norm_eye_scale=config.use_norm_eye_scale,
+            use_logit_target=config.use_logit_target,
+            use_aux_face_shape=config.use_aux_face_shape,
+            t_loss_alpha=config.t_loss_alpha,
+            loss_epsilon=config.loss_epsilon,
+            loss_delta=config.loss_delta,
+            pq_weight_alpha=config.pq_weight_alpha,
+            pq_threshold=config.pq_threshold,
+            label_range=label_range,
+        )
+        result = validate_one_epoch(
+            model, val_loader, device,
+            use_pq_ratio=config.use_pq_ratio,
+            use_distance_from_center=config.use_distance_from_center,
+            use_norm_eye_scale=config.use_norm_eye_scale,
+            use_logit_target=config.use_logit_target,
+            use_aux_face_shape=config.use_aux_face_shape,
+        )
+        current_lr = scheduler.get_last_lr()[0]
+
+        logger.info(
+            "Fold %d Epoch %3d  train_loss=%.6f  train_mae=%.6f  "
+            "val_mae=%.6f  lr=%.2e",
+            fold_idx, epoch + 1, train_loss, train_mae, result.val_mae, current_lr,
+        )
+
+        # Early Stopping（MAE 基準）
+        if result.val_mae < best_mae:
+            best_mae = result.val_mae
+            best_epoch = epoch + 1
+            no_improve = 0
+            model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
+            save_model(model, config.backbone, model_path)
+        else:
+            no_improve += 1
+            if no_improve >= config.patience:
+                logger.info("Early stopping triggered (fold %d)", fold_idx)
+                break
+
+    fold_result = FoldResult(
+        fold_idx=fold_idx,
+        best_val_mae=best_mae,
+        best_epoch=best_epoch,
+        model_path=str(exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"),
+    )
+    logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold_idx, best_mae, best_epoch)
+
+    del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return fold_result
 
 
 def run_kfold(
@@ -100,14 +395,7 @@ def run_kfold(
     use_transfer = config.backbone not in {"custom", "soft_argmax"}
     effective_freeze = config.freeze_epochs if use_transfer else 0
 
-    # 目正規化px空間の損失用: 残差を raw t 単位へ戻す係数 (label_t_max - label_t_min)。
-    # t_norm 無効時は残差が既に raw t なので 1.0。label_t_* 未指定時は patch_t_* に従う。
-    if config.use_t_norm:
-        _lt_min = config.label_t_min if config.label_t_min is not None else config.patch_t_min
-        _lt_max = config.label_t_max if config.label_t_max is not None else config.patch_t_max
-        label_range = max(_lt_max - _lt_min, 1e-6)
-    else:
-        label_range = 1.0
+    label_range, _ = _label_range_and_min(config)
 
     if k_folds == 1:
         # k=1: GroupShuffleSplit による固定 80/20 分割（CV なし・高速）
@@ -118,6 +406,7 @@ def run_kfold(
         kf = GroupKFold(n_splits=k_folds)
         splits = list(kf.split(records, groups=groups))
 
+    dl_kwargs = {"num_workers": config.num_workers, "persistent_workers": config.num_workers > 0}
     fold_results: list[FoldResult] = []
 
     for fold, (train_idx, val_idx) in enumerate(splits):
@@ -126,176 +415,12 @@ def run_kfold(
         train_records = [records[i] for i in train_idx]
         val_records = [records[i] for i in val_idx]
 
-        train_ds = EyelinerPatchDataset(
-            train_records, augment_data=True,
-            aug_flags=config.aug_flags,
-            t_quant_step=config.t_quant_step,
-            norm_mean=config.norm_mean,
-            norm_std=config.norm_std,
-            patch_t_min=config.patch_t_min,
-            patch_t_max=config.patch_t_max,
-            patch_perp_scale=config.patch_perp_scale,
-            patch_size=(config.patch_h, config.patch_w),
-            use_t_norm=config.use_t_norm,
-            label_t_min=config.label_t_min,
-            label_t_max=config.label_t_max,
-            use_aux_face_shape=config.use_aux_face_shape,
-            pq_rescale_mode=config.pq_rescale_mode,
-            pq_rescale_factor=config.pq_rescale_factor,
-            endpoint_blend_range=config.endpoint_blend_range,
+        fold_result = _train_single_fold(
+            train_records, val_records, fold + 1, exp_dir, config,
+            label_range, device, dl_kwargs,
+            use_transfer, effective_freeze,
         )
-        val_ds = EyelinerPatchDataset(
-            val_records, augment_data=False,
-            t_quant_step=config.t_quant_step,
-            norm_mean=config.norm_mean,
-            norm_std=config.norm_std,
-            patch_t_min=config.patch_t_min,
-            patch_t_max=config.patch_t_max,
-            patch_perp_scale=config.patch_perp_scale,
-            patch_size=(config.patch_h, config.patch_w),
-            use_t_norm=config.use_t_norm,
-            label_t_min=config.label_t_min,
-            label_t_max=config.label_t_max,
-            use_aux_face_shape=config.use_aux_face_shape,
-            pq_rescale_mode=config.pq_rescale_mode,
-            pq_rescale_factor=config.pq_rescale_factor,
-        )
-
-        if config.use_t_weighted_sampler:
-            t_values = [float(r["t"]) for r in train_records]
-            # t は生値（raw）のため、重み計算前に [0,1] に正規化する
-            t_min_eff = config.label_t_min if config.label_t_min is not None else min(t_values)
-            t_max_eff = config.label_t_max if config.label_t_max is not None else max(t_values)
-            t_range = max(t_max_eff - t_min_eff, 1e-6)
-            t_norm = [(t - t_min_eff) / t_range for t in t_values]
-            sample_weights = [1.0 + config.t_weight_alpha * abs(tn - 0.5) for tn in t_norm]
-        else:
-            sample_weights = [1.0] * len(train_records)
-
-        if config.use_pq_weighted_sampler:
-            pq_values = [float(r.get("pq_ratio", 1.0)) for r in train_records]
-            pq_w = [1.0 + config.pq_weight_alpha * max(0.0, config.pq_threshold - pq) / config.pq_threshold for pq in pq_values]
-            sample_weights = [sw * pw for sw, pw in zip(sample_weights, pq_w)]
-
-        use_sampler = config.use_t_weighted_sampler or config.use_pq_weighted_sampler
-        dl_kwargs = {"num_workers": config.num_workers, "persistent_workers": config.num_workers > 0}
-        if use_sampler:
-            sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
-            train_loader = DataLoader(train_ds, batch_size=config.batch_size, sampler=sampler, **dl_kwargs)
-            logger.info(
-                "WeightedRandomSampler 有効: weight range=[%.3f, %.3f]",
-                min(sample_weights), max(sample_weights),
-            )
-        else:
-            train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
-        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
-
-        model = build_model(
-            config.backbone, pretrained=config.pretrained,
-            use_pq_ratio=config.use_pq_ratio, use_sigmoid=config.use_sigmoid,
-            use_batchnorm=config.use_batchnorm,
-            num_conv_layers=config.num_conv_layers,
-            use_distance_from_center=config.use_distance_from_center,
-            use_norm_eye_scale=config.use_norm_eye_scale,
-            use_is_upper=config.use_is_upper,
-            dropout_rate=config.dropout_rate,
-            use_aux_face_shape=config.use_aux_face_shape,
-        ).to(device)
-
-        # Phase 1: バックボーン凍結（転移学習時のみ）
-        if effective_freeze > 0:
-            model.freeze_backbone()
-            phase1_epochs = min(effective_freeze, config.epochs)
-            optimizer, scheduler = make_optimizer_and_scheduler(
-                model, "freeze", config.lr, config.weight_decay,
-                len(train_loader), phase1_epochs,
-            )
-        else:
-            optimizer, scheduler = make_optimizer_and_scheduler(
-                model, "full", config.lr, config.weight_decay,
-                len(train_loader), config.epochs,
-            )
-
-        best_mae = float("inf")
-        no_improve = 0
-        best_epoch = 0
-        phase_switched = False
-
-        for epoch in range(config.epochs):
-
-            # Phase 2 切り替え
-            if effective_freeze > 0 and not phase_switched and epoch >= effective_freeze:
-                remaining = config.epochs - effective_freeze
-                if remaining <= 0:
-                    break
-                model.unfreeze_backbone()
-                optimizer, scheduler = make_optimizer_and_scheduler(
-                    model, "finetune", config.lr, config.weight_decay,
-                    len(train_loader), remaining,
-                )
-                phase_switched = True
-                no_improve = 0
-                logger.info(
-                    "Fold %d Epoch %d: バックボーン解凍 → fine-tuning 開始",
-                    fold + 1, epoch + 1,
-                )
-
-            train_loss, train_mae = train_one_epoch(
-                model, train_loader, optimizer, scheduler,
-                config.loss_fn, device,
-                use_pq_ratio=config.use_pq_ratio,
-                use_distance_from_center=config.use_distance_from_center,
-                use_norm_eye_scale=config.use_norm_eye_scale,
-                use_logit_target=config.use_logit_target,
-                use_aux_face_shape=config.use_aux_face_shape,
-                t_loss_alpha=config.t_loss_alpha,
-                loss_epsilon=config.loss_epsilon,
-                loss_delta=config.loss_delta,
-                pq_weight_alpha=config.pq_weight_alpha,
-                pq_threshold=config.pq_threshold,
-                label_range=label_range,
-            )
-            result = validate_one_epoch(
-                model, val_loader, device,
-                use_pq_ratio=config.use_pq_ratio,
-                use_distance_from_center=config.use_distance_from_center,
-                use_norm_eye_scale=config.use_norm_eye_scale,
-                use_logit_target=config.use_logit_target,
-                use_aux_face_shape=config.use_aux_face_shape,
-            )
-            current_lr = scheduler.get_last_lr()[0]
-
-            logger.info(
-                "Fold %d Epoch %3d  train_loss=%.6f  train_mae=%.6f  "
-                "val_mae=%.6f  lr=%.2e",
-                fold + 1, epoch + 1, train_loss, train_mae, result.val_mae, current_lr,
-            )
-
-            # Early Stopping（MAE 基準）
-            if result.val_mae < best_mae:
-                best_mae = result.val_mae
-                best_epoch = epoch + 1
-                no_improve = 0
-                model_path = exp_dir / f"eyeliner_detection_fold{fold + 1}.pt"
-                save_model(model, config.backbone, model_path)
-            else:
-                no_improve += 1
-                if no_improve >= config.patience:
-                    logger.info("Early stopping triggered (fold %d)", fold + 1)
-                    break
-
-        fold_results.append(FoldResult(
-            fold_idx=fold + 1,
-            best_val_mae=best_mae,
-            best_epoch=best_epoch,
-            model_path=str(exp_dir / f"eyeliner_detection_fold{fold + 1}.pt"),
-        ))
-        logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold + 1, best_mae, best_epoch)
-
-        del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        fold_results.append(fold_result)
 
     # K-Fold サマリー
     mean_mae = float(np.mean([r.best_val_mae for r in fold_results]))
