@@ -76,6 +76,8 @@ class EpochResult:
     val_mae: float
     val_pixel_mae: float
     val_relative_mae: float
+    val_preds: torch.Tensor
+    val_labels: torch.Tensor
 
 
 def set_seed(seed: int = 42) -> None:
@@ -238,6 +240,8 @@ def validate_one_epoch(
         val_mae=mae,
         val_pixel_mae=pixel_mae,
         val_relative_mae=relative_mae,
+        val_preds=preds_t,
+        val_labels=labels_t,
     )
 
 

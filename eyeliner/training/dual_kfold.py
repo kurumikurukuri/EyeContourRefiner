@@ -38,6 +38,7 @@ from eyeliner.training.dual_branch import (
     normalize_to_branch_a,
 )
 from eyeliner.training.kfold import FoldResult
+from eyeliner.training.oof import OofPrediction
 from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import set_seed
 
@@ -82,6 +83,207 @@ class DualKfoldResult:
     cfg_b: BranchConfig
     holdout_mae: float | None = None
     holdout_mae_raw: float | None = None
+
+
+def _train_single_dual_fold(
+    train_records: list[dict],
+    val_records: list[dict],
+    fold_idx: int,
+    exp_dir: Path,
+    config: DualTrainConfig,
+    cfg_a: BranchConfig,
+    cfg_b: BranchConfig,
+    device: torch.device,
+    dl_kwargs: dict,
+) -> FoldResult:
+    """1 Fold 分のデュアルブランチ訓練を実行し、ベストモデル（val_mae 最小エポック）を保存する。
+
+    OOF 予測の生成はこの関数の責務外（_predict_dual_records を別途呼ぶこと）。
+    train_records/val_records は早期終了の判定にのみ使われ、保存されるモデルは
+    val_records を一切学習に使わない。
+    """
+    loss_fn = get_loss_fn(config.loss_fn)
+
+    train_ds = EyelinerPatchDualDataset(
+        train_records, cfg_a, cfg_b,
+        augment_data=True, aug_flags=config.aug_flags,
+        endpoint_blend_range=config.endpoint_blend_range,
+    )
+    val_ds = EyelinerPatchDualDataset(
+        val_records, cfg_a, cfg_b,
+        augment_data=False, aug_flags=config.aug_flags,
+        endpoint_blend_range=config.endpoint_blend_range,
+    )
+    train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
+    val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
+
+    model_kwargs = dict(
+        num_conv_layers=config.num_conv_layers,
+        use_sigmoid=config.use_sigmoid,
+        use_batchnorm=config.use_batchnorm,
+        dropout_rate=config.dropout_rate,
+    )
+    if config.fusion_mode != "crossfuse":
+        # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
+        model_kwargs["base_channel"] = config.base_channel
+        model_kwargs["pool_width"] = config.pool_width
+    model = get_dual_model(config.fusion_mode, **model_kwargs).to(device)
+
+    optimizer, scheduler = make_optimizer_and_scheduler(
+        model, "full", config.lr, config.weight_decay,
+        len(train_loader), config.epochs,
+    )
+
+    best_mae = float("inf")
+    no_improve = 0
+    best_epoch = 0
+    model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
+
+    for epoch in range(config.epochs):
+        model.train()
+        total_loss = 0.0
+        n_batches = 0
+        for batch in train_loader:
+            x_a = batch[0].to(device)
+            x_b = batch[1].to(device)
+            is_upper = batch[2].to(device)
+            y_a = batch[4].to(device)
+            y_b = batch[5].to(device)
+            pq_dist = batch[12].to(device)
+            pq_prime = batch[13].to(device)
+
+            if config.fusion_mode == "attention":
+                pred_a, pred_b, alpha = model(x_a, x_b, is_upper)
+                t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime)
+                t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime)
+                ens_norm = normalize_to_branch_a(ensemble_raw_t(t_a, t_b, alpha), cfg_a)
+                loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b) + loss_fn(ens_norm, y_a)
+            else:
+                pred_a, pred_b = model(x_a, x_b, is_upper)
+                loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            scheduler.step()
+            total_loss += loss.item()
+            n_batches += 1
+        avg_loss = total_loss / max(n_batches, 1)
+
+        model.eval()
+        all_preds: list[torch.Tensor] = []
+        all_labels: list[torch.Tensor] = []
+        with torch.no_grad():
+            for batch in val_loader:
+                x_a = batch[0].to(device)
+                x_b = batch[1].to(device)
+                is_upper = batch[2].to(device)
+                y_a = batch[4]
+                pq_dist = batch[12].to(device)
+                pq_prime = batch[13].to(device)
+                t_ens = model_pred_raw_t(
+                    model, x_a, x_b, is_upper, config.fusion_mode,
+                    cfg_a, cfg_b, pq_dist, pq_prime,
+                )
+                pred_norm = normalize_to_branch_a(t_ens, cfg_a)
+                all_preds.append(pred_norm.cpu())
+                all_labels.append(y_a)
+
+        preds_t = torch.cat(all_preds)
+        labels_t = torch.cat(all_labels)
+        val_mae = (preds_t - labels_t).abs().mean().item()
+
+        current_lr = scheduler.get_last_lr()[0]
+        logger.info(
+            "Fold %d Epoch %3d  loss=%.6f  val_mae=%.6f  lr=%.2e",
+            fold_idx, epoch + 1, avg_loss, val_mae, current_lr,
+        )
+
+        if val_mae < best_mae:
+            best_mae = val_mae
+            best_epoch = epoch + 1
+            no_improve = 0
+            save_dual_model(model, config.fusion_mode, config.__dict__, model_path)
+        else:
+            no_improve += 1
+            if no_improve >= config.patience:
+                logger.info("Early stopping (fold %d, epoch %d)", fold_idx, epoch + 1)
+                break
+
+    fold_result = FoldResult(
+        fold_idx=fold_idx,
+        best_val_mae=best_mae,
+        best_epoch=best_epoch,
+        model_path=str(model_path),
+    )
+    logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold_idx, best_mae, best_epoch)
+
+    del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+
+    return fold_result
+
+
+def _predict_dual_records(
+    model_path: str | Path,
+    records: list[dict],
+    config: DualTrainConfig,
+    cfg_a: BranchConfig,
+    cfg_b: BranchConfig,
+    device: torch.device,
+    dl_kwargs: dict,
+    fold_idx: int,
+) -> list[OofPrediction]:
+    """保存済みデュアルブランチモデルで records を推論し OOF 予測（生t）を生成する。
+
+    model_pred_raw_t() は枝A/Bの予測を生t空間で合成して返すため、単一ブランチ版の
+    _predict_records と異なり normalize_to_branch_a() による再正規化は不要
+    （manifest の生 t と直接比較できる）。augment_data=False・shuffle=False の専用推論パス。
+    """
+    ds = EyelinerPatchDualDataset(
+        records, cfg_a, cfg_b,
+        augment_data=False, aug_flags=config.aug_flags,
+        endpoint_blend_range=config.endpoint_blend_range,
+    )
+    loader = DataLoader(ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
+
+    model = load_dual_model(model_path).to(device)
+    model.eval()
+
+    all_t_pred: list[torch.Tensor] = []
+    with torch.no_grad():
+        for batch in loader:
+            x_a = batch[0].to(device)
+            x_b = batch[1].to(device)
+            is_upper = batch[2].to(device)
+            pq_dist = batch[12].to(device)
+            pq_prime = batch[13].to(device)
+            t_ens = model_pred_raw_t(
+                model, x_a, x_b, is_upper, config.fusion_mode,
+                cfg_a, cfg_b, pq_dist, pq_prime,
+            )
+            all_t_pred.append(t_ens.cpu())
+
+    preds = torch.cat(all_t_pred).reshape(-1).tolist()
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    oof: list[OofPrediction] = []
+    for rec, t_pred in zip(records, preds):
+        oof.append(OofPrediction(
+            idx=str(rec.get("idx", "")),
+            image_path=rec["image_path"],
+            part_name=rec.get("part_name", ""),
+            sub_key=rec.get("sub_key", ""),
+            point_index=str(rec.get("point_index", "")),
+            t_true=float(rec["t"]),
+            t_pred=float(t_pred),
+            fold_idx=fold_idx,
+        ))
+    return oof
 
 
 def run_dual_kfold(
@@ -137,129 +339,14 @@ def run_dual_kfold(
     splits = list(kf.split(records, groups=groups))
 
     fold_results: list[FoldResult] = []
-    loss_fn = get_loss_fn(config.loss_fn)
 
     for fold, (train_idx, val_idx) in enumerate(splits):
         logger.info("----- Fold %d/%d -----", fold + 1, config.k)
-
-        train_ds = EyelinerPatchDualDataset(
-            [records[i] for i in train_idx], cfg_a, cfg_b,
-            augment_data=True, aug_flags=config.aug_flags,
-            endpoint_blend_range=config.endpoint_blend_range,
+        fold_result = _train_single_dual_fold(
+            [records[i] for i in train_idx], [records[i] for i in val_idx],
+            fold + 1, exp_dir, config, cfg_a, cfg_b, device, dl_kwargs,
         )
-        val_ds = EyelinerPatchDualDataset(
-            [records[i] for i in val_idx], cfg_a, cfg_b,
-            augment_data=False, aug_flags=config.aug_flags,
-            endpoint_blend_range=config.endpoint_blend_range,
-        )
-        train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
-        val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
-
-        model_kwargs = dict(
-            num_conv_layers=config.num_conv_layers,
-            use_sigmoid=config.use_sigmoid,
-            use_batchnorm=config.use_batchnorm,
-            dropout_rate=config.dropout_rate,
-        )
-        if config.fusion_mode != "crossfuse":
-            # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
-            model_kwargs["base_channel"] = config.base_channel
-            model_kwargs["pool_width"] = config.pool_width
-        model = get_dual_model(config.fusion_mode, **model_kwargs).to(device)
-
-        optimizer, scheduler = make_optimizer_and_scheduler(
-            model, "full", config.lr, config.weight_decay,
-            len(train_loader), config.epochs,
-        )
-
-        best_mae = float("inf")
-        no_improve = 0
-        best_epoch = 0
-        model_path = exp_dir / f"eyeliner_detection_fold{fold + 1}.pt"
-
-        for epoch in range(config.epochs):
-            model.train()
-            total_loss = 0.0
-            n_batches = 0
-            for batch in train_loader:
-                x_a = batch[0].to(device)
-                x_b = batch[1].to(device)
-                is_upper = batch[2].to(device)
-                y_a = batch[4].to(device)
-                y_b = batch[5].to(device)
-                pq_dist = batch[12].to(device)
-                pq_prime = batch[13].to(device)
-
-                if config.fusion_mode == "attention":
-                    pred_a, pred_b, alpha = model(x_a, x_b, is_upper)
-                    t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime)
-                    t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime)
-                    ens_norm = normalize_to_branch_a(ensemble_raw_t(t_a, t_b, alpha), cfg_a)
-                    loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b) + loss_fn(ens_norm, y_a)
-                else:
-                    pred_a, pred_b = model(x_a, x_b, is_upper)
-                    loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b)
-
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
-                scheduler.step()
-                total_loss += loss.item()
-                n_batches += 1
-            avg_loss = total_loss / max(n_batches, 1)
-
-            model.eval()
-            all_preds: list[torch.Tensor] = []
-            all_labels: list[torch.Tensor] = []
-            with torch.no_grad():
-                for batch in val_loader:
-                    x_a = batch[0].to(device)
-                    x_b = batch[1].to(device)
-                    is_upper = batch[2].to(device)
-                    y_a = batch[4]
-                    pq_dist = batch[12].to(device)
-                    pq_prime = batch[13].to(device)
-                    t_ens = model_pred_raw_t(
-                        model, x_a, x_b, is_upper, config.fusion_mode,
-                        cfg_a, cfg_b, pq_dist, pq_prime,
-                    )
-                    pred_norm = normalize_to_branch_a(t_ens, cfg_a)
-                    all_preds.append(pred_norm.cpu())
-                    all_labels.append(y_a)
-
-            preds_t = torch.cat(all_preds)
-            labels_t = torch.cat(all_labels)
-            val_mae = (preds_t - labels_t).abs().mean().item()
-
-            current_lr = scheduler.get_last_lr()[0]
-            logger.info(
-                "Fold %d Epoch %3d  loss=%.6f  val_mae=%.6f  lr=%.2e",
-                fold + 1, epoch + 1, avg_loss, val_mae, current_lr,
-            )
-
-            if val_mae < best_mae:
-                best_mae = val_mae
-                best_epoch = epoch + 1
-                no_improve = 0
-                save_dual_model(model, config.fusion_mode, config.__dict__, model_path)
-            else:
-                no_improve += 1
-                if no_improve >= config.patience:
-                    logger.info("Early stopping (fold %d, epoch %d)", fold + 1, epoch + 1)
-                    break
-
-        fold_results.append(FoldResult(
-            fold_idx=fold + 1,
-            best_val_mae=best_mae,
-            best_epoch=best_epoch,
-            model_path=str(model_path),
-        ))
-        logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold + 1, best_mae, best_epoch)
-
-        del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        gc.collect()
+        fold_results.append(fold_result)
 
     mean_mae = float(np.mean([r.best_val_mae for r in fold_results]))
     logger.info("CV MAE: %.6f", mean_mae)
