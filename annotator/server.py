@@ -1334,12 +1334,18 @@ def _render_eye_crop(
     eye_samples: List[Dict[str, Any]],
     use_pred: bool,
     eye_scale: Optional[float] = None,
+    t_override_idx: Optional[int] = None,
+    t_override: Optional[float] = None,
 ) -> Optional[str]:
     """
     眼领域のクロップにアイラインを描画して base64 JPEG を返す。
 
     use_pred=False: sample["t"]（アノテーション）を使用。
     use_pred=True : _predict_t() でモデル予測を使用。
+
+    t_override_idx / t_override: use_pred=False のとき、idx が一致する点だけ
+    t_override（t_norm [0,1]、WebUI の state.currentT と同一空間）から計算した
+    raw t で上書きする。クリック/スライダー操作中の未保存値のライブプレビュー用。
 
     R点が1つも得られない場合は None を返す。
     """
@@ -1368,6 +1374,8 @@ def _render_eye_crop(
             if t_norm is None:
                 continue
             t_raw = t_norm * (T_MAX - T_MIN) + T_MIN
+        elif t_override is not None and t_override_idx is not None and s.get("idx") == t_override_idx:
+            t_raw = round(t_override * (T_MAX - T_MIN) + T_MIN, 6)
         else:
             # samples.json の t は生の物理 t 値
             t_raw_str = s.get("t")
@@ -1427,19 +1435,24 @@ def _render_eye_crop(
     dot_radius = max(4, min(20, round(7 * _es_factor)))
     line_thickness = max(1, min(5, round(_es_factor)))
 
-    # upper: 実線
+    # upper: 実線（不透明）
     upper_pts = [to_crop(rx, ry) for rx, ry in points_by_sub["upper"]]
     for i in range(len(upper_pts) - 1):
         cv2.line(crop, upper_pts[i], upper_pts[i + 1], color_upper, line_thickness, cv2.LINE_AA)
-    for pt in upper_pts:
-        cv2.circle(crop, pt, dot_radius, color_upper, -1)
 
-    # lower: 破線
+    # lower: 破線（不透明）
     lower_pts = [to_crop(rx, ry) for rx, ry in points_by_sub["lower"]]
     for i in range(len(lower_pts) - 1):
         _draw_dashed_line(crop, lower_pts[i], lower_pts[i + 1], color_lower, line_thickness)
+
+    # 点マーカーは半透明にして、ドット下のアイライン境界が見えるようにする
+    _DOT_ALPHA = 0.5
+    dot_overlay = crop.copy()
+    for pt in upper_pts:
+        cv2.circle(dot_overlay, pt, dot_radius, color_upper, -1)
     for pt in lower_pts:
-        cv2.circle(crop, pt, dot_radius, color_lower, -1)
+        cv2.circle(dot_overlay, pt, dot_radius, color_lower, -1)
+    crop = cv2.addWeighted(dot_overlay, _DOT_ALPHA, crop, 1 - _DOT_ALPHA, 0)
 
     return _to_base64_png(crop)
 
@@ -1471,12 +1484,16 @@ def _filter_same_face(reference: Dict[str, Any], candidates: List[Dict[str, Any]
 
 
 @app.get("/api/eyeliner_preview/{idx}")
-def get_eyeliner_preview(idx: int):
+def get_eyeliner_preview(idx: int, t_override: Optional[float] = Query(None)):
     """
     現在サンプルと同一顔・同一側の眼のみを使いアイラインを描画した2枚の画像を返す。
 
     複数顔が存在する画像でも、現在サンプルの PQ 中点から 2×PQ長 以内かつ
     同一 part_name のサンプルのみを使用する。
+
+    t_override: 指定時、idx の点だけを未保存の t_norm [0,1]（WebUI クリック/スライダーの
+    `state.currentT` と同一空間）で上書きして t_true 側を再描画する。クリック中の
+    リアルタイムプレビュー用で、DB には保存しない。t_pred 側はユーザー操作と無関係なため対象外。
 
     Returns:
         eye_true_b64: アノテーション(t_true)による現在側の目
@@ -1515,7 +1532,10 @@ def get_eyeliner_preview(idx: int):
     es = float(current_eye_scale) if current_eye_scale is not None else None
 
     return {
-        "eye_true_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=False, eye_scale=es),
+        "eye_true_b64": _render_eye_crop(
+            image_rgb, eye_samples, use_pred=False, eye_scale=es,
+            t_override_idx=idx, t_override=t_override,
+        ),
         "eye_pred_b64": _render_eye_crop(image_rgb, eye_samples, use_pred=True, eye_scale=es) if has_model else None,
         "side": side,
         "has_model": has_model,
