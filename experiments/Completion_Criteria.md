@@ -84,3 +84,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP020_dual_branch | X1_independent_none_eye_scale | 7308 | 88.04 | 84.59 |
 | EXP021_loss_aug_sweep | phase3_X1_t_l1_woflip | 7308 | 89.20 | 85.95 |
 | EXP022_channel_pool_sweep | bc16_pw16 | 8372 | 88.27 | 85.08 |
+| EXP024_retrain_bc32_pw8 | bc32_pw8 | 8372 | 88.70 | 85.40 |
