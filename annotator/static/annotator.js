@@ -69,6 +69,12 @@ const elInfoLapVar    = document.getElementById("info-lap-var");
 const elStatus    = document.getElementById("status-msg");
 const elBanner    = document.getElementById("complete-banner");
 
+const tSlider     = document.getElementById("t-slider");
+
+const infoBoxHeader = document.getElementById("info-box-header");
+const infoBoxBody   = document.getElementById("info-box-body");
+const btnToggleInfo  = document.getElementById("btn-toggle-info");
+
 const metaBox     = document.getElementById("metadata-box");
 const metaLabels  = document.getElementById("metadata-labels");
 const metaFlags   = document.getElementById("metadata-flags");
@@ -323,6 +329,8 @@ function drawPatch() {
   if (!state.patchB64) return;
   patchCanvas.width  = state.patchW;
   patchCanvas.height = state.patchH;
+  // CSS側の width:auto/height:auto と組み合わせて表示比率を保つ（ストレッチ防止）
+  patchCanvas.style.aspectRatio = `${state.patchW} / ${state.patchH}`;
 
   const img = new Image();
   img.onload = () => {
@@ -362,6 +370,7 @@ function drawTLine() {
 }
 
 function updateTDisplay() {
+  syncSliderFromState();
   if (state.currentT === null) {
     elTDisplay.textContent = "t = --";
     elInfoR.textContent = "--";
@@ -374,6 +383,11 @@ function updateTDisplay() {
     const ry = tPhys * state.py + (1 - tPhys) * state.qy;
     elInfoR.textContent = `(${rx.toFixed(1)}, ${ry.toFixed(1)})`;
   }
+}
+
+/** スライダーの位置を state.currentT に合わせる（click/undo/予測適用後に呼ぶ）。 */
+function syncSliderFromState() {
+  tSlider.value = state.currentT !== null ? (1 - state.currentT) : 0.5;
 }
 
 function updatePredDisplay() {
@@ -459,6 +473,7 @@ patchCanvas.addEventListener("click", (e) => {
 
   drawPatch();      // redraw base + lines (drawPredLine/drawTLine は onload 内で実行)
   updateTDisplay();
+  scheduleEyelinerPreviewUpdate();
 });
 
 // ---------------------------------------------------------------------------
@@ -499,6 +514,7 @@ btnUndo.addEventListener("click", () => {
   drawPatch();
   drawTLine();
   updateTDisplay();
+  scheduleEyelinerPreviewUpdate();
   setStatus("やり直しました。");
 });
 
@@ -507,6 +523,7 @@ btnApplyPred.addEventListener("click", () => {
   state.currentT = state.tPred;
   drawPatch();
   updateTDisplay();
+  scheduleEyelinerPreviewUpdate();
   setStatus(`予測値を適用しました (t=${toPhysicalT(state.tPred).toFixed(4)})`);
 });
 
@@ -975,6 +992,14 @@ galleryOverlay.addEventListener("click", (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// 情報パネルの折りたたみ（閉じると目クロップ部 #eyeliner-section が広がる）
+// ---------------------------------------------------------------------------
+infoBoxHeader.addEventListener("click", () => {
+  const collapsed = infoBoxBody.classList.toggle("collapsed");
+  btnToggleInfo.textContent = collapsed ? "▸" : "▾";
+});
+
+// ---------------------------------------------------------------------------
 // Eyeliner preview
 // ---------------------------------------------------------------------------
 
@@ -1000,6 +1025,35 @@ function _resetEyelinerPanels(msg) {
     ph.textContent   = msg;
     ph.style.display = "inline";
   });
+}
+
+// ---------------------------------------------------------------------------
+// 目クロップ（t_true 側）のリアルタイム更新
+// クリック/スライダー操作中の未保存 t を t_override として送り、
+// 編集中の点だけをその場の値で再描画する（t_pred 側はユーザー操作と無関係なため対象外）。
+// ---------------------------------------------------------------------------
+let _eyelinerLiveAbort = null;
+let _eyelinerLiveDebounce = null;
+
+function scheduleEyelinerPreviewUpdate() {
+  if (state.currentT === null) return;
+  if (_eyelinerLiveDebounce) clearTimeout(_eyelinerLiveDebounce);
+  _eyelinerLiveDebounce = setTimeout(updateEyeTrueLive, 120);
+}
+
+async function updateEyeTrueLive() {
+  if (state.currentT === null) return;
+  if (_eyelinerLiveAbort) _eyelinerLiveAbort.abort();
+  _eyelinerLiveAbort = new AbortController();
+  try {
+    const data = await apiFetch(
+      `/api/eyeliner_preview/${state.currentIdx}?t_override=${state.currentT}`,
+      { signal: _eyelinerLiveAbort.signal }
+    );
+    _setEyelinerImg(eyeTrueImg, eyeTruePh, data.eye_true_b64, "image/png");
+  } catch (err) {
+    if (err.name !== "AbortError") { /* 非致命的: ライブプレビューのみ失敗 */ }
+  }
 }
 
 async function loadEyelinerPreview(idx) {
