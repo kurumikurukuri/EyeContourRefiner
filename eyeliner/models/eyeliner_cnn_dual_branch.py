@@ -89,6 +89,7 @@ class CrossFuseDualModel(nn.Module):
         x_a: torch.Tensor,
         x_b: torch.Tensor,
         is_upper: torch.Tensor,
+        aux_features: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         f_a, f_b = x_a, x_b
         for i in range(len(self.blocks_a)):

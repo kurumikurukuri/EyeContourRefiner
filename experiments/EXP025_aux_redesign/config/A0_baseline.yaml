@@ -1,0 +1,23 @@
+# EXP025 A0: aux 無し baseline（現 bc32_pw8 = EXP024 と同条件の引き直し）。
+# B(aux_face_shape) の比較基準。use_is_upper=true / use_aux_face_shape=false。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_aux_face_shape: false
+use_is_upper: true

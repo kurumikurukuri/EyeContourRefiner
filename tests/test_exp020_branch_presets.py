@@ -173,7 +173,7 @@ class _StubDual(torch.nn.Module):
         super().__init__()
         self.pa, self.pb, self.alpha = pa, pb, alpha
 
-    def forward(self, x_a, x_b, is_upper):
+    def forward(self, x_a, x_b, is_upper, aux_features=None):
         B = x_a.size(0)
         pa = torch.full((B, 1), self.pa)
         pb = torch.full((B, 1), self.pb)
