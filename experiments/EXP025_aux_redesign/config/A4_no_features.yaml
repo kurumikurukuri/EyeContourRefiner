@@ -1,0 +1,24 @@
+# EXP025 A4: aux 無し + is_upper 無し（完全に特徴量除外した最小構成）。
+# A0(is_upper有) に対する ablation:
+# 上下まぶた情報を一切モデルに渡さないとどうなるかを実測する。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_aux_face_shape: false
+use_is_upper: false

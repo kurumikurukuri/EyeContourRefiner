@@ -5,6 +5,25 @@ import math
 from collections import defaultdict
 
 
+# aux_face_shape の canonical 特徴レジストリ（順序固定・11 次元）。
+# use_aux_face_shape=true のデフォルト（EXP018 仕様）。EXP025 以降は
+# aux_features でこの部分集合を選択できる。
+AUX_FACE_SHAPE_FEATURES: tuple[str, ...] = (
+    "pq_angle_cos",
+    "pq_angle_sin",
+    "position_polar_cos",
+    "position_polar_sin",
+    "face_yaw_sin",
+    "face_yaw_cos",
+    "face_pitch_sin",
+    "face_pitch_cos",
+    "face_roll_sin",
+    "face_roll_cos",
+    "is_upper",
+)
+DEFAULT_AUX_FEATURES: tuple[str, ...] = AUX_FACE_SHAPE_FEATURES
+
+
 def compute_eye_meta(records: list[dict]) -> None:
     """各レコードに weight と val_weight を付与する（in-place）。
 
@@ -101,10 +120,10 @@ def compute_aux_face_shape_meta(records: list[dict], db_path: "str | Path | None
         ).fetchall()
         conn.close()
 
-        pose_map: dict[tuple, tuple[float, float, float]] = {}
+        meta_map: dict[tuple, tuple[float, float, float]] = {}
         for row in rows:
             k = (row["image_path"], int(row["face_index"]))
-            pose_map[k] = (
+            meta_map[k] = (
                 float(row["face_yaw"]   or 0.0),
                 float(row["face_pitch"] or 0.0),
                 float(row["face_roll"]  or 0.0),
@@ -112,7 +131,7 @@ def compute_aux_face_shape_meta(records: list[dict], db_path: "str | Path | None
 
         for rec in records:
             k = (rec["image_path"], int(rec.get("face_index", 0)))
-            yaw, pitch, roll = pose_map.get(k, (0.0, 0.0, 0.0))
+            yaw, pitch, roll = meta_map.get(k, (0.0, 0.0, 0.0))
             yaw_r   = math.radians(yaw)
             pitch_r = math.radians(pitch)
             roll_r  = math.radians(roll)
@@ -130,3 +149,45 @@ def compute_aux_face_shape_meta(records: list[dict], db_path: "str | Path | None
             rec.setdefault("face_pitch_cos", 1.0)
             rec.setdefault("face_roll_sin",  0.0)
             rec.setdefault("face_roll_cos",  1.0)
+
+
+def build_aux_vector(rec: dict, features: list[str]) -> list[float]:
+    """指定された特徴名リストの aux ベクトル（生値）を組み立てる。
+
+    features の順序がそのままベクトルの次元順になる。値は compute_aux_face_shape_meta
+    が付与した rec フィールド + sub_key から引く（未付与なら中立値でフォールバック）。
+
+    Args:
+        rec:      compute_aux_face_shape_meta 済みのレコード dict。
+        features: 組み立てる特徴名リスト（AUX_FACE_SHAPE_FEATURES の部分集合）。
+
+    Returns:
+        len(features) の float リスト。
+    """
+    is_upper = 1.0 if rec.get("sub_key", "") == "upper" else 0.0
+    pi = int(rec.get("point_index", 3))
+    degree = (pi + 1) * 22.5 if is_upper == 1.0 else (pi + 9) * 22.5
+    rad = degree * math.pi / 180.0
+
+    _fallback = {
+        "pq_angle_cos": 1.0,
+        "pq_angle_sin": 0.0,
+        "position_polar_cos": math.cos(rad),
+        "position_polar_sin": math.sin(rad),
+        "face_yaw_sin": 0.0,
+        "face_yaw_cos": 1.0,
+        "face_pitch_sin": 0.0,
+        "face_pitch_cos": 1.0,
+        "face_roll_sin": 0.0,
+        "face_roll_cos": 1.0,
+    }
+
+    values: list[float] = []
+    for name in features:
+        if name == "is_upper":
+            values.append(float(is_upper))
+            continue
+        if name not in _fallback:
+            raise KeyError(f"未知の aux 特徴名: {name!r}")
+        values.append(float(rec.get(name, _fallback[name])))
+    return values

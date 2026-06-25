@@ -22,7 +22,11 @@ from torch.utils.data import DataLoader
 
 from eyeliner.data.dataset import load_manifest
 from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
-from eyeliner.data.weights import compute_eye_meta
+from eyeliner.data.weights import (
+    DEFAULT_AUX_FEATURES,
+    compute_aux_face_shape_meta,
+    compute_eye_meta,
+)
 from eyeliner.evaluation.loss import get_loss_fn
 from eyeliner.models.dual_ensemble import (
     get_dual_model,
@@ -68,6 +72,25 @@ class DualTrainConfig:
     num_workers: int = 0
     base_channel: int = 32
     pool_width: int = 32
+    # aux は EXP018 と同一仕様（use_aux_face_shape=固定11次元の生 sin/cos）。
+    use_aux_face_shape: bool = False
+    # aux_features 指定時は canonical 特徴の部分集合（use_aux_face_shape=true と併用）。
+    # 空のときは use_aux_face_shape=true ならデフォルト11次元、false なら aux 無し。
+    aux_features: list = field(default_factory=list)
+    use_is_upper: bool = True
+    db_path: str = "data/samples.db"
+
+
+def effective_aux_features(config: DualTrainConfig) -> list[str]:
+    """config から実際に使用する aux 特徴名リストを導出する。
+
+    use_aux_face_shape=False               → []（aux 無し）
+    use_aux_face_shape=True かつ aux_features 空 → DEFAULT_AUX_FEATURES（11次元）
+    use_aux_face_shape=True かつ aux_features 指定 → そのリスト（部分集合）
+    """
+    if not config.use_aux_face_shape:
+        return []
+    return list(config.aux_features) if config.aux_features else list(DEFAULT_AUX_FEATURES)
 
 
 @dataclass
@@ -103,16 +126,19 @@ def _train_single_dual_fold(
     val_records を一切学習に使わない。
     """
     loss_fn = get_loss_fn(config.loss_fn)
+    aux_features = effective_aux_features(config)
 
     train_ds = EyelinerPatchDualDataset(
         train_records, cfg_a, cfg_b,
         augment_data=True, aug_flags=config.aug_flags,
         endpoint_blend_range=config.endpoint_blend_range,
+        aux_features=aux_features,
     )
     val_ds = EyelinerPatchDualDataset(
         val_records, cfg_a, cfg_b,
         augment_data=False, aug_flags=config.aug_flags,
         endpoint_blend_range=config.endpoint_blend_range,
+        aux_features=aux_features,
     )
     train_loader = DataLoader(train_ds, batch_size=config.batch_size, shuffle=True, **dl_kwargs)
     val_loader = DataLoader(val_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
@@ -124,9 +150,12 @@ def _train_single_dual_fold(
         dropout_rate=config.dropout_rate,
     )
     if config.fusion_mode != "crossfuse":
-        # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
+        # CrossFuseDualModel は base_channel/pool_width/aux を受け付けない（未対応）。
         model_kwargs["base_channel"] = config.base_channel
         model_kwargs["pool_width"] = config.pool_width
+        model_kwargs["use_aux_face_shape"] = config.use_aux_face_shape
+        model_kwargs["aux_dim"] = len(aux_features)
+        model_kwargs["use_is_upper"] = config.use_is_upper
     model = get_dual_model(config.fusion_mode, **model_kwargs).to(device)
 
     optimizer, scheduler = make_optimizer_and_scheduler(
@@ -151,15 +180,16 @@ def _train_single_dual_fold(
             y_b = batch[5].to(device)
             pq_dist = batch[12].to(device)
             pq_prime = batch[13].to(device)
+            aux = batch[14].to(device) if aux_features else None
 
             if config.fusion_mode == "attention":
-                pred_a, pred_b, alpha = model(x_a, x_b, is_upper)
+                pred_a, pred_b, alpha = model(x_a, x_b, is_upper, aux)
                 t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime)
                 t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime)
                 ens_norm = normalize_to_branch_a(ensemble_raw_t(t_a, t_b, alpha), cfg_a)
                 loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b) + loss_fn(ens_norm, y_a)
             else:
-                pred_a, pred_b = model(x_a, x_b, is_upper)
+                pred_a, pred_b = model(x_a, x_b, is_upper, aux)
                 loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b)
 
             optimizer.zero_grad()
@@ -181,9 +211,10 @@ def _train_single_dual_fold(
                 y_a = batch[4]
                 pq_dist = batch[12].to(device)
                 pq_prime = batch[13].to(device)
+                aux = batch[14].to(device) if aux_features else None
                 t_ens = model_pred_raw_t(
                     model, x_a, x_b, is_upper, config.fusion_mode,
-                    cfg_a, cfg_b, pq_dist, pq_prime,
+                    cfg_a, cfg_b, pq_dist, pq_prime, aux,
                 )
                 pred_norm = normalize_to_branch_a(t_ens, cfg_a)
                 all_preds.append(pred_norm.cpu())
@@ -242,10 +273,12 @@ def _predict_dual_records(
     _predict_records と異なり normalize_to_branch_a() による再正規化は不要
     （manifest の生 t と直接比較できる）。augment_data=False・shuffle=False の専用推論パス。
     """
+    aux_features = effective_aux_features(config)
     ds = EyelinerPatchDualDataset(
         records, cfg_a, cfg_b,
         augment_data=False, aug_flags=config.aug_flags,
         endpoint_blend_range=config.endpoint_blend_range,
+        aux_features=aux_features,
     )
     loader = DataLoader(ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs)
 
@@ -260,9 +293,10 @@ def _predict_dual_records(
             is_upper = batch[2].to(device)
             pq_dist = batch[12].to(device)
             pq_prime = batch[13].to(device)
+            aux = batch[14].to(device) if aux_features else None
             t_ens = model_pred_raw_t(
                 model, x_a, x_b, is_upper, config.fusion_mode,
-                cfg_a, cfg_b, pq_dist, pq_prime,
+                cfg_a, cfg_b, pq_dist, pq_prime, aux,
             )
             all_t_pred.append(t_ens.cpu())
 
@@ -310,9 +344,12 @@ def run_dual_kfold(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("デバイス: %s", device)
     logger.info("fusion_mode: %s  rescale_b: %s", config.fusion_mode, config.pq_rescale_mode_b)
+    aux_features = effective_aux_features(config)
 
     records = load_manifest(manifest_train)
     compute_eye_meta(records)
+    if aux_features:
+        compute_aux_face_shape_meta(records, config.db_path)
     n_train = len(records)
     train_images = sorted({r["image_path"] for r in records})
     logger.info("訓練サンプル: %d", n_train)
@@ -323,6 +360,8 @@ def run_dual_kfold(
     if manifest_test is not None and Path(manifest_test).exists():
         holdout_records = load_manifest(manifest_test)
         compute_eye_meta(holdout_records)
+        if aux_features:
+            compute_aux_face_shape_meta(holdout_records, config.db_path)
         n_holdout = len(holdout_records)
         holdout_images = sorted({r["image_path"] for r in holdout_records})
         logger.info("hold-out: %d", n_holdout)
@@ -361,6 +400,7 @@ def run_dual_kfold(
             holdout_ds = EyelinerPatchDualDataset(
                 holdout_records, cfg_a, cfg_b, augment_data=False, aug_flags=config.aug_flags,
                 endpoint_blend_range=config.endpoint_blend_range,
+                aux_features=aux_features,
             )
             holdout_loader = DataLoader(
                 holdout_ds, batch_size=config.batch_size, shuffle=False, **dl_kwargs,
@@ -378,6 +418,7 @@ def run_dual_kfold(
                     is_upper = batch[2].to(device)
                     pq_dist = batch[12].to(device)
                     pq_prime = batch[13].to(device)
+                    aux = batch[14].to(device) if aux_features else None
                     bsz = x_a.shape[0]
                     # 真値は生 t（クランプなし）を使う。batch[4]（y_a）は学習ロス用に
                     # cfg_a.label 範囲へクランプ済みのため、holdout 指標には使わない
@@ -389,7 +430,7 @@ def run_dual_kfold(
                     offset += bsz
                     t_ens = fold_ensemble_raw_t(
                         models, x_a, x_b, is_upper, config.fusion_mode,
-                        cfg_a, cfg_b, pq_dist, pq_prime,
+                        cfg_a, cfg_b, pq_dist, pq_prime, aux,
                     )
                     abs_err_raw = (t_ens - t_true_raw).abs()
                     abs_sum_raw += abs_err_raw.sum().item()
@@ -457,6 +498,9 @@ def build_dual_experiment_record(
             "aug_flags": config.aug_flags,
             "endpoint_blend_range": float(config.endpoint_blend_range),
             "loss_fn": config.loss_fn,
+            "use_aux_face_shape": config.use_aux_face_shape,
+            "aux_features": effective_aux_features(config),
+            "use_is_upper": config.use_is_upper,
         },
         "data": {
             "n_train_samples": result.n_train,

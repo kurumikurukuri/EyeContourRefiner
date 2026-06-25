@@ -16,6 +16,7 @@ from eyeliner.data.patch_utils import (
     PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
 )
+from eyeliner.data.weights import DEFAULT_AUX_FEATURES, build_aux_vector
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +40,7 @@ class BranchConfig:
 class EyelinerPatchDualDataset(Dataset):
     """2系統パッチ（枝A:生PQ / 枝B:P'Q'）を返すデータセット。
 
-    Returns 14-tuple:
+    Returns 14-tuple (use_aux_face_shape=False) or 15-tuple ([14]=aux, use_aux_face_shape=True):
         [0]  x_a             : (3, H, W) 枝A パッチ（生PQ座標系）
         [1]  x_b             : (3, H, W) 枝B パッチ（P'Q'座標系）
         [2]  is_upper        : (1,)
@@ -54,6 +55,7 @@ class EyelinerPatchDualDataset(Dataset):
         [11] point_polar_sin : (1,)
         [12] pq_dist         : (1,) 枝A（augmented）の |PQ|
         [13] pq_prime_dist   : (1,) 枝B の |P'Q'| (=eye_scale*factor)。逆変換 t'→t に使用
+        [14] aux_features    : (11,) 生 sin/cos aux ベクトル（use_aux_face_shape 時のみ）
 
     枝A は生 t_raw を予測。枝B は cfg_b.label_space により:
         "raw_t"  → 生 t_raw をクランプ（既定）
@@ -71,6 +73,8 @@ class EyelinerPatchDualDataset(Dataset):
         preload_images: bool = True,
         norm_mean: list | None = None,
         norm_std: list | None = None,
+        use_aux_face_shape: bool = False,
+        aux_features: list[str] | None = None,
     ) -> None:
         self.records = records
         self.cfg_a = cfg_a
@@ -78,6 +82,11 @@ class EyelinerPatchDualDataset(Dataset):
         self.augment_data = augment_data
         self.aug_flags = aug_flags
         self.endpoint_blend_range = endpoint_blend_range
+        self.use_aux_face_shape = use_aux_face_shape
+        # aux_features 指定時はその部分集合、未指定で use_aux_face_shape ならデフォルト11次元。
+        self.aux_features = list(aux_features) if aux_features else (
+            list(DEFAULT_AUX_FEATURES) if use_aux_face_shape else []
+        )
         self._image_cache: dict[str, np.ndarray] = {}
 
         _mean = norm_mean if norm_mean is not None else IMAGENET_MEAN
@@ -219,10 +228,17 @@ class EyelinerPatchDualDataset(Dataset):
         pq_dist_t = torch.tensor([pq_dist], dtype=torch.float32)
         pq_prime_dist_t = torch.tensor([pq_prime_dist], dtype=torch.float32)
 
-        return (
+        out = (
             x_a, x_b, is_upper, pq_ratio,
             y_a_t, y_b_t,
             weight, val_weight,
             dist_from_center, norm_eye_scale, point_polar_cos, point_polar_sin,
             pq_dist_t, pq_prime_dist_t,
         )
+        # aux ベクトルを付与（use_aux_face_shape のフル11次元、または aux_features の部分集合）。
+        # 生 sin/cos（z-score なし）。pose は DB 由来、
+        # polar / pq_angle は compute_aux_face_shape_meta が付与。
+        if self.aux_features:
+            aux = torch.tensor(build_aux_vector(rec, self.aux_features), dtype=torch.float32)
+            return (*out, aux)
+        return out

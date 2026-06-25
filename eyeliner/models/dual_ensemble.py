@@ -63,6 +63,10 @@ def save_dual_model(
         "dropout_rate": config.get("dropout_rate", 0.3),
         "base_channel": config.get("base_channel", 32),
         "pool_width": config.get("pool_width", 32),
+        "use_aux_face_shape": config.get("use_aux_face_shape", False),
+        "aux_dim": getattr(model, "aux_dim", 0),
+        "aux_features": list(config.get("aux_features") or []),
+        "use_is_upper": config.get("use_is_upper", True),
         "state_dict": model.state_dict(),
     }, path)
 
@@ -77,13 +81,22 @@ def load_dual_model(path: Path) -> nn.Module:
         use_batchnorm=ckpt.get("use_batchnorm", True),
         dropout_rate=ckpt.get("dropout_rate", 0.3),
     )
+    use_aux_face_shape = bool(ckpt.get("use_aux_face_shape", False))
     if fusion_mode != "crossfuse":
-        # CrossFuseDualModel は base_channel/pool_width を受け付けない（未対応）。
+        # CrossFuseDualModel は base_channel/pool_width/aux を受け付けない（未対応）。
         model_kwargs["base_channel"] = ckpt.get("base_channel", 32)
         model_kwargs["pool_width"] = ckpt.get("pool_width", 32)
+        model_kwargs["use_aux_face_shape"] = use_aux_face_shape
+        model_kwargs["use_is_upper"] = ckpt.get("use_is_upper", True)
+        aux_dim = ckpt.get("aux_dim")
+        if aux_dim is not None:
+            model_kwargs["aux_dim"] = aux_dim
     model = get_dual_model(fusion_mode, **model_kwargs)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
+    # 推論側が dataset に aux を渡すか知れるよう属性として保持。
+    model.use_aux_face_shape = use_aux_face_shape
+    model.aux_features = list(ckpt.get("aux_features") or [])
     return model
 
 

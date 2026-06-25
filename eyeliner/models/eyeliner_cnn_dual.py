@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 
 FUSION_MODES = ("shared", "independent", "attention")
+AUX_INPUT_DIM = 11  # pq_angle_cos/sin, polar_cos/sin, yaw/pitch/roll sin/cos, is_upper
 
 
 def _build_features(
@@ -71,8 +72,11 @@ class EyelinerCNNDual(nn.Module):
         use_sigmoid: bool = True,
         use_batchnorm: bool = True,
         dropout_rate: float = 0.3,
+        use_aux_face_shape: bool = False,
+        aux_dim: int | None = None,
         base_channel: int = 32,
         pool_width: int = 32,
+        use_is_upper: bool = True,
     ) -> None:
         super().__init__()
         if fusion_mode not in FUSION_MODES:
@@ -83,8 +87,14 @@ class EyelinerCNNDual(nn.Module):
         self.use_sigmoid = use_sigmoid
         self.use_batchnorm = use_batchnorm
         self.dropout_rate = dropout_rate
+        self.use_aux_face_shape = use_aux_face_shape
         self.base_channel = base_channel
         self.pool_width = pool_width
+        # use_is_upper=False で is_upper concat を撤去（aux に集約する設計）。
+        self.use_is_upper = use_is_upper
+        # aux_dim 指定時（サブセット選択）はその次元、未指定なら use_aux_face_shape の
+        # フル11次元（AUX_INPUT_DIM）で後方互換。
+        self.aux_dim = aux_dim if aux_dim is not None else (AUX_INPUT_DIM if use_aux_face_shape else 0)
 
         if fusion_mode == "shared":
             self.features, cnn_flat = _build_features(
@@ -99,7 +109,7 @@ class EyelinerCNNDual(nn.Module):
             )
 
         self._cnn_flat = cnn_flat
-        head_in = cnn_flat + 1  # features + is_upper
+        head_in = cnn_flat + (1 if self.use_is_upper else 0) + self.aux_dim
 
         self.head_a = _build_head(head_in, dropout_rate, use_sigmoid)
         self.head_b = _build_head(head_in, dropout_rate, use_sigmoid)
@@ -113,6 +123,7 @@ class EyelinerCNNDual(nn.Module):
         x_a: torch.Tensor,
         x_b: torch.Tensor,
         is_upper: torch.Tensor,
+        aux_features: torch.Tensor | None = None,
     ) -> tuple:
         B = x_a.size(0)
 
@@ -123,8 +134,20 @@ class EyelinerCNNDual(nn.Module):
             fa = self.features_a(x_a).view(B, -1)
             fb = self.features_b(x_b).view(B, -1)
 
-        head_in_a = torch.cat([fa, is_upper], dim=1)
-        head_in_b = torch.cat([fb, is_upper], dim=1)
+        parts_a: list[torch.Tensor] = [fa]
+        parts_b: list[torch.Tensor] = [fb]
+        if self.use_is_upper:
+            parts_a.append(is_upper)
+            parts_b.append(is_upper)
+        if self.aux_dim > 0:
+            if aux_features is None:
+                raise ValueError(
+                    f"aux_dim={self.aux_dim} だが forward に aux_features が渡されていない"
+                )
+            parts_a.append(aux_features)
+            parts_b.append(aux_features)
+        head_in_a = torch.cat(parts_a, dim=1) if len(parts_a) > 1 else fa
+        head_in_b = torch.cat(parts_b, dim=1) if len(parts_b) > 1 else fb
 
         pred_a = self.head_a(head_in_a)
         pred_b = self.head_b(head_in_b)

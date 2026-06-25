@@ -1,0 +1,24 @@
+# EXP025 A3: use_aux_face_shape（固定11次元 aux ベクトル）を concat する条件。
+# 11次元: pq_angle_cos/sin, position_polar_cos/sin, face_yaw/pitch/roll sin/cos, is_upper。
+# is_upper は aux ベクトル内に内包されるため use_is_upper=false（aux に集約する設計）。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_aux_face_shape: true
+use_is_upper: false

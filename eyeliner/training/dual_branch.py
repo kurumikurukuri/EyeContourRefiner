@@ -142,16 +142,18 @@ def model_pred_raw_t(
     cfg_b: BranchConfig,
     pq_dist: torch.Tensor,
     pq_prime_dist: torch.Tensor,
+    aux_features: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """単一モデルの2枝出力を生 t 空間で合成して返す（(B,1) 生 t）。
 
     attention 融合のみ alpha で重み付け、それ以外は単純平均。
     各枝はそれぞれの label_space に従って生 t に逆変換される。
+    aux_features は use_aux_face_shape モデルの 11次元 aux テンソル（None なら従来通り）。
     """
     if fusion_mode == "attention":
-        pred_a, pred_b, alpha = model(x_a, x_b, is_upper)
+        pred_a, pred_b, alpha = model(x_a, x_b, is_upper, aux_features)
     else:
-        pred_a, pred_b = model(x_a, x_b, is_upper)
+        pred_a, pred_b = model(x_a, x_b, is_upper, aux_features)
         alpha = None
     t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime_dist)
     t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime_dist)
@@ -168,10 +170,12 @@ def fold_ensemble_raw_t(
     cfg_b: BranchConfig,
     pq_dist: torch.Tensor,
     pq_prime_dist: torch.Tensor,
+    aux_features: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """複数 fold モデルの生 t 予測を平均する（(B,1) 生 t）。"""
     preds = [
-        model_pred_raw_t(m, x_a, x_b, is_upper, fusion_mode, cfg_a, cfg_b, pq_dist, pq_prime_dist)
+        model_pred_raw_t(m, x_a, x_b, is_upper, fusion_mode, cfg_a, cfg_b,
+                         pq_dist, pq_prime_dist, aux_features)
         for m in models
     ]
     return torch.stack(preds).mean(0)
