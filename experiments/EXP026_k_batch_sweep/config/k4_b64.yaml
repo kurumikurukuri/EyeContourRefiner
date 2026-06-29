@@ -1,0 +1,22 @@
+# EXP026 k4_b64: k×batch sweep。k=4, batch=64。
+# 他は全て EXP025 A0 (= EXP024 bc32_pw8 baseline) に固定。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 64
+k: 4
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
