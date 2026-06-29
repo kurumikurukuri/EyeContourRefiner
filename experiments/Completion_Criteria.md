@@ -86,3 +86,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP022_channel_pool_sweep | bc16_pw16 | 8372 | 88.27 | 85.08 |
 | EXP024_retrain_bc32_pw8 | bc32_pw8 | 8372 | 88.70 | 85.40 |
 | EXP025_aux_redesign | A2 | 8372 | 88.44 | 85.24 |
+| EXP026_k_batch_sweep | k5_b64 | 8372 | 88.72 | 85.73 |
