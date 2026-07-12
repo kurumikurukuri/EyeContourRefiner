@@ -30,7 +30,7 @@ from annotator import db as _db  # noqa: E402
 
 FIELDNAMES = [
     "idx", "image_path", "face_index", "part_name", "sub_key", "point_index",
-    "px", "py", "qx", "qy", "t",
+    "px", "py", "qx", "qy", "t", "nose_x", "nose_y",
 ]
 
 
@@ -50,6 +50,8 @@ def _load_annotated_rows(db_path: Path) -> List[Dict[str, Any]]:
             "qx":          s["qx"],
             "qy":          s["qy"],
             "t":           s["t"],
+            "nose_x":      s.get("nose_x"),
+            "nose_y":      s.get("nose_y"),
         }
         for s in annotated
     ]

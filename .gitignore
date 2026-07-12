@@ -52,3 +52,6 @@ htmlcov/
 
 # Experiment run logs
 experiments/*/log.txt
+
+# Notebook caches
+notebooks/.cache/

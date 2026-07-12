@@ -58,6 +58,8 @@ _ADDITIONAL_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("eye_scale",     "REAL"),  # (image_path, face_index, part_name) のPQバウンディングボックス対角長
     ("norm_eye_scale","REAL"),  # eye_scale / sqrt(img_w^2 + img_h^2)
     ("lap_var",       "REAL"),  # 目領域のラプラシアン分散（ブレ指標）
+    ("nose_x",        "REAL"),  # MediaPipe face mesh landmark #4 (鼻先) x 座標 [px]
+    ("nose_y",        "REAL"),  # MediaPipe face mesh landmark #4 (鼻先) y 座標 [px]
 )
 
 
@@ -296,14 +298,20 @@ def _sample_to_row(s: Dict[str, Any]) -> Tuple[Any, ...]:
         _optional_float(s.get("face_yaw")),
         _optional_float(s.get("face_pitch")),
         _optional_float(s.get("face_roll")),
+        _optional_float(s.get("eye_scale")),
+        _optional_float(s.get("norm_eye_scale")),
+        _optional_float(s.get("lap_var")),
+        _optional_float(s.get("nose_x")),
+        _optional_float(s.get("nose_y")),
     )
 
 
 _INSERT_COLUMNS = (
     "idx, image_path, face_index, part_name, sub_key, point_index, "
-    "px, py, qx, qy, t, skip_flag, face_yaw, face_pitch, face_roll"
+    "px, py, qx, qy, t, skip_flag, face_yaw, face_pitch, face_roll, "
+    "eye_scale, norm_eye_scale, lap_var, nose_x, nose_y"
 )
-_INSERT_PLACEHOLDERS = ", ".join(["?"] * 15)
+_INSERT_PLACEHOLDERS = ", ".join(["?"] * 20)
 
 
 def replace_all_samples(

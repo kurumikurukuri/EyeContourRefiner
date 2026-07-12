@@ -15,6 +15,8 @@ from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, a
 from eyeliner.data.patch_utils import (
     PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
+    compute_t_from_point, reconstruct_point,
+    homography_from_pitch_yaw, warp_pq_with_homography,
 )
 from eyeliner.data.weights import DEFAULT_AUX_FEATURES, build_aux_vector
 
@@ -75,8 +77,10 @@ class EyelinerPatchDualDataset(Dataset):
         norm_std: list | None = None,
         use_aux_face_shape: bool = False,
         aux_features: list[str] | None = None,
+        perspective_alpha: float = 2.0,
     ) -> None:
         self.records = records
+        self.perspective_alpha = perspective_alpha
         self.cfg_a = cfg_a
         self.cfg_b = cfg_b
         self.augment_data = augment_data
@@ -134,6 +138,34 @@ class EyelinerPatchDualDataset(Dataset):
         # Branch A の augmented |PQ|（t'→t 逆変換・記録用）
         pq_dist = math.hypot(qx_a - px_a, qy_a - py_a)
 
+        # 面外回転（pitch/yaw）透視変換 aug。
+        # 展開済みレコードに _persp_dp/_persp_dy タグがある場合のみ適用（train 専用）。
+        H_persp: np.ndarray | None = None
+        if self.augment_data and "_persp_dp" in rec:
+            dp_deg = float(rec["_persp_dp"])
+            dy_deg = float(rec["_persp_dy"])
+            if rec.get("nose_x") is not None and rec.get("nose_y") is not None:
+                # 鼻先（顔中心）を pivot にした回転。目領域の orbit 移動を含む。
+                cx = float(rec["nose_x"])
+                cy = float(rec["nose_y"])
+                eye_scale = float(rec.get("eye_scale", 1.0))
+                H_persp = homography_from_pitch_yaw(dp_deg, dy_deg, cx, cy, eye_scale, alpha=self.perspective_alpha)
+                # R を現在の t から復元し、P, Q, R を一括ワープ
+                rx_a, ry_a = reconstruct_point(px_a, py_a, qx_a, qy_a, t_aug)
+                px_a, py_a, qx_a, qy_a, rx_a, ry_a = warp_pq_with_homography(
+                    H_persp, px_a, py_a, qx_a, qy_a, rx_a, ry_a
+                )
+                # ワープ後の t を再計算（透視変換は比率非保存のため t' ≠ t）
+                t_aug = compute_t_from_point(px_a, py_a, qx_a, qy_a, rx_a, ry_a)
+                pq_dist = math.hypot(qx_a - px_a, qy_a - py_a)
+            else:
+                # nose 座標が未抽出のレコードは homography をスキップ。
+                # 事前に extract_nose_coords.py を実行していれば到達しない。
+                logger.warning(
+                    "nose_x/nose_y が未設定のため perspective aug をスキップ: idx=%s image=%s",
+                    rec.get("idx", "?"), rec.get("image_path", "?"),
+                )
+
         # Branch B: compute P'Q' from (augmented) branch A endpoints.
         # t_aug (unclamped) is passed to get correct P'Q' positions and t'.
         if self.cfg_b.pq_rescale_mode != "none":
@@ -174,6 +206,7 @@ class EyelinerPatchDualDataset(Dataset):
                 t_min=self.cfg_a.patch_t_min,
                 t_max=self.cfg_a.patch_t_max,
                 perp_scale=self.cfg_a.patch_perp_scale,
+                H=H_persp,
             )
             patch_b = extract_patch(
                 image, px_b, py_b, qx_b, qy_b,
@@ -181,6 +214,7 @@ class EyelinerPatchDualDataset(Dataset):
                 t_min=self.cfg_b.patch_t_min,
                 t_max=self.cfg_b.patch_t_max,
                 perp_scale=self.cfg_b.patch_perp_scale,
+                H=H_persp,
             )
 
         if self.augment_data:

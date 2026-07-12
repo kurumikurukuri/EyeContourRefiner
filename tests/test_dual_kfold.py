@@ -13,11 +13,13 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
+from unittest import mock
 
 import cv2
 import numpy as np
 import pytest
 
+import eyeliner.training.dual_kfold as dual_kfold_module
 from eyeliner.training.dual_kfold import (
     DualKfoldResult,
     DualTrainConfig,
@@ -196,3 +198,96 @@ class TestBuildDualExperimentRecord:
         results = record["results"]
         assert len(results["cv_folds"]) == 2
         assert results["holdout_mae"] is not None
+
+
+class TestDualKfoldResume:
+    """中断からのリジューム機能。EXP027 が実際に使う経路なので優先的に検証する。"""
+
+    def test_no_checkpoint_files_remain_after_successful_run(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "resume_clean"
+        run_dual_kfold(manifest_train, manifest_test, exp_dir, _fast_config(epochs=2))
+
+        assert list(exp_dir.glob("checkpoint_fold*.pt")) == []
+
+    def test_resume_does_not_retrain_already_saved_epochs(self, tmp_path, manifests):
+        """途中エポックのチェックポイント保存直後にクラッシュしても、
+        再実行時に完了済みエポックを再学習しないことを確認する。
+        """
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "resume_epoch"
+        config = _fast_config(epochs=4, patience=10)
+
+        recorded: list[tuple[str, int]] = []
+        real_save_checkpoint = dual_kfold_module.save_checkpoint
+        state = {"raised": False}
+
+        def flaky_save_checkpoint(path, *, epoch, **kwargs):
+            real_save_checkpoint(path, epoch=epoch, **kwargs)
+            recorded.append((Path(path).name, epoch))
+            if not state["raised"] and Path(path).name == "checkpoint_fold1.pt" and epoch == 2:
+                state["raised"] = True
+                raise RuntimeError("simulated crash")
+
+        with mock.patch.object(dual_kfold_module, "save_checkpoint", side_effect=flaky_save_checkpoint):
+            with pytest.raises(RuntimeError, match="simulated crash"):
+                run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+            fold1_ckpt = dual_kfold_module.load_checkpoint(exp_dir / "checkpoint_fold1.pt")
+            assert fold1_ckpt is not None
+            assert fold1_ckpt["epoch"] == 2
+
+            result = run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        fold1_epochs = [e for name, e in recorded if name == "checkpoint_fold1.pt"]
+        assert fold1_epochs == [1, 2, 3, 4]
+        assert len(result.fold_results) == config.k
+        assert not (exp_dir / "checkpoint_fold1.pt").exists()
+        assert not (exp_dir / "checkpoint_fold2.pt").exists()
+
+    def test_rerun_skips_fully_completed_folds(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "resume_skip"
+        config = _fast_config(epochs=1)
+
+        first = run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        call_log: list[int] = []
+        real_train_fold = dual_kfold_module._train_single_dual_fold
+
+        def spy_train_fold(*args, **kwargs):
+            call_log.append(args[2])
+            return real_train_fold(*args, **kwargs)
+
+        with mock.patch.object(dual_kfold_module, "_train_single_dual_fold", side_effect=spy_train_fold):
+            second = run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        assert call_log == []
+        assert [r.best_val_mae for r in second.fold_results] == [r.best_val_mae for r in first.fold_results]
+
+    def test_resume_false_forces_full_retrain(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "resume_disabled"
+        config = _fast_config(epochs=1)
+
+        run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        call_log: list[int] = []
+        real_train_fold = dual_kfold_module._train_single_dual_fold
+
+        def spy_train_fold(*args, **kwargs):
+            call_log.append(args[2])
+            return real_train_fold(*args, **kwargs)
+
+        with mock.patch.object(dual_kfold_module, "_train_single_dual_fold", side_effect=spy_train_fold):
+            run_dual_kfold(manifest_train, manifest_test, exp_dir, config, resume=False)
+
+        assert call_log == [1, 2]
+
+    def test_progress_file_records_completed_folds(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "resume_progress"
+        run_dual_kfold(manifest_train, manifest_test, exp_dir, _fast_config(epochs=1))
+
+        progress_path = exp_dir / "dual_kfold_progress.json"
+        assert progress_path.exists()

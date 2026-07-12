@@ -221,6 +221,10 @@ def _extract_samples_from_image(
         else:
             face_yaw = face_pitch = face_roll = None
 
+        # MediaPipe face mesh landmark #4 = 鼻先（顔中心 pivot 用）
+        nose_x = float(coords[4][0])
+        nose_y = float(coords[4][1])
+
         for part_name, sub_map in EYELINER_SAMPLES_MAP.items():
             for sub_key, index_list in sub_map.items():
                 point_index = 0
@@ -243,6 +247,8 @@ def _extract_samples_from_image(
                         "face_yaw": face_yaw,
                         "face_pitch": face_pitch,
                         "face_roll": face_roll,
+                        "nose_x": nose_x,
+                        "nose_y": nose_y,
                     })
                     point_index += 1
 
