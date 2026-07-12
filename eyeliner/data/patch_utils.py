@@ -70,6 +70,108 @@ def get_norm_stats(norm_type: str, stats_json_path=None) -> tuple[list, list]:
     raise ValueError(f"未知の norm_type: {norm_type!r}  選択肢: {NORM_TYPE_CHOICES}")
 
 
+def homography_from_pitch_yaw(
+    dp_deg: float,
+    dy_deg: float,
+    cx: float,
+    cy: float,
+    eye_scale: float,
+    alpha: float = 2.0,
+) -> np.ndarray:
+    """Homography for a planar face patch rotating (pitch/yaw) about its own center.
+
+    Models a FIXED camera viewing a fronto-parallel plane (the eye region) that
+    tilts in 3D about the 3D point projecting to (cx, cy) — i.e. the eye stays
+    put on the sensor while its apparent shape foreshortens (keystone effect).
+    This is the correct convention for "simulate the face turning in place".
+
+    It intentionally differs from a camera-rotation homography (H = K·R·K⁻¹,
+    which pans the optical axis): that formulation does NOT fix (cx, cy) when
+    rotation is nonzero, so for a fixed rotation angle its pivot drifts by
+    f·tan(angle) — growing unboundedly as alpha increases, instead of the
+    bounded, orthographic-limit distortion this function guarantees.
+
+    Rotation axes: pitch = around horizontal image axis (X), yaw = around vertical image axis (Y).
+    Focal length f = alpha * eye_scale sets the virtual depth of the image plane:
+    larger alpha (more distant / more telephoto) → weaker keystone effect,
+    converging to a pure affine foreshortening (scale by cos(angle), no shift)
+    as alpha → ∞. Smaller alpha (closer / wider-angle) → stronger, more visible
+    perspective distortion.
+
+    Args:
+        dp_deg: Pitch angle in degrees (rotation around horizontal X axis).
+        dy_deg: Yaw angle in degrees (rotation around vertical Y axis).
+        cx, cy: Eye center (rotation pivot) in image pixels.
+        eye_scale: Eye scale in pixels (bounding-box diagonal).
+        alpha: Focal length multiplier (f = alpha * eye_scale). Default 2.0.
+
+    Returns:
+        H: (3, 3) float64 homography matrix. H = I when dp_deg = dy_deg = 0.
+        H always fixes (cx, cy): H @ [cx, cy, 1]^T ∝ [cx, cy, 1]^T.
+    """
+    f = max(alpha * eye_scale, 1.0)
+
+    dp = math.radians(dp_deg)
+    dy = math.radians(dy_deg)
+
+    cos_p, sin_p = math.cos(dp), math.sin(dp)
+    Rx = np.array(
+        [[1.0, 0.0, 0.0], [0.0, cos_p, -sin_p], [0.0, sin_p, cos_p]],
+        dtype=np.float64,
+    )
+    cos_y, sin_y = math.cos(dy), math.sin(dy)
+    Ry = np.array(
+        [[cos_y, 0.0, sin_y], [0.0, 1.0, 0.0], [-sin_y, 0.0, cos_y]],
+        dtype=np.float64,
+    )
+
+    R = Ry @ Rx
+
+    # Homography (in coordinates relative to the pivot) for a plane rotating by
+    # R about a point at depth f along the principal ray, viewed by a pinhole
+    # camera with focal length f: [u2;v2;1] ~ H_rel @ [u1;v1;1]. By
+    # construction H_rel(0,0) = (0,0), i.e. the pivot is a fixed point.
+    H_rel = np.array([
+        [R[0, 0], R[0, 1], 0.0],
+        [R[1, 0], R[1, 1], 0.0],
+        [R[2, 0] / f, R[2, 1] / f, 1.0],
+    ], dtype=np.float64)
+
+    T = np.array([[1.0, 0.0, cx], [0.0, 1.0, cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    T_inv = np.array([[1.0, 0.0, -cx], [0.0, 1.0, -cy], [0.0, 0.0, 1.0]], dtype=np.float64)
+    return T @ H_rel @ T_inv
+
+
+def warp_pq_with_homography(
+    H: np.ndarray,
+    px: float,
+    py: float,
+    qx: float,
+    qy: float,
+    rx: float,
+    ry: float,
+) -> Tuple[float, float, float, float, float, float]:
+    """Apply homography H to P, Q, R using homogeneous coordinates.
+
+    Args:
+        H: (3, 3) homography matrix.
+        px, py: Landmark P in image pixel coordinates.
+        qx, qy: Landmark Q in image pixel coordinates.
+        rx, ry: Point R = t·P + (1-t)·Q in image pixel coordinates.
+
+    Returns:
+        (px', py', qx', qy', rx', ry'): Warped coordinates.
+    """
+    def _apply(x: float, y: float) -> Tuple[float, float]:
+        v = H @ np.array([x, y, 1.0], dtype=np.float64)
+        return float(v[0] / v[2]), float(v[1] / v[2])
+
+    px_, py_ = _apply(px, py)
+    qx_, qy_ = _apply(qx, qy)
+    rx_, ry_ = _apply(rx, ry)
+    return px_, py_, qx_, qy_, rx_, ry_
+
+
 def extract_patch(
     image: np.ndarray,
     px: float,
@@ -80,6 +182,7 @@ def extract_patch(
     t_min: float = T_MIN,
     t_max: float = T_MAX,
     perp_scale: float = 1.0,
+    H: np.ndarray | None = None,
 ) -> np.ndarray:
     """
     Extract a rotated ROI patch aligned along P->Q, covering t ∈ [t_min, t_max].
@@ -127,11 +230,25 @@ def extract_patch(
         [-uy * actual_perp,     ux * actual_perp,       actual_perp * (uy * sx - ux * sy) + patch_h // 2],
     ])
 
-    patch = cv2.warpAffine(
-        image, M, (patch_w, patch_h),
-        flags=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_REFLECT_101,
-    )
+    if H is not None:
+        # Fused perspective warp: M_fused = M_affine_3×3 @ H.
+        # M_affine maps warped-image coords (P', Q') to patch coords.
+        # Composing with H maps original-image coords to patch coords in one step.
+        M_3x3 = np.zeros((3, 3), dtype=np.float64)
+        M_3x3[:2, :] = M.astype(np.float64)
+        M_3x3[2, :] = [0.0, 0.0, 1.0]
+        M_fused = M_3x3 @ H.astype(np.float64)
+        patch = cv2.warpPerspective(
+            image, M_fused, (patch_w, patch_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
+    else:
+        patch = cv2.warpAffine(
+            image, M, (patch_w, patch_h),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REFLECT_101,
+        )
     return patch.astype(np.float32) / 255.0
 
 

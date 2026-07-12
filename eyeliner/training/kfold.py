@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import gc
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
 from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
 from eyeliner.models.ensemble import build_model, load_model, save_model
+from eyeliner.training.checkpoint import load_checkpoint, remove_checkpoint, save_checkpoint
 from eyeliner.training.oof import OofPrediction
 from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import (
@@ -24,6 +26,32 @@ from eyeliner.training.trainer import (
 )
 
 logger = logging.getLogger(__name__)
+
+_PROGRESS_FILENAME = "kfold_progress.json"
+
+
+def _load_progress(exp_dir: Path) -> dict[int, "FoldResult"]:
+    """exp_dir の進捗ファイルから完了済み fold の結果を読み込む（無ければ空 dict）。"""
+    path = exp_dir / _PROGRESS_FILENAME
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {int(k): FoldResult(**v) for k, v in data.items()}
+
+
+def _save_progress(exp_dir: Path, completed: dict[int, "FoldResult"]) -> None:
+    """完了済み fold の結果を進捗ファイルに書き出す（次回起動時のスキップ判定用）。"""
+    path = exp_dir / _PROGRESS_FILENAME
+    data = {
+        str(k): {
+            "fold_idx": v.fold_idx,
+            "best_val_mae": v.best_val_mae,
+            "best_epoch": v.best_epoch,
+            "model_path": v.model_path,
+        }
+        for k, v in completed.items()
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 @dataclass
@@ -150,12 +178,17 @@ def _train_single_fold(
     dl_kwargs: dict,
     use_transfer: bool,
     effective_freeze: int,
+    resume: bool = True,
 ) -> FoldResult:
     """1 Fold 分の訓練を実行し、ベストモデル（val_mae 最小エポック）を exp_dir に保存する。
 
     OOF 予測の生成はこの関数の責務外（_predict_records を別途呼ぶこと）。
     train_records/val_records は早期終了の判定にのみ使われ、保存されるモデルは
     val_records を一切学習に使わない。
+
+    resume=True かつ exp_dir に checkpoint_fold{fold_idx}.pt が残っている場合、
+    そのエポックから学習を再開する（中断復旧用）。Fold が正常完了すると
+    チェックポイントは削除される。
     """
     train_ds = EyelinerPatchDataset(
         train_records, augment_data=True,
@@ -250,8 +283,36 @@ def _train_single_fold(
     no_improve = 0
     best_epoch = 0
     phase_switched = False
+    start_epoch = 0
+    model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
+    checkpoint_path = exp_dir / f"checkpoint_fold{fold_idx}.pt"
 
-    for epoch in range(config.epochs):
+    ckpt = load_checkpoint(checkpoint_path) if resume else None
+    if ckpt is not None:
+        start_epoch = ckpt["epoch"]
+        best_mae = ckpt["best_mae"]
+        best_epoch = ckpt["best_epoch"]
+        no_improve = ckpt["no_improve"]
+        if bool(ckpt["extra"].get("phase_switched", False)) and effective_freeze > 0:
+            # Phase 2（fine-tuning）に切り替わった状態から再開する場合、
+            # optimizer/scheduler を fine-tuning フェーズの構造で作り直してから
+            # state_dict をロードする（freeze フェーズの optimizer とは形が異なるため）。
+            remaining = config.epochs - effective_freeze
+            model.unfreeze_backbone()
+            optimizer, scheduler = make_optimizer_and_scheduler(
+                model, "finetune", config.lr, config.weight_decay,
+                len(train_loader), remaining,
+            )
+            phase_switched = True
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        logger.info(
+            "Fold %d: チェックポイントから再開 (epoch %d〜, best_mae=%.6f)",
+            fold_idx, start_epoch + 1, best_mae,
+        )
+
+    for epoch in range(start_epoch, config.epochs):
 
         # Phase 2 切り替え
         if effective_freeze > 0 and not phase_switched and epoch >= effective_freeze:
@@ -306,21 +367,28 @@ def _train_single_fold(
             best_mae = result.val_mae
             best_epoch = epoch + 1
             no_improve = 0
-            model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
             save_model(model, config.backbone, model_path)
         else:
             no_improve += 1
-            if no_improve >= config.patience:
-                logger.info("Early stopping triggered (fold %d)", fold_idx)
-                break
+
+        save_checkpoint(
+            checkpoint_path, epoch=epoch + 1, model=model, optimizer=optimizer,
+            scheduler=scheduler, best_mae=best_mae, best_epoch=best_epoch,
+            no_improve=no_improve, extra={"phase_switched": phase_switched},
+        )
+
+        if no_improve >= config.patience:
+            logger.info("Early stopping triggered (fold %d)", fold_idx)
+            break
 
     fold_result = FoldResult(
         fold_idx=fold_idx,
         best_val_mae=best_mae,
         best_epoch=best_epoch,
-        model_path=str(exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"),
+        model_path=str(model_path),
     )
     logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold_idx, best_mae, best_epoch)
+    remove_checkpoint(checkpoint_path)
 
     del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
     if torch.cuda.is_available():
@@ -339,6 +407,7 @@ def run_kfold(
     max_train_samples: int | None = None,
     mid_t_keep_ratio: float = 1.0,
     db_path: "str | Path | None" = None,
+    resume: bool = True,
 ) -> list[FoldResult]:
     """K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
 
@@ -350,6 +419,9 @@ def run_kfold(
         holdout_path:      Hold-out セットのパス（現在は未使用、Phase 2 で利用）
         max_train_samples: 訓練サンプル上限（None = 全件使用）。超過時はシード固定ランダムサブサンプリング
         mid_t_keep_ratio:  0.5 < t < 0.9 サンプルの保持率（1.0 = 全件保持）
+        resume:            True の場合、exp_dir に残る進捗ファイル・チェックポイントから
+                            再開する（完了済み fold はスキップ、中断中の fold は
+                            エポック単位で再開）。False なら完全に最初から学習する。
 
     Returns:
         list[FoldResult] — 各 Fold の結果
@@ -407,20 +479,34 @@ def run_kfold(
         splits = list(kf.split(records, groups=groups))
 
     dl_kwargs = {"num_workers": config.num_workers, "persistent_workers": config.num_workers > 0}
+    completed_folds = _load_progress(exp_dir) if resume else {}
     fold_results: list[FoldResult] = []
 
     for fold, (train_idx, val_idx) in enumerate(splits):
-        logger.info("\n===== Fold %d/%d =====", fold + 1, k_folds)
+        fold_idx = fold + 1
+
+        if fold_idx in completed_folds:
+            logger.info(
+                "Fold %d/%d: 完了済み (best_val_mae=%.6f) のためスキップ",
+                fold_idx, k_folds, completed_folds[fold_idx].best_val_mae,
+            )
+            fold_results.append(completed_folds[fold_idx])
+            continue
+
+        logger.info("\n===== Fold %d/%d =====", fold_idx, k_folds)
 
         train_records = [records[i] for i in train_idx]
         val_records = [records[i] for i in val_idx]
 
         fold_result = _train_single_fold(
-            train_records, val_records, fold + 1, exp_dir, config,
+            train_records, val_records, fold_idx, exp_dir, config,
             label_range, device, dl_kwargs,
             use_transfer, effective_freeze,
+            resume=resume,
         )
         fold_results.append(fold_result)
+        completed_folds[fold_idx] = fold_result
+        _save_progress(exp_dir, completed_folds)
 
     # K-Fold サマリー
     mean_mae = float(np.mean([r.best_val_mae for r in fold_results]))

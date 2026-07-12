@@ -10,7 +10,9 @@ manifest パス・出力先をすべて明示的な引数で受け取る。
 from __future__ import annotations
 
 import gc
+import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +35,11 @@ from eyeliner.models.dual_ensemble import (
     load_dual_model,
     save_dual_model,
 )
+from eyeliner.training.checkpoint import (
+    load_checkpoint,
+    remove_checkpoint,
+    save_checkpoint,
+)
 from eyeliner.training.dual_branch import (
     branch_pred_to_raw_t,
     build_branch_configs,
@@ -47,6 +54,76 @@ from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import set_seed
 
 logger = logging.getLogger(__name__)
+
+_PROGRESS_FILENAME = "dual_kfold_progress.json"
+
+
+def _load_dual_progress(exp_dir: Path) -> dict[int, FoldResult]:
+    """exp_dir の進捗ファイルから完了済み fold の結果を読み込む（無ければ空 dict）。"""
+    path = exp_dir / _PROGRESS_FILENAME
+    if not path.exists():
+        return {}
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return {int(k): FoldResult(**v) for k, v in data.items()}
+
+
+def _save_dual_progress(exp_dir: Path, completed: dict[int, FoldResult]) -> None:
+    """完了済み fold の結果を進捗ファイルに書き出す（次回起動時のスキップ判定用）。"""
+    path = exp_dir / _PROGRESS_FILENAME
+    data = {
+        str(k): {
+            "fold_idx": v.fold_idx,
+            "best_val_mae": v.best_val_mae,
+            "best_epoch": v.best_epoch,
+            "model_path": v.model_path,
+        }
+        for k, v in completed.items()
+    }
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# EXP027: 8 方向の透視変換パターン（軸 4 方向 + 対角 4 方向、各 5° 相当）。
+# (dp_deg, dy_deg): pitch（水平軸回り） × yaw（垂直軸回り）の角度 [degree]。
+_D5 = 5.0 / math.sqrt(2)  # 対角成分: 5/√2° ≈ 3.54°
+PERSPECTIVE_PATTERNS_8: list[tuple[float, float]] = [
+    (5.0,  0.0),   # pitch up
+    (-5.0, 0.0),   # pitch down
+    (0.0,  5.0),   # yaw right
+    (0.0, -5.0),   # yaw left
+    (_D5,  _D5),   # diagonal ++
+    (_D5, -_D5),   # diagonal +-
+    (-_D5, _D5),   # diagonal -+
+    (-_D5, -_D5),  # diagonal --
+]
+
+
+def expand_perspective_records(
+    records: list[dict],
+    patterns: list[tuple[float, float]],
+) -> list[dict]:
+    """各レコードを base + len(patterns) 複製に展開する（透視変換 aug 用）。
+
+    各複製に {"_persp_dp": dp_deg, "_persp_dy": dy_deg} タグを付与する。
+    base レコード（タグ無し）が先頭に来る順序を保証する。
+    patterns が空の場合は records をそのまま返す。
+
+    Args:
+        records: 展開前のレコードリスト。
+        patterns: (dp_deg, dy_deg) のタプルリスト。
+
+    Returns:
+        展開後のレコードリスト（長さ: len(records) × (1 + len(patterns))）。
+    """
+    if not patterns:
+        return records
+    expanded: list[dict] = []
+    for rec in records:
+        expanded.append(rec)
+        for dp_deg, dy_deg in patterns:
+            aug_rec = dict(rec)
+            aug_rec["_persp_dp"] = dp_deg
+            aug_rec["_persp_dy"] = dy_deg
+            expanded.append(aug_rec)
+    return expanded
 
 
 @dataclass
@@ -79,6 +156,13 @@ class DualTrainConfig:
     aux_features: list = field(default_factory=list)
     use_is_upper: bool = True
     db_path: str = "data/samples.db"
+    # 面外回転透視変換オーグメンテーション。
+    # True の場合、鼻先（顔中心）を homography の回転中心に使う（orbit 移動を含む）。
+    # False（デフォルト）では眼中心を pivot にする（foreshortening のみ、位置不変）。
+    perspective_aug: bool = False
+    perspective_alpha: float = 2.0
+    # perspective_patterns: 空 = 無効, 非空 = PERSPECTIVE_PATTERNS_8 などを渡す。
+    perspective_patterns: list = field(default_factory=list)
 
 
 def effective_aux_features(config: DualTrainConfig) -> list[str]:
@@ -118,12 +202,17 @@ def _train_single_dual_fold(
     cfg_b: BranchConfig,
     device: torch.device,
     dl_kwargs: dict,
+    resume: bool = True,
 ) -> FoldResult:
     """1 Fold 分のデュアルブランチ訓練を実行し、ベストモデル（val_mae 最小エポック）を保存する。
 
     OOF 予測の生成はこの関数の責務外（_predict_dual_records を別途呼ぶこと）。
     train_records/val_records は早期終了の判定にのみ使われ、保存されるモデルは
     val_records を一切学習に使わない。
+
+    resume=True かつ exp_dir に checkpoint_fold{fold_idx}.pt が残っている場合、
+    そのエポックから学習を再開する（中断復旧用）。Fold が正常完了すると
+    チェックポイントは削除される。
     """
     loss_fn = get_loss_fn(config.loss_fn)
     aux_features = effective_aux_features(config)
@@ -133,6 +222,7 @@ def _train_single_dual_fold(
         augment_data=True, aug_flags=config.aug_flags,
         endpoint_blend_range=config.endpoint_blend_range,
         aux_features=aux_features,
+        perspective_alpha=config.perspective_alpha,
     )
     val_ds = EyelinerPatchDualDataset(
         val_records, cfg_a, cfg_b,
@@ -166,9 +256,25 @@ def _train_single_dual_fold(
     best_mae = float("inf")
     no_improve = 0
     best_epoch = 0
+    start_epoch = 0
     model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
+    checkpoint_path = exp_dir / f"checkpoint_fold{fold_idx}.pt"
 
-    for epoch in range(config.epochs):
+    ckpt = load_checkpoint(checkpoint_path) if resume else None
+    if ckpt is not None:
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        start_epoch = ckpt["epoch"]
+        best_mae = ckpt["best_mae"]
+        best_epoch = ckpt["best_epoch"]
+        no_improve = ckpt["no_improve"]
+        logger.info(
+            "Fold %d: チェックポイントから再開 (epoch %d〜, best_mae=%.6f)",
+            fold_idx, start_epoch + 1, best_mae,
+        )
+
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         total_loss = 0.0
         n_batches = 0
@@ -237,9 +343,16 @@ def _train_single_dual_fold(
             save_dual_model(model, config.fusion_mode, config.__dict__, model_path)
         else:
             no_improve += 1
-            if no_improve >= config.patience:
-                logger.info("Early stopping (fold %d, epoch %d)", fold_idx, epoch + 1)
-                break
+
+        save_checkpoint(
+            checkpoint_path, epoch=epoch + 1, model=model, optimizer=optimizer,
+            scheduler=scheduler, best_mae=best_mae, best_epoch=best_epoch,
+            no_improve=no_improve,
+        )
+
+        if no_improve >= config.patience:
+            logger.info("Early stopping (fold %d, epoch %d)", fold_idx, epoch + 1)
+            break
 
     fold_result = FoldResult(
         fold_idx=fold_idx,
@@ -248,6 +361,7 @@ def _train_single_dual_fold(
         model_path=str(model_path),
     )
     logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold_idx, best_mae, best_epoch)
+    remove_checkpoint(checkpoint_path)
 
     del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
     if torch.cuda.is_available():
@@ -325,6 +439,7 @@ def run_dual_kfold(
     manifest_test: str | Path | None,
     exp_dir: str | Path,
     config: DualTrainConfig,
+    resume: bool = True,
 ) -> DualKfoldResult:
     """デュアルブランチ K-Fold CV 訓練を実行し、各 Fold のベストモデルを exp_dir に保存する。
 
@@ -333,6 +448,9 @@ def run_dual_kfold(
         manifest_test:  Hold-out 用 manifest.csv のパス（None ならホールドアウト評価をスキップ）
         exp_dir:        モデル・experiment.json を保存するディレクトリ
         config:         訓練設定
+        resume:         True の場合、exp_dir に残る進捗ファイル・チェックポイントから
+                         再開する（完了済み fold はスキップ、中断中の fold は
+                         エポック単位で再開）。False なら完全に最初から学習する。
 
     Returns:
         DualKfoldResult
@@ -377,15 +495,41 @@ def run_dual_kfold(
     kf = GroupKFold(n_splits=config.k)
     splits = list(kf.split(records, groups=groups))
 
+    completed_folds = _load_dual_progress(exp_dir) if resume else {}
     fold_results: list[FoldResult] = []
 
     for fold, (train_idx, val_idx) in enumerate(splits):
-        logger.info("----- Fold %d/%d -----", fold + 1, config.k)
+        fold_idx = fold + 1
+
+        if fold_idx in completed_folds:
+            logger.info(
+                "Fold %d/%d: 完了済み (best_val_mae=%.6f) のためスキップ",
+                fold_idx, config.k, completed_folds[fold_idx].best_val_mae,
+            )
+            fold_results.append(completed_folds[fold_idx])
+            continue
+
+        logger.info("----- Fold %d/%d -----", fold_idx, config.k)
+        train_records = [records[i] for i in train_idx]
+        val_records = [records[i] for i in val_idx]
+
+        # EXP027: 透視変換 aug → train のみ展開（val は無展開）。
+        if config.perspective_aug and config.perspective_patterns:
+            n_before = len(train_records)
+            train_records = expand_perspective_records(train_records, config.perspective_patterns)
+            logger.info(
+                "Fold %d: train 展開 %d → %d（×%d）",
+                fold_idx, n_before, len(train_records), 1 + len(config.perspective_patterns),
+            )
+
         fold_result = _train_single_dual_fold(
-            [records[i] for i in train_idx], [records[i] for i in val_idx],
-            fold + 1, exp_dir, config, cfg_a, cfg_b, device, dl_kwargs,
+            train_records, val_records,
+            fold_idx, exp_dir, config, cfg_a, cfg_b, device, dl_kwargs,
+            resume=resume,
         )
         fold_results.append(fold_result)
+        completed_folds[fold_idx] = fold_result
+        _save_dual_progress(exp_dir, completed_folds)
 
     mean_mae = float(np.mean([r.best_val_mae for r in fold_results]))
     logger.info("CV MAE: %.6f", mean_mae)
@@ -501,6 +645,9 @@ def build_dual_experiment_record(
             "use_aux_face_shape": config.use_aux_face_shape,
             "aux_features": effective_aux_features(config),
             "use_is_upper": config.use_is_upper,
+            "perspective_aug": config.perspective_aug,
+            "perspective_alpha": config.perspective_alpha,
+            "n_perspective_patterns": len(config.perspective_patterns),
         },
         "data": {
             "n_train_samples": result.n_train,

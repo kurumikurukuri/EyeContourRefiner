@@ -49,6 +49,8 @@ def compute_eye_meta(records: list[dict]) -> None:
     eye_scale_map: dict[tuple, float] = {}
     eye_height_map: dict[tuple, float] = {}
     mean_pq_dist_map: dict[tuple, float] = {}
+    eye_cx_map: dict[tuple, float] = {}
+    eye_cy_map: dict[tuple, float] = {}
     for key, pts in eye_points.items():
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
@@ -56,6 +58,9 @@ def compute_eye_meta(records: list[dict]) -> None:
         eye_scale_map[key] = max(scale, 1.0)
         eye_height_map[key] = max(max(ys) - min(ys), 1.0)
         mean_pq_dist_map[key] = max(pq_dist_sum[key] / eye_count[key], 1.0)
+        # EXP027: homography_from_pitch_yaw の principal point（眼の重心）
+        eye_cx_map[key] = sum(xs) / len(xs)
+        eye_cy_map[key] = sum(ys) / len(ys)
 
     for rec in records:
         key = (rec["image_path"], rec.get("face_index", 0), rec["part_name"])
@@ -71,6 +76,8 @@ def compute_eye_meta(records: list[dict]) -> None:
         rec["eye_scale"] = eye_scale
         rec["eye_height"] = eye_height_map[key]
         rec["mean_pq_dist"] = mean_pq_dist_map[key]
+        rec["eye_cx"] = eye_cx_map[key]
+        rec["eye_cy"] = eye_cy_map[key]
 
 
 def compute_aux_face_shape_meta(records: list[dict], db_path: "str | Path | None" = None) -> None:
