@@ -199,9 +199,7 @@ paired t-test: t=−5.858, **p=4.9e-09 (\*\*\*)**, delta=−0.00288
 # pass_rate（完了条件 通過率）
 
 [`Completion_Criteria.md`](../Completion_Criteria.md) の判定指標（`error_ratio = |t_pred_raw − t_true_raw| × pq_dist / eye_scale`、
-閾値: 標準=0.01788(p10) / 厳格=0.01604(p5)）で、EXP021 全22条件を採点した（[`scr/exp021_passrate.py`](scr/exp021_passrate.py)、
-[`tools/annotation_support/variation_tolerance/passrate.py`](../../tools/annotation_support/variation_tolerance/passrate.py)
-の `compute_pass_rate` を再利用）。`
+閾値: 標準=0.01788(p10) / 厳格=0.01604(p5)）で、EXP021 全22条件を採点した
 
 | condition | n_patches | pass_std_0.01788 % | pass_strict_0.01604 % |
 |---|---|---|---|

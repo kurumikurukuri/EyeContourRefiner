@@ -10,7 +10,7 @@ EXP024/025 で容量軸(base_channel/pool_width/num_conv_layers)と入力特徴�
 
 6 構成 = k{3,4,5} × batch{32,64}。他は全て EXP025 A0 (= EXP024 bc32_pw8 baseline)
 に固定。k3_b32 が anchor（現行デフォルト）。arm 間の paired t-test 比較は
-compare_exp026.py で実行する。
+scripts/paired_ttest.py で実行する。
 
 使い方:
     python experiments/EXP026_k_batch_sweep/scr/train_exp026.py             # 全 6 構成
@@ -131,7 +131,8 @@ def main() -> int:
     (OUTPUT_DIR / "exp026_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n  保存: {OUTPUT_DIR / 'exp026_summary.json'}")
-    print(f"  arm 間比較: python experiments/EXP026_k_batch_sweep/scr/compare_exp026.py")
+    print(f"  passrate: python scripts/compute_passrate.py --exp EXP026")
+    print(f"  arm 間比較: python scripts/paired_ttest.py --exp EXP026 --baseline k3_b32")
     return 0
 
 

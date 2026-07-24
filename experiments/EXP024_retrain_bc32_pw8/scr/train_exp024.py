@@ -3,7 +3,7 @@
 学習だけを行い、fold モデルと experiment.json（訓練結果）を出力する。
 推論・比較は別スクリプトに分離:
   - 推論: infer_exp024.py  → outputs/bc32_pw8/{train,test}_predictions.csv
-  - 比較: compare_exp024.py → EXP022 との paired test + t-band breakdown（experiment.json に追記）
+  - 比較: scripts/paired_ttest.py → EXP022 との paired test + t-band breakdown
 
 使い方:
     python experiments/EXP024_retrain_bc32_pw8/scr/train_exp024.py
@@ -102,7 +102,8 @@ def main() -> int:
     print("次のステップ:")
     print(f"  推論: python experiments/EXP024_retrain_bc32_pw8/scr/infer_exp024.py "
           f"--model-dir {model_dir.relative_to(ROOT)}")
-    print(f"  比較: python experiments/EXP024_retrain_bc32_pw8/scr/compare_exp024.py")
+    print(f"  passrate: python scripts/compute_passrate.py --exp EXP024")
+    print(f"  比較: python scripts/paired_ttest.py --exp EXP024 --baseline bc32_pw8")
     return 0
 
 

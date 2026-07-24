@@ -1,21 +1,20 @@
-"""EXP024 比較: EXP024 test_predictions.csv を EXP022 baseline と paired test + t-band別MAE で比較。
+"""EXP024 比較: EXP024 predictions.csv を EXP022 baseline と paired test + t-band別MAE で比較。
 
 EXP022 の t_band_compare.py に相当する。
-推論済みの outputs/<config>/test_predictions.csv（生 t）を入力とし:
+推論済みの outputs/<config>/predictions.csv（生 t）を入力とし:
   - 全体 MAE の paired t-test（新しいラベルで両モデルを採点）
   - t-band 別 MAE breakdown + 帯域内 paired test
 結果を標準出力し、experiment.json の comparison_vs_exp022 ブロックに永続化する。
 
 使い方:
-    python experiments/EXP024_retrain_bc32_pw8/scr/compare_exp024.py
-    python experiments/EXP024_retrain_bc32_pw8/scr/compare_exp024.py --config bc32_pw8
+    python experiments/EXP024_retrain_bc32_pw8/scr/compare_exp024_vs_exp022.py
+    python experiments/EXP024_retrain_bc32_pw8/scr/compare_exp024_vs_exp022.py --config bc32_pw8
 """
 from __future__ import annotations
 
 import argparse
 import csv
 import json
-import re
 import sys
 from pathlib import Path
 
@@ -28,6 +27,10 @@ OUTPUT_DIR = EXP_DIR / "outputs"
 
 EXP022_DIR = ROOT / "experiments" / "EXP022_channel_pool_sweep"
 
+# 正準 t-band 定義（scripts/_common.py と同一）
+sys.path.insert(0, str(ROOT / "scripts"))
+from _common import T_BANDS  # noqa: E402
+
 
 def load_manifest_t(path: Path) -> dict[int, float]:
     """manifest から idx→t_true 辞書を読み込む。"""
@@ -36,7 +39,7 @@ def load_manifest_t(path: Path) -> dict[int, float]:
 
 
 def load_old_predictions(path: Path) -> dict[int, dict]:
-    """EXP022 test_predictions.csv を idx→{t_true, t_pred} で読み込む。"""
+    """EXP022 predictions.csv を idx→{t_true, t_pred} で読み込む。"""
     with open(path, newline="", encoding="utf-8") as f:
         return {int(r["idx"]): {"t_true": float(r["t_true"]), "t_pred": float(r["t_pred"])}
                 for r in csv.DictReader(f)}
@@ -44,11 +47,6 @@ def load_old_predictions(path: Path) -> dict[int, dict]:
 
 def compute_mae(rows: list[dict], key: str = "abs_err") -> float:
     return sum(r[key] for r in rows) / len(rows)
-
-
-def band_label(t: float) -> str:
-    b = (t // 0.2) * 0.2
-    return f"{b:.1f}-{b+0.2:.1f}"
 
 
 def compare_with_exp022(
@@ -109,28 +107,25 @@ def compare_with_exp022(
     else:
         stat, pval = None, None
 
-    # t-band breakdown
-    bands_new: dict[str, list[float]] = {}
-    bands_old: dict[str, list[float]] = {}
-    for r in rows:
-        b = band_label(r["t_true_new"])
-        bands_new.setdefault(b, []).append(r["abs_err_new"])
-        bands_old.setdefault(b, []).append(r["abs_err_old"])
-
+    # t-band breakdown（正準 T_BANDS を使用）
     band_summary = {}
-    # band_label は負の t で "-0.2-0.0" のように先頭が "-" になるため、
-    # split("-")[0] では空文字になる。先頭の符号付き小数を正規表現で抽出してソート。
-    for b in sorted(bands_new, key=lambda x: float(re.match(r"-?\d+(?:\.\d+)?", x).group())):
-        new_mae = sum(bands_new[b]) / len(bands_new[b])
-        old_mae = sum(bands_old[b]) / len(bands_old[b])
-        # 帯域内で paired t-test
+    for bname, bfn in T_BANDS:
+        mask = [bfn(r["t_true_new"]) for r in rows]
+        band_new = [rows[i]["abs_err_new"] for i, m in enumerate(mask) if m]
+        band_old = [rows[i]["abs_err_old"] for i, m in enumerate(mask) if m]
+        bn = len(band_new)
+        if bn == 0:
+            band_summary[bname] = {"n": 0, "mae_old": None, "mae_new": None, "ttest_p": None}
+            continue
+        new_mae = sum(band_new) / bn
+        old_mae = sum(band_old) / bn
         bp = None
-        if len(bands_new[b]) >= 10:
-            _, bp = ttest_rel(bands_new[b], bands_old[b])
-        band_summary[b] = {"n": len(bands_new[b]),
-                           "mae_old": round(old_mae, 6),
-                           "mae_new": round(new_mae, 6),
-                           "ttest_p": bp}
+        if bn >= 10:
+            _, bp = ttest_rel(band_new, band_old)
+        band_summary[bname] = {"n": bn,
+                               "mae_old": round(old_mae, 6),
+                               "mae_new": round(new_mae, 6),
+                               "ttest_p": bp}
 
     return {
         "n": len(rows),
@@ -158,19 +153,22 @@ def print_comparison(comp: dict) -> None:
     print(f"\n  t-band breakdown:")
     print(f"  {'band':<12} {'n':>6} {'MAE_old':>10} {'MAE_new':>10} {'改善%':>8} {'p':>8}")
     print(f"  {'-'*54}")
-    for b, info in comp["bands"].items():
+    for bname, _ in T_BANDS:
+        info = comp["bands"].get(bname)
+        if info is None or info["n"] == 0:
+            continue
         imp = (info["mae_old"] - info["mae_new"]) / info["mae_old"] * 100
         p_str = f"{info['ttest_p']:.4f}" if info["ttest_p"] is not None else "n/a"
         sig = "**" if info["ttest_p"] is not None and info["ttest_p"] < 0.01 else \
               "*" if info["ttest_p"] is not None and info["ttest_p"] < 0.05 else ""
-        print(f"  t∈{b:<8} {info['n']:>6} {info['mae_old']:>10.6f} {info['mae_new']:>10.6f} {imp:>+7.2f} {p_str:>8}{sig}")
+        print(f"  {bname:<12} {info['n']:>6} {info['mae_old']:>10.6f} {info['mae_new']:>10.6f} {imp:>+7.2f} {p_str:>8}{sig}")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="EXP024 と EXP022 baseline の比較")
     parser.add_argument("--config", default="bc32_pw8", help="config 名（拡張子なし）")
     parser.add_argument("--predictions", type=Path, default=None,
-                        help="EXP024 test_predictions.csv（省略時は outputs/<config>/test_predictions.csv）")
+                        help="EXP024 predictions.csv（省略時は outputs/<config>/predictions.csv）")
     parser.add_argument("--exp-json", type=Path, default=None,
                         help="experiment.json（省略時は outputs/<config>/experiment.json）")
     parser.add_argument("--new-manifest", type=Path, default=None,
@@ -178,17 +176,17 @@ def main() -> int:
     parser.add_argument("--old-manifest", type=Path, default=None,
                         help="EXP022 test manifest（省略時は EXP022 の manifests/manifest_test.csv）")
     parser.add_argument("--old-predictions", type=Path, default=None,
-                        help="EXP022 test_predictions.csv（省略時は EXP022 の outputs/<config>/test_predictions.csv）")
+                        help="EXP022 predictions.csv（省略時は EXP022 の outputs/<config>/predictions.csv）")
     parser.add_argument("--no-write", action="store_true",
                         help="experiment.json への comparison_vs_exp022 追記をスキップ")
     args = parser.parse_args()
 
     cfg_name = args.config
-    predictions = args.predictions or OUTPUT_DIR / cfg_name / "test_predictions.csv"
+    predictions = args.predictions or OUTPUT_DIR / cfg_name / "predictions.csv"
     exp_json = args.exp_json or OUTPUT_DIR / cfg_name / "experiment.json"
     new_manifest = args.new_manifest or MANIFEST_DIR / "manifest_test.csv"
     old_manifest = args.old_manifest or EXP022_DIR / "manifests" / "manifest_test.csv"
-    old_predictions = args.old_predictions or EXP022_DIR / "outputs" / cfg_name / "test_predictions.csv"
+    old_predictions = args.old_predictions or EXP022_DIR / "outputs" / cfg_name / "predictions.csv"
 
     for label, p in [("predictions", predictions), ("new_manifest", new_manifest),
                      ("old_manifest", old_manifest), ("old_predictions", old_predictions)]:

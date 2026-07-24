@@ -25,7 +25,6 @@ build/
 .claude/
 .playwright-mcp
 tasks/
-CLAUDE.md
 
 # Analysis artifacts (再生成可能)
 *.joblib

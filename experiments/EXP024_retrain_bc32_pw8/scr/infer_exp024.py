@@ -3,7 +3,7 @@ train_predictions.csv / test_predictions.csv を出力。
 
 学習済み model_dir（base_channel/pool_width はモデル自体に保存済みのため CLI 引数不要）に対して
 EXP020 の infer_dual をそのまま呼び出す薄いラッパー（EXP022 の infer_exp022.py と同一構成）。
-compare_exp024.py がこの test_predictions.csv（生 t）を使って EXP022 baseline と比較する。
+scripts/paired_ttest.py がこの predictions.csv を使って比較する。
 
 使い方:
     python experiments/EXP024_retrain_bc32_pw8/scr/infer_exp024.py \

@@ -13,6 +13,9 @@ Rows whose idx is absent from the DB are excluded and reported.
 Usage (run from project root):
   python tools/annotation_support/variation_tolerance/passrate.py
   python tools/annotation_support/variation_tolerance/passrate.py --band EXP021
+
+Note: このファイルは自己完結型（scripts/ に依存しない）。
+      per-experiment の passrate 計算は scripts/compute_passrate.py を使用すること。
 """
 
 import argparse
@@ -44,13 +47,17 @@ BANDS = [
 # ---------------------------------------------------------------------------
 
 def load_db_index() -> pd.DataFrame:
-    conn = sqlite3.connect(DB_PATH)
-    df = pd.read_sql_query(
-        "SELECT idx, px, py, qx, qy, eye_scale FROM samples",
-        conn,
-    )
-    conn.close()
-    return df.set_index("idx")
+    if not DB_PATH.exists():
+        raise FileNotFoundError(f"データベースが見つかりません: {DB_PATH}")
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            df = pd.read_sql_query(
+                "SELECT idx, px, py, qx, qy, eye_scale FROM samples",
+                conn,
+            )
+        return df.set_index("idx")
+    except sqlite3.Error as e:
+        raise sqlite3.Error(f"データベース読み込みエラー ({DB_PATH}): {e}") from e
 
 
 # ---------------------------------------------------------------------------
