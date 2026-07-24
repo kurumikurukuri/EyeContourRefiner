@@ -88,3 +88,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP025_aux_redesign | A2 | 8372 | 88.44 | 85.24 |
 | EXP026_k_batch_sweep | k5_b64 | 8372 | 88.72 | 85.73 |
 | EXP027_perspective_aug | fcp_p8 | 8372 | 88.93 | 85.71 |
+| EXP028_label_noise | LN0_baseline | 8666 | 88.25 | 85.22 |

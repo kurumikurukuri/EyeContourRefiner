@@ -1,0 +1,23 @@
+# EXP028 LN2_sigma0p05: train t に N(0, 0.05^2) のラベルノイズを付与。
+# 他は LN0_baseline と同一（label_noise_sigma のみ変更）。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+label_noise_sigma: 0.05

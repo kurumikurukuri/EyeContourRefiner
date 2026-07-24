@@ -126,6 +126,36 @@ def expand_perspective_records(
     return expanded
 
 
+def inject_label_noise(
+    records: list[dict],
+    sigma: float,
+    seed: int,
+) -> list[dict]:
+    """train レコードの生 t ラベルに N(0, sigma^2) の Gaussian ノイズを加える（EXP028）。
+
+    アノテーションノイズを模擬する。sigma<=0 の場合は records をそのまま返す。
+    元の records は変更せず、t を書き換えたレコードの複製を返す。ノイズは
+    seed から決定的に生成されるため、同一 config での再実行は再現可能。
+
+    Args:
+        records: 展開前の訓練レコードリスト（"t" キーを持つ dict のリスト）。
+        sigma:   ノイズの標準偏差（生 t スケール）。
+        seed:    乱数シード。
+
+    Returns:
+        t を書き換えたレコードのリスト（sigma<=0 の場合は入力をそのまま返す）。
+    """
+    if sigma <= 0:
+        return records
+    rng = np.random.default_rng(seed)
+    noisy_records: list[dict] = []
+    for rec in records:
+        rec_noisy = dict(rec)
+        rec_noisy["t"] = float(rec["t"]) + float(rng.normal(0.0, sigma))
+        noisy_records.append(rec_noisy)
+    return noisy_records
+
+
 @dataclass
 class DualTrainConfig:
     """デュアルブランチ訓練設定（ハイパーパラメータ）。"""
@@ -163,6 +193,9 @@ class DualTrainConfig:
     perspective_alpha: float = 2.0
     # perspective_patterns: 空 = 無効, 非空 = PERSPECTIVE_PATTERNS_8 などを渡す。
     perspective_patterns: list = field(default_factory=list)
+    # EXP028: アノテーションノイズ模擬用。train レコードの生 t に N(0, sigma^2) を付与する
+    # （0 = 無効）。manifest_test（hold-out）には適用しない。
+    label_noise_sigma: float = 0.0
 
 
 def effective_aux_features(config: DualTrainConfig) -> list[str]:
@@ -465,6 +498,9 @@ def run_dual_kfold(
     aux_features = effective_aux_features(config)
 
     records = load_manifest(manifest_train)
+    if config.label_noise_sigma > 0:
+        records = inject_label_noise(records, config.label_noise_sigma, config.seed)
+        logger.info("EXP028: train t にラベルノイズ付与 sigma=%.3f", config.label_noise_sigma)
     compute_eye_meta(records)
     if aux_features:
         compute_aux_face_shape_meta(records, config.db_path)
@@ -648,6 +684,7 @@ def build_dual_experiment_record(
             "perspective_aug": config.perspective_aug,
             "perspective_alpha": config.perspective_alpha,
             "n_perspective_patterns": len(config.perspective_patterns),
+            "label_noise_sigma": config.label_noise_sigma,
         },
         "data": {
             "n_train_samples": result.n_train,
