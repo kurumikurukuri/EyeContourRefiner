@@ -8,7 +8,7 @@ configs:
   A4  aux 無し + is_upper 無し（最小構成 ablation）
 
 各 config を同一 DB/manifest/seed で学習する。config 間の paired t-test 比較は
-compare_exp025.py で実行する。
+scripts/paired_ttest.py で実行する。
 
 使い方:
     python experiments/EXP025_aux_redesign/scr/train_exp025.py             # 全 config
@@ -165,7 +165,8 @@ def main() -> int:
     (OUTPUT_DIR / "exp025_summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n  保存: {OUTPUT_DIR / 'exp025_summary.json'}")
-    print(f"  config 間比較: python experiments/EXP025_aux_redesign/scr/compare_exp025.py")
+    print(f"  passrate: python scripts/compute_passrate.py --exp EXP025")
+    print(f"  config 間比較: python scripts/paired_ttest.py --exp EXP025 --baseline A0")
     return 0
 
 
