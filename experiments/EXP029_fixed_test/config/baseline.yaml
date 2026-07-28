@@ -1,0 +1,23 @@
+# EXP029 baseline: EXP028 LN0_baseline と同一条件（label_noise_sigma 除く）。
+# 5 パターン (A-E) の固定テストセットで同一モデルを評価し、
+# テストセット定義の違いが評価結果に与える影響を測定する。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
