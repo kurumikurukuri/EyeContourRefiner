@@ -60,6 +60,8 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 [`tools/annotation_support/variation_tolerance/passrate.py`](../tools/annotation_support/variation_tolerance/README.md#ツール2-pass_rate-評価-passratepy)
 が全実験条件の予測 CSV を採点して生成する（`outputs/best_per_exp.md`）。各 EXP の pass_std 最良条件のみを掲載。
 
+> **EXP029以降のテストセット固定化について**: EXP001〜EXP028 は `scripts/split_holdout.py` のシャッフル分割を使用しており、DB へのアノテーション追加のたびに train/test 分割が変わるため、`n_patches` が実験ごとに増加し、**異なる EXP 間の pass_rate 絶対値比較は本来無効**だった（EXP028で顕在化）。EXP029 でこの問題を解消するため、5パターンの固定テストセット構成法を比較検証し、母集団の t-band 分布を最も忠実に再現する **`db_replica`**（KL(db_replica‖DB)=0.0000）を採用することを決定した。**EXP030 以降は `db_replica` の固定 manifest（`experiments/EXP029_fixed_test/manifests/manifest_test_db_replica.csv`, n=4,900点）を標準テストセットとして使用し、pass_rate の絶対値比較が可能な状態にする**（詳細: [EXP029_summary.md](EXP029_fixed_test/EXP029_summary.md)）。
+
 | exp | best_condition | n_patches | pass_std_0.01788 % | pass_strict_0.01604 % |
 |---|---|---|---|---|
 | EXP001_loss_aux_sweep | B1_sigmoid | 672 | 65.03 | 60.57 |
@@ -89,3 +91,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP026_k_batch_sweep | k5_b64 | 8372 | 88.72 | 85.73 |
 | EXP027_perspective_aug | fcp_p8 | 8372 | 88.93 | 85.71 |
 | EXP028_label_noise | LN0_baseline | 8666 | 88.25 | 85.22 |
+| EXP029_fixed_test | db_replica | 4900 | 89.27 | 85.92 |
