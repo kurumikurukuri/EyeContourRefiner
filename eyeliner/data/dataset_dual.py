@@ -71,6 +71,7 @@ class EyelinerPatchDualDataset(Dataset):
         cfg_b: BranchConfig,
         augment_data: bool = False,
         aug_flags: int = AUG_ALL,
+        aug_prob: float = 1.0,
         endpoint_blend_range: float = ENDPOINT_BLEND_RANGE,
         preload_images: bool = True,
         norm_mean: list | None = None,
@@ -85,6 +86,7 @@ class EyelinerPatchDualDataset(Dataset):
         self.cfg_b = cfg_b
         self.augment_data = augment_data
         self.aug_flags = aug_flags
+        self.aug_prob = aug_prob
         self.endpoint_blend_range = endpoint_blend_range
         self.use_aux_face_shape = use_aux_face_shape
         # aux_features 指定時はその部分集合、未指定で use_aux_face_shape ならデフォルト11次元。
@@ -224,11 +226,11 @@ class EyelinerPatchDualDataset(Dataset):
             py_state = random.getstate()
             np_state = np.random.get_state()
 
-            patch_a, y_a = augment(patch_a, y_a, aug_flags=self.aug_flags)
+            patch_a, y_a = augment(patch_a, y_a, aug_flags=self.aug_flags, aug_prob=self.aug_prob)
 
             random.setstate(py_state)
             np.random.set_state(np_state)
-            patch_b, y_b = augment(patch_b, y_b, aug_flags=self.aug_flags)
+            patch_b, y_b = augment(patch_b, y_b, aug_flags=self.aug_flags, aug_prob=self.aug_prob)
 
         x_a = torch.from_numpy(patch_a.transpose(2, 0, 1)).float()
         x_a = (x_a - self._norm_mean) / self._norm_std

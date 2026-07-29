@@ -92,3 +92,4 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP027_perspective_aug | fcp_p8 | 8372 | 88.93 | 85.71 |
 | EXP028_label_noise | LN0_baseline | 8666 | 88.25 | 85.22 |
 | EXP029_fixed_test | db_replica | 4900 | 89.27 | 85.92 |
+| EXP030_aug_freq_sweep | AF2_p0p75 | 4900 | 89.27 | 86.31 |

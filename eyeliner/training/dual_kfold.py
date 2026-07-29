@@ -174,6 +174,9 @@ class DualTrainConfig:
     use_batchnorm: bool = True
     dropout_rate: float = 0.3
     aug_flags: int = 127
+    # EXP030: BRIGHTNESS/BLUR/COLOR_TEMP/FLIP（基準確率0.5）の発火頻度に掛ける倍率。
+    # NOISE・GRAYSCALE の発火確率は対象外（augment() 側で固定のまま）。
+    aug_prob: float = 1.0
     endpoint_blend_range: float = 0.25
     loss_fn: str = "t"
     num_workers: int = 0
@@ -252,14 +255,14 @@ def _train_single_dual_fold(
 
     train_ds = EyelinerPatchDualDataset(
         train_records, cfg_a, cfg_b,
-        augment_data=True, aug_flags=config.aug_flags,
+        augment_data=True, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
         aux_features=aux_features,
         perspective_alpha=config.perspective_alpha,
     )
     val_ds = EyelinerPatchDualDataset(
         val_records, cfg_a, cfg_b,
-        augment_data=False, aug_flags=config.aug_flags,
+        augment_data=False, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
         aux_features=aux_features,
     )
@@ -423,7 +426,7 @@ def _predict_dual_records(
     aux_features = effective_aux_features(config)
     ds = EyelinerPatchDualDataset(
         records, cfg_a, cfg_b,
-        augment_data=False, aug_flags=config.aug_flags,
+        augment_data=False, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
         aux_features=aux_features,
     )
@@ -579,6 +582,7 @@ def run_dual_kfold(
             models = [load_dual_model(p).to(device) for p in fold_paths]
             holdout_ds = EyelinerPatchDualDataset(
                 holdout_records, cfg_a, cfg_b, augment_data=False, aug_flags=config.aug_flags,
+                aug_prob=config.aug_prob,
                 endpoint_blend_range=config.endpoint_blend_range,
                 aux_features=aux_features,
             )
@@ -676,6 +680,7 @@ def build_dual_experiment_record(
             "patience": config.patience,
             "seed": config.seed,
             "aug_flags": config.aug_flags,
+            "aug_prob": config.aug_prob,
             "endpoint_blend_range": float(config.endpoint_blend_range),
             "loss_fn": config.loss_fn,
             "use_aux_face_shape": config.use_aux_face_shape,

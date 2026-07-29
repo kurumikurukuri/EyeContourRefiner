@@ -30,17 +30,18 @@ def augment(
     t_min: float = 0.0,
     t_max: float = 1.0,
     aug_flags: int = AUG_ALL,
+    aug_prob: float = 1.0,
 ) -> tuple[np.ndarray, float]:
     """パッチと t 値にランダムなデータ拡張を適用する。
 
     aug_flags のビットで各オーグメンテーションを個別に ON/OFF する。
 
-        AUG_BRIGHTNESS (0x01): 輝度スケール・コントラスト・ガンマ補正
-        AUG_BLUR       (0x02): ガウスぼかし
-        AUG_NOISE      (0x04): ガウスノイズ
-        AUG_COLOR_TEMP (0x08): 色温度変換（ホワイトバランス）
-        AUG_GRAYSCALE  (0x10): グレースケール化（輝度のみ・確率 0.2）
-        AUG_FLIP       (0x40): 水平反転（t → t_min + t_max - t）
+        AUG_BRIGHTNESS (0x01): 輝度スケール・コントラスト・ガンマ補正（基準確率 0.5）
+        AUG_BLUR       (0x02): ガウスぼかし（基準確率 0.5）
+        AUG_NOISE      (0x04): ガウスノイズ（常時発火、aug_prob の対象外）
+        AUG_COLOR_TEMP (0x08): 色温度変換（ホワイトバランス、基準確率 0.5）
+        AUG_GRAYSCALE  (0x10): グレースケール化（輝度のみ・確率 0.2、aug_prob の対象外）
+        AUG_FLIP       (0x40): 水平反転（t → t_min + t_max - t、基準確率 0.5）
 
     Args:
         patch:     float32 パッチ [0, 1] の範囲、shape (H, W, 3)
@@ -48,6 +49,9 @@ def augment(
         t_min:     t の最小値（正規化時は 0.0、raw 時は patch_t_min）
         t_max:     t の最大値（正規化時は 1.0、raw 時は patch_t_max）
         aug_flags: ビットフラグ（デフォルト AUG_ALL=0x7F で全て有効）
+        aug_prob:  BRIGHTNESS/BLUR/COLOR_TEMP/FLIP（基準確率 0.5 のもの）の発火確率に
+                   掛ける倍率。0.5*aug_prob を [0, 1] にクランプして使う（EXP030 発火頻度
+                   sweep用）。NOISE（常時発火）・GRAYSCALE（基準0.2）は対象外で固定のまま。
 
     Returns:
         (拡張後パッチ, 拡張後 t)
@@ -56,7 +60,9 @@ def augment(
         logger.warning("t=%s が範囲 [%s, %s] 外 — クランプして続行", t, t_min, t_max)
         t = max(t_min, min(t_max, t))
 
-    if (aug_flags & AUG_BRIGHTNESS) and random.random() < 0.5:
+    fire_p = min(1.0, max(0.0, 0.5 * aug_prob))
+
+    if (aug_flags & AUG_BRIGHTNESS) and random.random() < fire_p:
         patch = patch * random.uniform(0.8, 1.2)
         mean = patch.mean()
         patch = (patch - mean) * random.uniform(0.8, 1.2) + mean
@@ -64,7 +70,7 @@ def augment(
         gamma = random.uniform(0.7, 1.4)
         patch = patch**gamma
 
-    if (aug_flags & AUG_BLUR) and random.random() < 0.5:
+    if (aug_flags & AUG_BLUR) and random.random() < fire_p:
         sigma = random.uniform(0.3, 1.0)
         patch = patch.copy()
         for c in range(patch.shape[2]):
@@ -74,7 +80,7 @@ def augment(
         sigma = random.uniform(0.0, 5.0) / 255.0
         patch = patch + np.random.default_rng().standard_normal(patch.shape, dtype=np.float32) * sigma
 
-    if (aug_flags & AUG_COLOR_TEMP) and random.random() < 0.5:
+    if (aug_flags & AUG_COLOR_TEMP) and random.random() < fire_p:
         r_scale = random.uniform(0.85, 1.15)
         b_scale = 2.0 - r_scale
         patch = patch.copy()
@@ -86,7 +92,7 @@ def augment(
         gray = (0.299 * patch[:, :, 0] + 0.587 * patch[:, :, 1] + 0.114 * patch[:, :, 2])
         patch = np.stack([gray, gray, gray], axis=2).astype(np.float32)
 
-    if (aug_flags & AUG_FLIP) and random.random() < 0.5:
+    if (aug_flags & AUG_FLIP) and random.random() < fire_p:
         patch = patch[:, ::-1].copy()  # .copy() で連続配列にする
         t = t_min + t_max - t
 
