@@ -1,0 +1,30 @@
+# EXP031 SD1_jpeg: JPEG 圧縮のみ。
+# ワープ前の元画像 ROI を quality ∈ [30, 90] で encode→decode する。
+# 学習・推論とも JPEG 画像だが、既存 aug は圧縮劣化を含まない。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 191  # = 63 | AUG_SOURCE_JPEG(0x080)
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+
+# 元画像空間の劣化 aug（EXP031 の変動軸）。ON/OFF は上の aug_flags のビット、
+# 以下は強度パラメータ。
+source_jpeg_prob: 0.5
+source_jpeg_quality_min: 30
+source_jpeg_quality_max: 90

@@ -58,7 +58,9 @@ class TrainConfig:
     patch_perp_scale: float = 1.0
     patch_h: int = 64
     patch_w: int = 128
-    aug_flags: int = 0x4F  # AUG_ALL: 全オーグメンテーション有効
+    # 0x4F = BRIGHTNESS|BLUR|NOISE|COLOR_TEMP|FLIP（GRAYSCALE・ENDPOINT_BLEND は含まない）。
+    # AUG_ALL (0x1FF) ではないので注意。単系統パイプラインは source 系劣化に非対応。
+    aug_flags: int = 0x4F
     use_aux_face_shape: bool = False
     num_workers: int = 0
     pq_rescale_mode: str = "none"

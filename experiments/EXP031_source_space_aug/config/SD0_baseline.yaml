@@ -1,0 +1,28 @@
+# EXP031 SD0_baseline: 元画像空間の劣化なし = anchor。
+# EXP030 AF0_baseline / EXP029 baseline と完全に同一構成（manifest も同一 db_replica）。
+# aug_flags に source 系ビット（0x080/0x100）が立っていないため dataset は劣化パスに入らず、
+# 既存 augmentation の乱数列も EXP030 AF0 と一致する。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63   # = 0x03F: パッチ空間 aug のみ（FLIP off / source 劣化 off）
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+
+# 元画像空間の劣化 aug（EXP031 の変動軸）は aug_flags のビットで指定する。
+# 本条件は劣化なしなので source 系ビットを立てない。
