@@ -22,8 +22,14 @@ import torch
 from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader
 
+from eyeliner.data.augmentation import (
+    AUG_SOURCE_JPEG,
+    AUG_SOURCE_RES_JITTER,
+    check_aug_flags,
+)
 from eyeliner.data.dataset import load_manifest
 from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
+from eyeliner.data.source_degradation import SourceDegradeConfig
 from eyeliner.data.weights import (
     DEFAULT_AUX_FEATURES,
     compute_aux_face_shape_meta,
@@ -199,6 +205,15 @@ class DualTrainConfig:
     # EXP028: アノテーションノイズ模擬用。train レコードの生 t に N(0, sigma^2) を付与する
     # （0 = 無効）。manifest_test（hold-out）には適用しない。
     label_noise_sigma: float = 0.0
+    # EXP031: 元画像ピクセル空間の劣化 aug。train のみ（augment_data=True）に適用する。
+    # ON/OFF は aug_flags の AUG_SOURCE_JPEG (0x080) / AUG_SOURCE_RES_JITTER (0x100)
+    # ビットで指定する。以下は発火確率と強度レンジのみ（既定値は EXP031 の採用値）。
+    source_jpeg_prob: float = 0.5
+    source_jpeg_quality_min: int = 30
+    source_jpeg_quality_max: int = 90
+    source_res_jitter_prob: float = 0.5
+    source_res_scale_min: float = 1.0
+    source_res_scale_max: float = 2.5
 
 
 def effective_aux_features(config: DualTrainConfig) -> list[str]:
@@ -211,6 +226,31 @@ def effective_aux_features(config: DualTrainConfig) -> list[str]:
     if not config.use_aux_face_shape:
         return []
     return list(config.aux_features) if config.aux_features else list(DEFAULT_AUX_FEATURES)
+
+
+def build_source_degrade_config(config: DualTrainConfig) -> SourceDegradeConfig | None:
+    """aug_flags のビットと強度パラメータから SourceDegradeConfig を組み立てる。
+
+    JPEG・解像度ジッタのビットがいずれも立っていない場合は None を返す
+    （dataset 側で劣化パスに入らない）。
+    設定値は validate() で検証し、不正なら ValueError を送出する。
+    """
+    jpeg = bool(config.aug_flags & AUG_SOURCE_JPEG)
+    res_jitter = bool(config.aug_flags & AUG_SOURCE_RES_JITTER)
+    if not (jpeg or res_jitter):
+        return None
+    cfg = SourceDegradeConfig(
+        jpeg=jpeg,
+        jpeg_prob=config.source_jpeg_prob,
+        jpeg_quality_min=config.source_jpeg_quality_min,
+        jpeg_quality_max=config.source_jpeg_quality_max,
+        res_jitter=res_jitter,
+        res_jitter_prob=config.source_res_jitter_prob,
+        res_scale_min=config.source_res_scale_min,
+        res_scale_max=config.source_res_scale_max,
+    )
+    cfg.validate()
+    return cfg
 
 
 @dataclass
@@ -253,12 +293,17 @@ def _train_single_dual_fold(
     loss_fn = get_loss_fn(config.loss_fn)
     aux_features = effective_aux_features(config)
 
+    # EXP031: 元画像空間の劣化は train のみ。val/hold-out/推論は augment_data=False なので
+    # 劣化パスに入らず、config 間でテスト入力は完全に同一になる。
+    source_degrade = build_source_degrade_config(config)
     train_ds = EyelinerPatchDualDataset(
         train_records, cfg_a, cfg_b,
         augment_data=True, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
         aux_features=aux_features,
         perspective_alpha=config.perspective_alpha,
+        source_degrade=source_degrade,
+        source_degrade_seed=config.seed + fold_idx,
     )
     val_ds = EyelinerPatchDualDataset(
         val_records, cfg_a, cfg_b,
@@ -498,6 +543,7 @@ def run_dual_kfold(
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info("デバイス: %s", device)
     logger.info("fusion_mode: %s  rescale_b: %s", config.fusion_mode, config.pq_rescale_mode_b)
+    check_aug_flags(config.aug_flags)
     aux_features = effective_aux_features(config)
 
     records = load_manifest(manifest_train)
@@ -690,6 +736,12 @@ def build_dual_experiment_record(
             "perspective_alpha": config.perspective_alpha,
             "n_perspective_patterns": len(config.perspective_patterns),
             "label_noise_sigma": config.label_noise_sigma,
+            "source_jpeg": bool(config.aug_flags & AUG_SOURCE_JPEG),
+            "source_jpeg_prob": config.source_jpeg_prob,
+            "source_jpeg_quality": [config.source_jpeg_quality_min, config.source_jpeg_quality_max],
+            "source_res_jitter": bool(config.aug_flags & AUG_SOURCE_RES_JITTER),
+            "source_res_jitter_prob": config.source_res_jitter_prob,
+            "source_res_scale": [config.source_res_scale_min, config.source_res_scale_max],
         },
         "data": {
             "n_train_samples": result.n_train,

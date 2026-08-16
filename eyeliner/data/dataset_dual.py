@@ -12,6 +12,13 @@ import torch
 from torch.utils.data import Dataset
 
 from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
+from eyeliner.data.source_degradation import (
+    SourceDegradeConfig,
+    SourceDegradeSample,
+    compute_patch_source_bbox,
+    degrade_region,
+    sample_source_degradation,
+)
 from eyeliner.data.patch_utils import (
     PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
@@ -79,6 +86,8 @@ class EyelinerPatchDualDataset(Dataset):
         use_aux_face_shape: bool = False,
         aux_features: list[str] | None = None,
         perspective_alpha: float = 2.0,
+        source_degrade: SourceDegradeConfig | None = None,
+        source_degrade_seed: int = 42,
     ) -> None:
         self.records = records
         self.perspective_alpha = perspective_alpha
@@ -93,6 +102,14 @@ class EyelinerPatchDualDataset(Dataset):
         self.aux_features = list(aux_features) if aux_features else (
             list(DEFAULT_AUX_FEATURES) if use_aux_face_shape else []
         )
+
+        # EXP031: 元画像ピクセル空間の劣化 aug（JPEG / 解像度ジッタ）。
+        # augment_data=True のときのみ発火する。既存 aug の乱数列を乱さないよう
+        # 専用の Generator を持たせる（config 間で photometric aug の系列が揃う）。
+        self._source_degrade = source_degrade if (source_degrade and source_degrade.enabled) else None
+        self._deg_rng = random.Random(source_degrade_seed)
+        self._persp_conflict_warned = False
+
         self._image_cache: dict[str, np.ndarray] = {}
 
         _mean = norm_mean if norm_mean is not None else IMAGENET_MEAN
@@ -115,6 +132,44 @@ class EyelinerPatchDualDataset(Dataset):
 
     def __len__(self) -> int:
         return len(self.records)
+
+    def _extract_patch_maybe_degraded(
+        self,
+        image: np.ndarray,
+        px: float, py: float, qx: float, qy: float,
+        cfg: BranchConfig,
+        H: np.ndarray | None,
+        deg: SourceDegradeSample | None,
+    ) -> np.ndarray:
+        """パッチを抽出する。deg が指定された場合は元画像 ROI に劣化を掛けてから抽出する。
+
+        ROI は footprint を完全に含むため、劣化なしの場合は ROI 経由でも
+        元画像から直接抽出した場合と同一のパッチになる。
+        """
+        if deg is not None and not deg.is_identity:
+            bbox = compute_patch_source_bbox(
+                px, py, qx, qy,
+                cfg.patch_t_min, cfg.patch_t_max, cfg.patch_perp_scale,
+            )
+            degraded = degrade_region(image, bbox, deg) if bbox is not None else None
+            if degraded is not None:
+                roi, x0, y0 = degraded
+                return extract_patch(
+                    roi, px - x0, py - y0, qx - x0, qy - y0,
+                    patch_size=cfg.patch_size,
+                    t_min=cfg.patch_t_min,
+                    t_max=cfg.patch_t_max,
+                    perp_scale=cfg.patch_perp_scale,
+                    H=None,
+                )
+        return extract_patch(
+            image, px, py, qx, qy,
+            patch_size=cfg.patch_size,
+            t_min=cfg.patch_t_min,
+            t_max=cfg.patch_t_max,
+            perp_scale=cfg.patch_perp_scale,
+            H=H,
+        )
 
     def __getitem__(self, idx: int):
         rec = self.records[idx]
@@ -192,6 +247,22 @@ class EyelinerPatchDualDataset(Dataset):
         t_b = max(self.cfg_b.label_t_min, min(self.cfg_b.label_t_max, t_b_target))
         y_b = (t_b - self.cfg_b.label_t_min) / label_range_b
 
+        # EXP031: 元画像空間の劣化パラメータを 1 サンプルにつき 1 回だけ引き、
+        # 枝A・枝B で同一のものを共有する（両枝で異なる劣化が乗るのを防ぐ）。
+        # 画像読み込みの成否によらず引くことで、乱数列がサンプル数と同期する。
+        deg_sample: SourceDegradeSample | None = None
+        if self.augment_data and self._source_degrade is not None:
+            if H_persp is not None:
+                # perspective aug 併用時は ROI が homography の逆像になるため未対応。
+                if not self._persp_conflict_warned:
+                    logger.warning(
+                        "perspective_aug と source degradation の併用は未対応のため "
+                        "劣化をスキップします（EXP031 では perspective_aug=false 前提）"
+                    )
+                    self._persp_conflict_warned = True
+            else:
+                deg_sample = sample_source_degradation(self._source_degrade, self._deg_rng)
+
         image = self._image_cache.get(image_path)
         if image is None:
             bgr = cv2.imread(image_path)
@@ -202,21 +273,11 @@ class EyelinerPatchDualDataset(Dataset):
             patch_a = np.zeros((*self.cfg_a.patch_size, 3), dtype=np.float32)
             patch_b = np.zeros((*self.cfg_b.patch_size, 3), dtype=np.float32)
         else:
-            patch_a = extract_patch(
-                image, px_a, py_a, qx_a, qy_a,
-                patch_size=self.cfg_a.patch_size,
-                t_min=self.cfg_a.patch_t_min,
-                t_max=self.cfg_a.patch_t_max,
-                perp_scale=self.cfg_a.patch_perp_scale,
-                H=H_persp,
+            patch_a = self._extract_patch_maybe_degraded(
+                image, px_a, py_a, qx_a, qy_a, self.cfg_a, H_persp, deg_sample,
             )
-            patch_b = extract_patch(
-                image, px_b, py_b, qx_b, qy_b,
-                patch_size=self.cfg_b.patch_size,
-                t_min=self.cfg_b.patch_t_min,
-                t_max=self.cfg_b.patch_t_max,
-                perp_scale=self.cfg_b.patch_perp_scale,
-                H=H_persp,
+            patch_b = self._extract_patch_maybe_degraded(
+                image, px_b, py_b, qx_b, qy_b, self.cfg_b, H_persp, deg_sample,
             )
 
         if self.augment_data:

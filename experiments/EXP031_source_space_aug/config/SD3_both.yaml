@@ -1,0 +1,33 @@
+# EXP031 SD3_both: JPEG 圧縮 + 解像度ジッタ。
+# 両方が発火したサンプルでは「縮小 → 縮小サイズで JPEG → 拡大」の順で適用される。
+# 各劣化の発火は独立に判定されるので、SD3 のうち両方発火するのは約 25%。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 447  # = 63 | AUG_SOURCE_JPEG(0x080) | AUG_SOURCE_RES_JITTER(0x100)
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+
+# 元画像空間の劣化 aug（EXP031 の変動軸）。ON/OFF は上の aug_flags のビット、
+# 以下は強度パラメータ。
+source_jpeg_prob: 0.5
+source_jpeg_quality_min: 30
+source_jpeg_quality_max: 90
+source_res_jitter_prob: 0.5
+source_res_scale_min: 1.0
+source_res_scale_max: 2.5

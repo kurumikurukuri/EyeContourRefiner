@@ -20,10 +20,19 @@ import numpy as np
 import pytest
 
 import eyeliner.training.dual_kfold as dual_kfold_module
+from eyeliner.data.dataset_dual import BranchConfig
+from eyeliner.data.augmentation import (
+    AUG_ALL,
+    AUG_SOURCE_JPEG,
+    AUG_SOURCE_RES_JITTER,
+    augment,
+    check_aug_flags,
+)
 from eyeliner.training.dual_kfold import (
     DualKfoldResult,
     DualTrainConfig,
     build_dual_experiment_record,
+    build_source_degrade_config,
     run_dual_kfold,
 )
 
@@ -291,3 +300,90 @@ class TestDualKfoldResume:
 
         progress_path = exp_dir / "dual_kfold_progress.json"
         assert progress_path.exists()
+
+
+class TestSourceDegradeFlags:
+    """EXP031 の元画像空間劣化は aug_flags のビットで ON/OFF する。"""
+
+    def test_no_source_bits_returns_none(self):
+        config = _fast_config(aug_flags=63)
+        assert build_source_degrade_config(config) is None
+
+    def test_jpeg_bit_enables_jpeg_only(self):
+        config = _fast_config(aug_flags=63 | AUG_SOURCE_JPEG)
+        cfg = build_source_degrade_config(config)
+        assert cfg is not None
+        assert cfg.jpeg is True
+        assert cfg.res_jitter is False
+        assert cfg.enabled is True
+
+    def test_res_jitter_bit_enables_res_jitter_only(self):
+        config = _fast_config(aug_flags=63 | AUG_SOURCE_RES_JITTER)
+        cfg = build_source_degrade_config(config)
+        assert cfg is not None
+        assert cfg.jpeg is False
+        assert cfg.res_jitter is True
+
+    def test_both_bits_enable_both(self):
+        config = _fast_config(aug_flags=63 | AUG_SOURCE_JPEG | AUG_SOURCE_RES_JITTER)
+        cfg = build_source_degrade_config(config)
+        assert cfg is not None
+        assert (cfg.jpeg, cfg.res_jitter) == (True, True)
+
+    def test_source_bits_do_not_disturb_patch_bits(self):
+        """source ビットを立ててもパッチ空間 aug の解釈は変わらない。"""
+        patch = np.full((8, 8, 3), 0.5, dtype=np.float32)
+        with mock.patch("random.random", return_value=0.99),              mock.patch("random.uniform", return_value=0.0):
+            out, t = augment(patch, 0.5, aug_flags=AUG_SOURCE_JPEG | AUG_SOURCE_RES_JITTER)
+        assert t == 0.5
+        assert np.allclose(out, patch)
+
+    def test_intensity_params_are_passed_through(self):
+        config = _fast_config(
+            aug_flags=63 | AUG_SOURCE_JPEG | AUG_SOURCE_RES_JITTER,
+            source_jpeg_prob=0.25,
+            source_jpeg_quality_min=40,
+            source_jpeg_quality_max=80,
+            source_res_jitter_prob=0.75,
+            source_res_scale_min=1.5,
+            source_res_scale_max=2.0,
+        )
+        cfg = build_source_degrade_config(config)
+        assert cfg.jpeg_prob == 0.25
+        assert (cfg.jpeg_quality_min, cfg.jpeg_quality_max) == (40, 80)
+        assert cfg.res_jitter_prob == 0.75
+        assert (cfg.res_scale_min, cfg.res_scale_max) == (1.5, 2.0)
+
+    def test_invalid_intensity_params_raise(self):
+        config = _fast_config(
+            aug_flags=63 | AUG_SOURCE_JPEG,
+            source_jpeg_quality_min=90,
+            source_jpeg_quality_max=30,
+        )
+        with pytest.raises(ValueError):
+            build_source_degrade_config(config)
+
+    def test_experiment_record_reflects_bits(self):
+        config = _fast_config(aug_flags=63 | AUG_SOURCE_JPEG)
+        branch = BranchConfig(
+            patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
+        )
+        result = DualKfoldResult(
+            fold_results=[], n_train=0, n_holdout=0,
+            train_images=[], holdout_images=[], cfg_a=branch, cfg_b=branch,
+        )
+        record = build_dual_experiment_record("t", config, result)
+        hp = record["hyperparameters"]
+        assert hp["aug_flags"] == 63 | AUG_SOURCE_JPEG
+        assert hp["source_jpeg"] is True
+        assert hp["source_res_jitter"] is False
+
+    def test_unknown_bits_are_warned(self, caplog):
+        with caplog.at_level("WARNING"):
+            check_aug_flags(0x1FF | 0x800)
+        assert "未定義ビット" in caplog.text
+
+    def test_known_bits_do_not_warn(self, caplog):
+        with caplog.at_level("WARNING"):
+            check_aug_flags(AUG_ALL)
+        assert caplog.text == ""

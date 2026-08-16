@@ -18,8 +18,30 @@ AUG_GRAYSCALE:       int = 0x10  # グレースケール化（輝度のみに変
 AUG_ENDPOINT_BLEND:  int = 0x20  # 端点 P, Q の線形ブレンド（R は幾何保存）
 AUG_FLIP:            int = 0x40  # 水平反転
 
-AUG_ALL:  int = 0x7F  # 全オーグメンテーション有効
-AUG_NONE: int = 0x00  # 全オーグメンテーション無効
+# --- 元画像空間の劣化（EXP031）--------------------------------------------
+# bit0-6 は augment() がパッチに適用するが、以下 2 つは **ワープ前の元画像 ROI**
+# に適用するため適用箇所が違う（dataset_dual の _extract_patch_maybe_degraded 経路、
+# 実処理は eyeliner/data/source_degradation.py）。augment() はこれらのビットを見ない。
+# quality レンジ等の連続パラメータは source_jpeg_quality_min など別キーで指定する。
+AUG_SOURCE_JPEG:       int = 0x080  # 元画像空間 JPEG 圧縮
+AUG_SOURCE_RES_JITTER: int = 0x100  # 元画像空間 解像度ジッタ（縮小→拡大）
+
+AUG_ALL:        int = 0x1FF  # 全オーグメンテーション有効
+AUG_NONE:       int = 0x000  # 全オーグメンテーション無効
+
+
+def check_aug_flags(aug_flags: int) -> None:
+    """未定義ビットが立っていたら警告する（値そのものは変更しない）。
+
+    ビット演算で判定しているだけなので範囲外の値はエラーにならず黙って無視される。
+    設定ミス（例: 存在しないビットに劣化 aug を割り当てたつもり）を検出するための保険。
+    """
+    unknown = aug_flags & ~AUG_ALL
+    if unknown:
+        logger.warning(
+            "aug_flags に未定義ビットが含まれています: 0x%X（未定義部 0x%X）— 無視されます",
+            aug_flags, unknown,
+        )
 
 ENDPOINT_BLEND_RANGE: float = 0.25  # a, b ∈ [-ENDPOINT_BLEND_RANGE, ENDPOINT_BLEND_RANGE]
 
@@ -43,12 +65,15 @@ def augment(
         AUG_GRAYSCALE  (0x10): グレースケール化（輝度のみ・確率 0.2、aug_prob の対象外）
         AUG_FLIP       (0x40): 水平反転（t → t_min + t_max - t、基準確率 0.5）
 
+    AUG_SOURCE_JPEG (0x080) / AUG_SOURCE_RES_JITTER (0x100) は元画像 ROI に適用する
+    劣化なのでここでは解釈しない（dataset 側が処理する）。渡されても無視される。
+
     Args:
         patch:     float32 パッチ [0, 1] の範囲、shape (H, W, 3)
         t:         位置 t ∈ [t_min, t_max]
         t_min:     t の最小値（正規化時は 0.0、raw 時は patch_t_min）
         t_max:     t の最大値（正規化時は 1.0、raw 時は patch_t_max）
-        aug_flags: ビットフラグ（デフォルト AUG_ALL=0x7F で全て有効）
+        aug_flags: ビットフラグ（デフォルト AUG_ALL=0x1FF で全て有効）
         aug_prob:  BRIGHTNESS/BLUR/COLOR_TEMP/FLIP（基準確率 0.5 のもの）の発火確率に
                    掛ける倍率。0.5*aug_prob を [0, 1] にクランプして使う（EXP030 発火頻度
                    sweep用）。NOISE（常時発火）・GRAYSCALE（基準0.2）は対象外で固定のまま。
