@@ -43,11 +43,12 @@ def build_model(
     use_is_upper: bool = True,
     dropout_rate: float = 0.3,
     use_aux_face_shape: bool = False,
+    pool_width: int = 32,
 ) -> nn.Module:
     """バックボーン名からモデルを構築する。"""
     if backbone == "custom":
         from eyeliner.models.eyeliner_cnn import EyelinerCNN
-        return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape)
+        return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape, pool_width=pool_width)
     if backbone == "soft_argmax":
         from eyeliner.models.soft_argmax import SoftArgmaxEyelinerCNN
         return SoftArgmaxEyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
@@ -78,7 +79,8 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
         use_is_upper = ckpt.get("use_is_upper", True)
         dropout_rate = ckpt.get("dropout_rate", 0.3)
         use_aux_face_shape = ckpt.get("use_aux_face_shape", False)
-        model = build_model(ckpt["backbone"], pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape)
+        pool_width = ckpt.get("pool_width", 32)
+        model = build_model(ckpt["backbone"], pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape, pool_width=pool_width)
         model.load_state_dict(ckpt["state_dict"])
         return model
 
@@ -93,7 +95,8 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
         use_norm_eye_scale = ckpt.get("use_norm_eye_scale", False)
         use_is_upper = ckpt.get("use_is_upper", True)
         dropout_rate = ckpt.get("dropout_rate", 0.3)
-        models = [build_model(backbone, pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate) for _ in range(n_models)]
+        pool_width = ckpt.get("pool_width", 32)
+        models = [build_model(backbone, pretrained=False, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, pool_width=pool_width) for _ in range(n_models)]
         ensemble = EnsembleModel(models)
         ensemble.load_state_dict(ckpt["state_dict"])
         return ensemble
@@ -115,8 +118,9 @@ def save_model(model: nn.Module, backbone: str, path: Path) -> None:
     use_is_upper = getattr(model, "use_is_upper", True)
     dropout_rate = getattr(model, "dropout_rate", 0.3)
     use_aux_face_shape = getattr(model, "use_aux_face_shape", False)
+    pool_width = getattr(model, "pool_width", 32)
     torch.save(
-        {"backbone": backbone, "use_pq_ratio": use_pq_ratio, "use_sigmoid": use_sigmoid, "use_batchnorm": use_batchnorm, "num_conv_layers": num_conv_layers, "use_distance_from_center": use_distance_from_center, "use_norm_eye_scale": use_norm_eye_scale, "use_is_upper": use_is_upper, "dropout_rate": dropout_rate, "use_aux_face_shape": use_aux_face_shape, "state_dict": model.state_dict()},
+        {"backbone": backbone, "use_pq_ratio": use_pq_ratio, "use_sigmoid": use_sigmoid, "use_batchnorm": use_batchnorm, "num_conv_layers": num_conv_layers, "use_distance_from_center": use_distance_from_center, "use_norm_eye_scale": use_norm_eye_scale, "use_is_upper": use_is_upper, "dropout_rate": dropout_rate, "use_aux_face_shape": use_aux_face_shape, "pool_width": pool_width, "state_dict": model.state_dict()},
         path,
     )
 
@@ -133,6 +137,7 @@ def save_ensemble(ensemble: EnsembleModel, backbone: str, path: Path) -> None:
     use_is_upper = getattr(first_model, "use_is_upper", True)
     dropout_rate = getattr(first_model, "dropout_rate", 0.3)
     use_aux_face_shape = getattr(first_model, "use_aux_face_shape", False)
+    pool_width = getattr(first_model, "pool_width", 32)
     torch.save(
         {
             "type": "ensemble",
@@ -146,6 +151,7 @@ def save_ensemble(ensemble: EnsembleModel, backbone: str, path: Path) -> None:
             "use_is_upper": use_is_upper,
             "dropout_rate": dropout_rate,
             "use_aux_face_shape": use_aux_face_shape,
+            "pool_width": pool_width,
             "n_models": len(ensemble._models),
             "state_dict": ensemble.state_dict(),
         },

@@ -263,6 +263,7 @@ def _train_single_fold(
         use_is_upper=config.use_is_upper,
         dropout_rate=config.dropout_rate,
         use_aux_face_shape=config.use_aux_face_shape,
+        pool_width=config.pool_width,
     ).to(device)
 
     # Phase 1: バックボーン凍結（転移学習時のみ）

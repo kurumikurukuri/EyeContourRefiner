@@ -66,6 +66,7 @@ class TrainConfig:
     pq_rescale_mode: str = "none"
     pq_rescale_factor: float = 1.0
     endpoint_blend_range: float = 0.25
+    pool_width: int = 32
 
 
 @dataclass

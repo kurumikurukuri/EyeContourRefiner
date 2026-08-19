@@ -27,6 +27,7 @@ class EyelinerCNN(nn.Module):
         use_is_upper: bool = True,
         dropout_rate: float = 0.3,
         use_aux_face_shape: bool = False,
+        pool_width: int = 32,
     ) -> None:
         super().__init__()
         self.use_pq_ratio = use_pq_ratio
@@ -39,6 +40,7 @@ class EyelinerCNN(nn.Module):
         self.dropout_rate = dropout_rate
         self.use_aux_face_shape = use_aux_face_shape
         self.aux_input_dim = self.AUX_INPUT_DIM if use_aux_face_shape else 0
+        self.pool_width = pool_width
 
         def _bn(channels: int) -> nn.Module:
             return nn.BatchNorm2d(channels) if use_batchnorm else nn.Identity()
@@ -51,10 +53,10 @@ class EyelinerCNN(nn.Module):
             if i < num_conv_layers - 1:
                 layers.append(nn.MaxPool2d(2))
             in_ch = out_ch
-        layers.append(nn.AdaptiveAvgPool2d((1, 32)))
+        layers.append(nn.AdaptiveAvgPool2d((1, pool_width)))
         self.features = nn.Sequential(*layers)
 
-        cnn_flat = channels[-1] * 32
+        cnn_flat = channels[-1] * pool_width
         aux_dim = self.AUX_INPUT_DIM if use_aux_face_shape else 0
         scalar_in = int(use_is_upper) + int(use_pq_ratio) + int(use_distance_from_center) + int(use_norm_eye_scale) + aux_dim
         regressor_layers: list[nn.Module] = [
