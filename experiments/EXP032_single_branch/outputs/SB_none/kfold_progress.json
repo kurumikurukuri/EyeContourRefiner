@@ -1,0 +1,20 @@
+{
+  "1": {
+    "fold_idx": 1,
+    "best_val_mae": 0.03142927959561348,
+    "best_epoch": 100,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_none\\eyeliner_detection_fold1.pt"
+  },
+  "2": {
+    "fold_idx": 2,
+    "best_val_mae": 0.03110411763191223,
+    "best_epoch": 110,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_none\\eyeliner_detection_fold2.pt"
+  },
+  "3": {
+    "fold_idx": 3,
+    "best_val_mae": 0.03043593093752861,
+    "best_epoch": 95,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_none\\eyeliner_detection_fold3.pt"
+  }
+}

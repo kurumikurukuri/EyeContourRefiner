@@ -1,0 +1,23 @@
+{
+  "exp_name": "SB_none",
+  "config": {
+    "pq_rescale_mode": "none",
+    "pq_rescale_factor": 1.0,
+    "loss_fn": "t_l1",
+    "num_conv_layers": 4,
+    "pool_width": 8,
+    "aug_flags": 63,
+    "k_folds": 3,
+    "seed": 42,
+    "epochs": 200,
+    "batch_size": 32
+  },
+  "results": {
+    "cv_mae": 0.030989776055018108,
+    "fold_maes": [
+      0.03142927959561348,
+      0.03110411763191223,
+      0.03043593093752861
+    ]
+  }
+}
