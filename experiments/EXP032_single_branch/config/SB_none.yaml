@@ -1,0 +1,31 @@
+# EXP032 SB_none: 単独ブランチ（dual fusionなし）、pq_rescale_mode=none（生PQ）。
+# EXP019 X0_baseline = 現行dual標準ベースラインの branch A 単体を、
+# 同じ現行ベストプラクティスで学習する参照/対照条件（SB_eyescale との比較対象）。
+#
+# patch_t_min/max, label_t_min/max, patch_perp_scale, patch_size は
+# eyeliner/training/dual_branch.py の branch_a_x0() プリセットから
+# train_exp032.py が直接取得する（このyamlには重複させない。ズレ防止）。
+#
+# pool_width=8: 64x64パッチ→4層conv/pool後の特徴マップ幅(8)に一致させる。
+# デフォルト(32)のままだと8→32のupsample相当のAdaptiveAvgPool2dになり、
+# ONNXエクスポート不可（Unsupported: ...output size that are not factor of
+# input size）。dual標準のpool_width=8と同じ値に揃えることでONNX互換にする
+# （既存のEXP032チェックポイントとは重み形状が変わるため再学習が必要）。
+backbone: custom
+pool_width: 8
+pq_rescale_mode: none
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+use_is_upper: true

@@ -1,0 +1,30 @@
+# EXP032 SB_eyescale: 単独ブランチ（dual fusionなし）、pq_rescale_mode=eye_scale。
+# EXP019 X2_eye_scale（単独座標系として最良、raw PQ比 -1.5%・汎化ギャップ最小）を、
+# EXP020以降にdual-branch側で積み上がった現行ベストプラクティスで再学習する。
+# = 現行dual標準ベースラインの branch B 単体。
+#
+# patch_t_min/max, label_t_min/max, patch_perp_scale, patch_size は
+# eyeliner/training/dual_branch.py の branch_b_eye_scale() プリセットから
+# train_exp032.py が直接取得する（このyamlには重複させない。ズレ防止）。
+#
+# pool_width=8: 64x64パッチ→4層conv/pool後の特徴マップ幅(8)に一致させる。
+# デフォルト(32)のままだと8→32のupsample相当のAdaptiveAvgPool2dになり、
+# ONNXエクスポートできない。dual標準のpool_width=8と同じ値に揃えることでONNX互換にする。
+backbone: custom
+pool_width: 8
+pq_rescale_mode: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63
+endpoint_blend_range: 0.25
+use_is_upper: true

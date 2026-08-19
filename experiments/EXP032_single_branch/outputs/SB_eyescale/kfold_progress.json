@@ -1,0 +1,20 @@
+{
+  "1": {
+    "fold_idx": 1,
+    "best_val_mae": 0.03229910135269165,
+    "best_epoch": 83,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_eyescale\\eyeliner_detection_fold1.pt"
+  },
+  "2": {
+    "fold_idx": 2,
+    "best_val_mae": 0.032352205365896225,
+    "best_epoch": 84,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_eyescale\\eyeliner_detection_fold2.pt"
+  },
+  "3": {
+    "fold_idx": 3,
+    "best_val_mae": 0.03211137652397156,
+    "best_epoch": 85,
+    "model_path": "experiments\\EXP032_single_branch\\outputs\\SB_eyescale\\eyeliner_detection_fold3.pt"
+  }
+}
