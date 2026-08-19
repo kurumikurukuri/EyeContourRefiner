@@ -54,3 +54,6 @@ experiments/*/log.txt
 
 # Notebook caches
 notebooks/.cache/
+
+# Model benchmark results (再生成可能)
+tools/model_benchmark/results/
