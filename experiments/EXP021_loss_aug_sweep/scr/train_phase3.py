@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import logging
 import sys
 from pathlib import Path
 
@@ -36,13 +37,12 @@ MANIFEST_TEST = MANIFEST_DIR / "manifest_test.csv"
 EXP020_BEST_DIR = EXP020_DIR / "outputs" / "X1_independent_none_eye_scale"
 
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(EXP020_DIR / "scr"))
+from eyeliner.training.dual_inference import infer_dual  # noqa: E402
 from eyeliner.training.dual_kfold import (  # noqa: E402
     DualTrainConfig,
     build_dual_experiment_record,
     run_dual_kfold,
 )
-from infer_exp020 import infer_dual  # noqa: E402
 
 
 DEFAULT_CONFIG_NAME = "phase3_X1_t_l1_woflip"
@@ -98,6 +98,12 @@ def main() -> int:
     p.add_argument("--skip-train", action="store_true")
     p.add_argument("--skip-infer", action="store_true")
     args = p.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 
     CONFIG_NAME = args.config
     EXP_NAME = args.exp_name or args.config

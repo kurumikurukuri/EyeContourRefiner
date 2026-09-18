@@ -33,6 +33,7 @@ from _common import (
     find_exp_dir,
     is_missing,
     load_db_index,
+    locate_config_file,
     sanitize_for_json,
 )
 
@@ -123,6 +124,8 @@ def compute_band_stats(
 def collect_prediction_files(exp_dir: Path, configs: list[str] | None = None) -> list[tuple[str, Path]]:
     """実験ディレクトリの outputs/ 以下から predictions.csv を収集する。
 
+    outputs/{config}/ と outputs/{config}/{config}/ の両方の構成を扱う（_common.config_output_dirs）。
+
     Args:
         exp_dir: 実験ディレクトリ
         configs: 対象 config 名のリスト（None なら全 config）
@@ -140,11 +143,9 @@ def collect_prediction_files(exp_dir: Path, configs: list[str] | None = None) ->
             continue
         if configs is not None and d.name not in configs:
             continue
-        for name in PREDICTIONS_CSV_NAMES:
-            csv_path = d / name
-            if csv_path.exists():
-                result.append((d.name, csv_path))
-                break
+        csv_path = locate_config_file(exp_dir, d.name, PREDICTIONS_CSV_NAMES)
+        if csv_path is not None:
+            result.append((d.name, csv_path))
     return result
 
 

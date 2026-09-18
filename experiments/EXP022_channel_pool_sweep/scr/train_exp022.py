@@ -40,10 +40,7 @@ OUTPUT_DIR = EXP_DIR / "outputs"
 MANIFEST_TRAIN = MANIFEST_DIR / "manifest_train.csv"
 MANIFEST_TEST = MANIFEST_DIR / "manifest_test.csv"
 
-EXP020_DIR = ROOT / "experiments" / "EXP020_dual_branch"
-
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(EXP020_DIR / "scr"))
 sys.path.insert(0, str(SCR_DIR))
 from eyeliner.training.dual_kfold import (  # noqa: E402
     DualTrainConfig,

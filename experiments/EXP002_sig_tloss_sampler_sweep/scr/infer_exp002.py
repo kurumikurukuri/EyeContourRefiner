@@ -31,7 +31,7 @@ from scripts.exp_utils import run_with_log  # noqa: E402
 
 def load_patch_params(config_name: str) -> dict:
     """experiment.json からパッチパラメータを取得する。"""
-    exp_json = OUTPUT_DIR / config_name / config_name / "experiment.json"
+    exp_json = OUTPUT_DIR / config_name / "experiment.json"
     if not exp_json.exists():
         return {"patch_t_min": -0.5, "patch_t_max": 1.5, "label_t_min": None, "label_t_max": None}
     with open(exp_json, encoding="utf-8") as f:
@@ -46,7 +46,7 @@ def load_patch_params(config_name: str) -> dict:
 
 
 def build_infer_cmd(config_name: str, manifest: Path, output_path: Path) -> list[str]:
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
     params     = load_patch_params(config_name)
 
     cmd = [
@@ -70,7 +70,7 @@ def run_infer(config_name: str) -> int:
     print(f"  推論: {config_name}")
     print(f"{'='*60}")
 
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
 
     # train 推論
     train_cmd = build_infer_cmd(config_name, MANIFEST_TRAIN, models_dir / "train_predictions.csv")

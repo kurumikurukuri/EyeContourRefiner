@@ -71,13 +71,12 @@ def load_config(config_name: str) -> dict:
 
 def build_train_cmd(config_name: str, cfg: dict) -> list[str]:
     manifest_train, manifest_test = get_manifests(config_name)
-    output_dir = OUTPUT_DIR / config_name
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "train.py"),
         "--manifest",         str(manifest_train),
         "--holdout",          str(manifest_test),
-        "--output_dir",       str(output_dir),
+        "--output_dir",       str(OUTPUT_DIR),
         "--exp_name",         config_name,
         "--backbone",         cfg["backbone"],
         "--loss_fn",          cfg["loss_fn"],

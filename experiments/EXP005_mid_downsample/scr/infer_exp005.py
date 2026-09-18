@@ -33,7 +33,7 @@ PATCH_T_MAX =  1.5
 
 
 def build_infer_cmd(config_name: str, manifest: Path, output_path: Path) -> list[str]:
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
     return [
         sys.executable,
         str(ROOT / "scripts" / "infer.py"),
@@ -50,7 +50,7 @@ def run_infer(config_name: str) -> int:
     print(f"  推論: {config_name}")
     print(f"{'='*60}")
 
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
     if not models_dir.exists():
         print(f"  [SKIP] モデルディレクトリが存在しません: {models_dir}")
         return 1

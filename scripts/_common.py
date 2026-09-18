@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -151,13 +151,37 @@ def find_exp_dir(exp_num: str) -> Path:
 PREDICTIONS_CSV_NAMES: tuple[str, ...] = ("predictions.csv", "test_predictions.csv")
 
 
+def config_output_dirs(exp_dir: Path, config: str) -> tuple[Path, Path]:
+    """config の成果物を探す候補ディレクトリを優先順に返す。
+
+    現在は全 EXP とも outputs/{config}/ に平置きで出力する。
+    旧学習ドライバは outputs/{config}/{config}/ に出力しており、当時のローカル環境に
+    未整理の成果物が残っている場合に備えて入れ子側もフォールバックとして探索する。
+    平置きを優先する。
+    """
+    flat_dir = exp_dir / "outputs" / config
+    return flat_dir, flat_dir / config
+
+
+def locate_config_file(exp_dir: Path, config: str, names: Sequence[str]) -> Path | None:
+    """候補ディレクトリを優先順に探し、最初に見つかったファイルを返す。
+
+    同一ディレクトリ内では names の順に優先する。見つからなければ None。
+    """
+    for directory in config_output_dirs(exp_dir, config):
+        for name in names:
+            path = directory / name
+            if path.exists():
+                return path
+    return None
+
+
 def find_predictions_csv(exp_dir: Path, config: str) -> Path:
     """実験ディレクトリ + config 名から predictions.csv（or test_predictions.csv）を探す。"""
-    config_dir = exp_dir / "outputs" / config
-    for name in PREDICTIONS_CSV_NAMES:
-        csv_path = config_dir / name
-        if csv_path.exists():
-            return csv_path
-    raise FileNotFoundError(
-        f"{' または '.join(PREDICTIONS_CSV_NAMES)} が見つかりません: {config_dir}"
-    )
+    csv_path = locate_config_file(exp_dir, config, PREDICTIONS_CSV_NAMES)
+    if csv_path is None:
+        searched = ", ".join(str(d) for d in config_output_dirs(exp_dir, config))
+        raise FileNotFoundError(
+            f"{' または '.join(PREDICTIONS_CSV_NAMES)} が見つかりません: {searched}"
+        )
+    return csv_path

@@ -27,6 +27,7 @@ from _common import (
     find_predictions_csv,
     is_missing,
     load_db_index,
+    locate_config_file,
 )
 from compute_passrate import (
     collect_prediction_files,
@@ -35,9 +36,9 @@ from compute_passrate import (
 from paired_ttest import paired_comparison
 
 def load_experiment_json(exp_dir: Path, config: str) -> dict | None:
-    """experiment.json を読み込む。"""
-    path = exp_dir / "outputs" / config / "experiment.json"
-    if not path.exists():
+    """experiment.json を読み込む（outputs/{config}/ と outputs/{config}/{config}/ の両構成に対応）。"""
+    path = locate_config_file(exp_dir, config, ("experiment.json",))
+    if path is None:
         return None
     return json.loads(path.read_text(encoding="utf-8"))
 

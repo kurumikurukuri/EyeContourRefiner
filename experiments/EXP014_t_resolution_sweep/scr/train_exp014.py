@@ -53,13 +53,12 @@ def load_config(config_name: str) -> dict:
 
 def build_train_cmd(config_name: str, cfg: dict) -> list[str]:
     """config dict から train.py 呼び出しコマンドを構築する。"""
-    output_dir = OUTPUT_DIR / config_name
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "train.py"),
         "--manifest",        str(MANIFEST_TRAIN),
         "--holdout",         str(MANIFEST_TEST),
-        "--output_dir",      str(output_dir),
+        "--output_dir",      str(OUTPUT_DIR),
         "--exp_name",        config_name,
         "--backbone",        cfg["backbone"],
         "--loss_fn",         cfg["loss_fn"],

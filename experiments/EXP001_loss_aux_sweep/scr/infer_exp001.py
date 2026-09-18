@@ -31,7 +31,7 @@ from scripts.exp_utils import run_with_log, find_model_dir  # noqa: E402
 
 def load_experiment_params(config_name: str) -> dict:
     """experiment.json からハイパーパラメータを読み込む。"""
-    exp_json = OUTPUT_DIR / config_name / config_name / "experiment.json"
+    exp_json = OUTPUT_DIR / config_name / "experiment.json"
     if not exp_json.exists():
         raise FileNotFoundError(
             f"experiment.json が見つかりません: {exp_json}\n"
@@ -44,7 +44,7 @@ def load_experiment_params(config_name: str) -> dict:
 
 def build_infer_cmd(config_name: str, params: dict, manifest: Path, output_csv: Path) -> list[str]:
     """hyperparameters dict から infer.py 呼び出しコマンドを構築する。"""
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
 
     cmd = [
         sys.executable,
@@ -80,7 +80,7 @@ def run_infer(config_name: str) -> int:
         print(f"\n[ERROR] {e}")
         return 1
 
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
 
     # train 推論
     train_cmd = build_infer_cmd(config_name, params, MANIFEST_TRAIN, models_dir / "train_predictions.csv")
