@@ -28,6 +28,8 @@ eyeliner/        コアライブラリ — モデル定義、データ読み込�
   training/       kfold, trainer, scheduler, checkpoint, oof
   evaluation/     loss, metrics
 annotator/       Web アノテーション UI (FastAPI server + dashboard + static/)
+scripts/         実験パイプライン共通スクリプト — train/infer/sweep、評価(compute_passrate/paired_ttest/generate_summary)、
+                 manifest分割(split_holdout)、ONNX変換等。ステップ2〜6で使用（pyproject.toml で正式パッケージ登録）
 experiments/     CNN 学習実験（EXP{NNN}）— 各実験は独立
   EXP{NNN}/       config/, manifests/, outputs/, scr/, EXP{NNN}_summary.md
 analyses/        分析・統計分析(XGBoost等)

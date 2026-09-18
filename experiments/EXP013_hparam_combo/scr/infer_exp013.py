@@ -48,7 +48,7 @@ def load_infer_params(config_name: str) -> dict:
 
 def build_infer_cmd(config_name: str, manifest: Path, output_path: Path) -> list[str]:
     p = load_infer_params(config_name)
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "infer.py"),
@@ -73,7 +73,7 @@ def run_infer(config_name: str) -> int:
     print(f"  推論: {config_name}")
     print(f"{'='*60}")
 
-    models_dir = OUTPUT_DIR / config_name / config_name
+    models_dir = OUTPUT_DIR / config_name
     if not models_dir.exists():
         print(f"  [SKIP] モデルディレクトリが存在しません: {models_dir}")
         print(f"         先に train_exp013.py --configs {config_name} を実行してください")

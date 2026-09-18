@@ -29,6 +29,7 @@ from _common import (
     find_exp_dir,
     find_predictions_csv,
     load_db_index,
+    locate_config_file,
     sanitize_for_json,
 )
 
@@ -38,13 +39,16 @@ from _common import (
 # ---------------------------------------------------------------------------
 
 def list_configs(exp_dir: Path) -> list[str]:
-    """実験ディレクトリの outputs/ 以下にある config 名一覧を返す。"""
+    """実験ディレクトリの outputs/ 以下にある config 名一覧を返す。
+
+    outputs/{config}/ と outputs/{config}/{config}/ の両方の構成を扱う（_common.config_output_dirs）。
+    """
     outputs_dir = exp_dir / "outputs"
     if not outputs_dir.exists():
         return []
     return sorted(
         d.name for d in outputs_dir.iterdir()
-        if d.is_dir() and any((d / name).exists() for name in PREDICTIONS_CSV_NAMES)
+        if d.is_dir() and locate_config_file(exp_dir, d.name, PREDICTIONS_CSV_NAMES) is not None
     )
 
 

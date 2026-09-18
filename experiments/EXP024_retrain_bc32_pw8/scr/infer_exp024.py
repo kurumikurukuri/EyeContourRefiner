@@ -2,7 +2,7 @@
 train_predictions.csv / test_predictions.csv を出力。
 
 学習済み model_dir（base_channel/pool_width はモデル自体に保存済みのため CLI 引数不要）に対して
-EXP020 の infer_dual をそのまま呼び出す薄いラッパー（EXP022 の infer_exp022.py と同一構成）。
+eyeliner.training.dual_inference.infer_dual を呼び出す薄いラッパー（EXP022 の infer_exp022.py と同一構成）。
 scripts/paired_ttest.py がこの predictions.csv を使って比較する。
 
 使い方:
@@ -12,6 +12,7 @@ scripts/paired_ttest.py がこの predictions.csv を使って比較する。
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -22,11 +23,8 @@ EXP_DIR = Path(__file__).parent.parent
 CONFIG_DIR = EXP_DIR / "config"
 MANIFEST_DIR = EXP_DIR / "manifests"
 
-EXP020_DIR = ROOT / "experiments" / "EXP020_dual_branch"
-
 sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(EXP020_DIR / "scr"))
-from infer_exp020 import infer_dual  # noqa: E402
+from eyeliner.training.dual_inference import infer_dual  # noqa: E402
 
 
 def infer_single(
@@ -58,6 +56,12 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=None, help="出力 CSV パス（--manifest 指定時のみ有効）")
     parser.add_argument("--num-workers", type=int, default=0)
     args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 
     config_name = args.config or args.model_dir.name
     with open(CONFIG_DIR / f"{config_name}.yaml", encoding="utf-8") as f:

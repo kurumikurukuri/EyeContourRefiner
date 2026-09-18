@@ -105,13 +105,12 @@ def make_downsampled_manifest(
 
 
 def build_train_cmd(config_name: str, cfg: dict, manifest_path: Path) -> list[str]:
-    output_dir = OUTPUT_DIR / config_name
     cmd = [
         sys.executable,
         str(ROOT / "scripts" / "train.py"),
         "--manifest",        str(manifest_path),
         "--holdout",         str(MANIFEST_TEST),
-        "--output_dir",      str(output_dir),
+        "--output_dir",      str(OUTPUT_DIR),
         "--exp_name",        config_name,
         "--backbone",        cfg["backbone"],
         "--loss_fn",         cfg["loss_fn"],
