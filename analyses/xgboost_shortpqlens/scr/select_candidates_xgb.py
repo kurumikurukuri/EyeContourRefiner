@@ -298,7 +298,7 @@ def main() -> None:
     if oi_labels:
         print(f"  OI ラベルあり: {len(oi_labels)} 画像")
     else:
-        print("  OI ラベルなし（tools/fetch_oi_image_labels.py を先に実行してください）")
+        print("  OI ラベルなし（tools/sampledb_maintenance/fetch_oi_image_labels.py を先に実行してください）")
 
     # ---- 1. 学習データ（DB の labeled lower[0]） -----------------------------
     print("[1] loading labeled lower[0] from DB ...")

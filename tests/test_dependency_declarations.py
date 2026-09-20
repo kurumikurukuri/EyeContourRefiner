@@ -1,7 +1,11 @@
 """pyproject.toml の依存宣言が実際の import と噛み合っていることを検証する。
 
-`pip install .` した環境で、コアライブラリ・annotator・評価スクリプト・
-実験の train/infer エントリポイントが import エラーにならないことを保証する。
+コアライブラリ・annotator・評価スクリプト・実験の train/infer エントリポイントが
+import エラーにならないことを保証する。import は base dependencies だけでなく
+optional-dependencies（analysis 等の extra）も含めた宣言と突き合わせる。
+データ取得系スクリプト（例: tools/data_management/download_open_images.py の fiftyone）は
+`analysis` extra に宣言されているため、base のみの `pip install .` では
+必要時に import エラーになる（スクリプト側で `pip install fiftyone` を案内する）。
 tests/ 自身の import は dev extra を含めた宣言と突き合わせる。
 """
 from __future__ import annotations
@@ -88,6 +92,13 @@ def _pyproject_dev_dependencies() -> list[str]:
     return list(_pyproject()["project"]["optional-dependencies"]["dev"])
 
 
+def _pyproject_all_dependencies() -> list[str]:
+    deps = list(_pyproject_dependencies())
+    for extra in _pyproject()["project"].get("optional-dependencies", {}).values():
+        deps.extend(extra)
+    return deps
+
+
 def _requirements_txt_lines() -> list[str]:
     lines = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
     return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
@@ -100,7 +111,7 @@ def test_scan_covers_core_and_experiment_entry_points():
 
 
 def test_all_third_party_imports_are_declared_in_pyproject():
-    declared = {_requirement_key(r)[0] for r in _pyproject_dependencies()}
+    declared = {_requirement_key(r)[0] for r in _pyproject_all_dependencies()}
     ignored = set(sys.stdlib_module_names) | _first_party_module_names() | {"__future__"}
 
     missing: dict[str, list[str]] = {}

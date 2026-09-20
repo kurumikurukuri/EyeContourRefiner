@@ -7,7 +7,7 @@
 
 Usage:
     python -m analyses.xgboost_predskip.scr.train_pseudo \
-        --config analyses/xgboost_predskip/config/pseudo.yaml
+        --config <config.yaml>
 """
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("analyses/xgboost_predskip/config/pseudo.yaml"),
+        required=True,
     )
     args = parser.parse_args()
 

@@ -40,7 +40,7 @@
 
 ## 実行手順
 
-1. 前提として `tools/export_db_to_csv.py` で `data/samples.csv` を最新状態に書き出す（`face_yaw/pitch/roll` を含む）。
+1. 前提として `tools/csv_export/export_db_to_csv.py` で `data/samples.csv` を最新状態に書き出す（`face_yaw/pitch/roll` を含む）。
 2. manifest 生成:
    ```bash
    python -m analyses.xgboost_baseline.scr.split \

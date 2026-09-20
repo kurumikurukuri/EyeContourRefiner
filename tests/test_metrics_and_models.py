@@ -272,6 +272,13 @@ class TestEnsembleModel:
         model = build_model("mobilenet_v3_small", pretrained=False)
         assert isinstance(model, TransferModel)
 
+    def test_build_model_soft_argmax(self):
+        """'soft_argmax' で SoftArgmaxEdgeCNN が生成される（ImportError 回帰）。"""
+        from eyeliner.models.soft_argmax import SoftArgmaxEdgeCNN
+
+        model = build_model("soft_argmax")
+        assert isinstance(model, SoftArgmaxEdgeCNN)
+
 
 # ===========================================================
 # EyelinerPatchDataset crop/label 範囲分離

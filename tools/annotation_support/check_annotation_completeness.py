@@ -5,9 +5,9 @@
 14の倍数でない目を検出して表示する。
 
 使い方:
-    python tools/check_annotation_completeness.py
-    python tools/check_annotation_completeness.py --db path/to/samples.db
-    python tools/check_annotation_completeness.py --skip-flag 0  # skip_flag=0のみ対象
+    python tools/annotation_support/check_annotation_completeness.py
+    python tools/annotation_support/check_annotation_completeness.py --db path/to/samples.db
+    python tools/annotation_support/check_annotation_completeness.py --skip-flag 0  # skip_flag=0のみ対象
 """
 
 import argparse

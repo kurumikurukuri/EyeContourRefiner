@@ -2,8 +2,8 @@
 アノテーション操作ログから工数・アクション集計を行うスクリプト。
 
 使い方:
-    python tools/analyze_annotator_log.py
-    python tools/analyze_annotator_log.py --log-dir logs --gap 5
+    python tools/annotation_support/analyze_annotator_log.py
+    python tools/annotation_support/analyze_annotator_log.py --log-dir logs --gap 5
 """
 from __future__ import annotations
 

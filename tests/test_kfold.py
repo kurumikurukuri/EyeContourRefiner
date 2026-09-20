@@ -183,3 +183,47 @@ class TestRunKfoldResume:
         run_kfold(manifest, exp_dir, _fast_config(epochs=1), k_folds=2)
 
         assert (exp_dir / "kfold_progress.json").exists()
+
+
+class TestGroupFoldCompleteness:
+    """GroupKFold が同一画像のサンプルを train/val に分割しないこと。
+
+    テスト用 manifest が 1 画像 = 1 サンプルだと、group key を取り違えても検出できない。
+    同一 image_path を複数サンプルで共有する manifest を使い、画像が fold を跨がないことを保証する。
+    """
+
+    def test_same_image_samples_stay_together(self, tmp_path: Path):
+        image_dir = tmp_path / "images"
+        image_dir.mkdir(exist_ok=True)
+        rows = []
+        for i in range(6):
+            img_path = image_dir / f"img_{i}.jpg"
+            _write_image(img_path)
+            for point_index in range(3):
+                rows.append({
+                    "image_path": str(img_path),
+                    "part_name": "eyeliner_right",
+                    "sub_key": "upper",
+                    "point_index": point_index,
+                    "px": 60.0, "py": 100.0, "qx": 140.0, "qy": 100.0,
+                    "t": 0.5,
+                })
+        manifest = tmp_path / "manifest.csv"
+        _write_manifest(manifest, rows)
+
+        captured: list[tuple[int, list[dict], list[dict]]] = []
+
+        def spy_train_fold(train_records, val_records, fold_idx, *args, **kwargs):
+            captured.append((fold_idx, train_records, val_records))
+            return FoldResult(fold_idx=fold_idx, best_val_mae=0.0, best_epoch=0, model_path="")
+
+        with mock.patch.object(kfold_module, "_train_single_fold", side_effect=spy_train_fold):
+            run_kfold(manifest, tmp_path / "outputs", _fast_config(), k_folds=3)
+
+        assert len(captured) == 3
+        for fold_idx, train_records, val_records in captured:
+            train_images = {r["image_path"] for r in train_records}
+            val_images = {r["image_path"] for r in val_records}
+            assert train_images.isdisjoint(val_images), (
+                f"fold {fold_idx} で同一画像が train/val に分割された"
+            )

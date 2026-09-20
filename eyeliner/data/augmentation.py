@@ -103,7 +103,7 @@ def augment(
 
     if aug_flags & AUG_NOISE:
         sigma = random.uniform(0.0, 5.0) / 255.0
-        patch = patch + np.random.default_rng().standard_normal(patch.shape, dtype=np.float32) * sigma
+        patch = patch + np.random.standard_normal(patch.shape).astype(np.float32) * sigma
 
     if (aug_flags & AUG_COLOR_TEMP) and random.random() < fire_p:
         r_scale = random.uniform(0.85, 1.15)

@@ -2,19 +2,21 @@
 
 パッチは元画像を補間拡大したものであるため、パッチ空間で JPEG 圧縮や解像度劣化を
 定義しても元画像で実際に起きる劣化とは一致しない。本実験は劣化を **ワープ前の
-元画像 ROI** に適用する 2 種を追加し、2×2 直積で評価する。
+元画像 ROI** に適用する 2 種を追加し、2×2 直積 + endpoint_blend 単独 ablation の
+計 5 構成で評価する。
 
   SD0_baseline   劣化なし（= EXP030 AF0 / EXP029 baseline と同一構成の anchor）
   SD1_jpeg       JPEG 圧縮のみ      quality ∈ [30, 90], p=0.5
   SD2_resjitter  解像度ジッタのみ    scale ∈ [1.0, 2.5]（AREA↓ → LINEAR↑）, p=0.5
   SD3_both       両方（縮小 → 縮小サイズで JPEG → 拡大）
+  SD4_endpoint_only  photometric 5種 off、ENDPOINT_BLEND のみ
 
 劣化は train のみ（augment_data=True）に適用され、val / hold-out / 推論は
 全 config で完全に同一の入力になる。テストセットは EXP029 で採用が決まった
 db_replica 固定 manifest。
 
 使い方:
-    python experiments/EXP031_source_space_aug/scr/train_exp031.py             # 全 4 構成
+    python experiments/EXP031_source_space_aug/scr/train_exp031.py             # 全 5 構成
     python experiments/EXP031_source_space_aug/scr/train_exp031.py --configs SD1_jpeg
     python experiments/EXP031_source_space_aug/scr/train_exp031.py --epochs 2  # smoke
     python experiments/EXP031_source_space_aug/scr/infer_exp031.py             # 推論
@@ -48,14 +50,15 @@ from eyeliner.training.dual_kfold import (  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
-# 4 構成 = 劣化 2 種の 2×2 直積。yaml ファイル名は arm 名と同一。
-CONFIGS = {
-    "SD0_baseline": "SD0_baseline",    # anchor（劣化なし）
-    "SD1_jpeg": "SD1_jpeg",            # JPEG のみ
-    "SD2_resjitter": "SD2_resjitter",  # 解像度ジッタのみ
-    "SD3_both": "SD3_both",            # 両方
-    "SD4_endpoint_only": "SD4_endpoint_only",  # photometric 5種 off、ENDPOINT_BLEND のみ
-}
+# 5 構成 = 劣化 2 種の 2×2 直積 + endpoint_blend 単独 ablation。
+# yaml ファイル名は arm 名と同一のため、arm 名の列挙で足りる。
+CONFIGS = (
+    "SD0_baseline",    # anchor（劣化なし）
+    "SD1_jpeg",        # JPEG のみ
+    "SD2_resjitter",   # 解像度ジッタのみ
+    "SD3_both",        # 両方
+    "SD4_endpoint_only",  # photometric 5種 off、ENDPOINT_BLEND のみ
+)
 
 
 def load_config(name: str) -> dict:
@@ -110,7 +113,7 @@ def _degrade_label(config: DualTrainConfig) -> str:
 
 
 def run_one(exp_name: str, epochs_override: int | None, num_workers: int = 0) -> dict:
-    cfg = load_config(CONFIGS[exp_name])
+    cfg = load_config(exp_name)
     config = build_train_config(cfg, epochs_override, num_workers=num_workers)
     model_dir = OUTPUT_DIR / exp_name
     model_dir.mkdir(parents=True, exist_ok=True)

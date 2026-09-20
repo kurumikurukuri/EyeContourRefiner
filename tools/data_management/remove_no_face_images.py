@@ -4,7 +4,7 @@
 ===============================================================================
 前提
 ===============================================================================
-事前に `python tools/build_image_registry.py` で images.db を構築しておくこと。
+事前に `python tools/imagesdb_maintenance/build_image_registry.py` で images.db を構築しておくこと。
 images.db には全画像の has_face / max_eye_scale / max_lap_var / min_face_yaw が
 格納されており、フィルタは SQL 一発で完了する（MediaPipe 不要）。
 
@@ -29,16 +29,16 @@ images.db には全画像の has_face / max_eye_scale / max_lap_var / min_face_y
 使い方
 ===============================================================================
   # dry-run
-  python tools/remove_no_face_images.py --no-face --ellipse --dry-run
+  python tools/data_management/remove_no_face_images.py --no-face --ellipse --dry-run
   
   #条件
-  python tools/remove_no_face_images.py --no-face --ellipse --min-eye-scale 39 --max-face-yaw 45 --max-eye-brightness 20 --min-eye-brightness 185
+  python tools/data_management/remove_no_face_images.py --no-face --ellipse --min-eye-scale 39 --max-face-yaw 45 --max-eye-brightness 20 --min-eye-brightness 185
 
   # 実際に削除
 
 
   # 強制（アノテーション済み含む）
-  python tools/remove_no_face_images.py --no-face --ellipse --force
+  python tools/data_management/remove_no_face_images.py --no-face --ellipse --force
 """
 
 from __future__ import annotations
@@ -265,7 +265,7 @@ def main(
     if not REGISTRY_DB.exists():
         log.error(
             "registry DB が見つかりません: %s\n"
-            "  先に `python tools/build_image_registry.py` を実行してください。",
+            "  先に `python tools/imagesdb_maintenance/build_image_registry.py` を実行してください。",
             REGISTRY_DB,
         )
         return

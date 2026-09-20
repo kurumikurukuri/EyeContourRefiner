@@ -5,9 +5,9 @@
 一度作れば以降のフィルタ操作は SQL 一発、MediaPipe 不要。
 
 Usage:
-  python tools/build_image_registry.py                          # 全画像スキャン
-  python tools/build_image_registry.py --workers 4              # 並列数指定
-  python tools/build_image_registry.py --force                  # 再スキャン（既存DB破棄）
+  python tools/imagesdb_maintenance/build_image_registry.py                          # 全画像スキャン
+  python tools/imagesdb_maintenance/build_image_registry.py --workers 4              # 並列数指定
+  python tools/imagesdb_maintenance/build_image_registry.py --force                  # 再スキャン（既存DB破棄）
 """
 
 from __future__ import annotations

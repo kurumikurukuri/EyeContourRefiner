@@ -27,6 +27,7 @@ EXP024 で容量 3 軸（base_channel / pool_width / num_conv_layers）が全て
 - **データ**: manifest_train.csv 12,628件 / manifest_test.csv 8,372件。holdout（test）は k に依らず固定のため、6 構成は同一 test set での公平比較。train 側のみ k 分割が変わる。
 - **評価指標**: cv_mae, holdout_mae(norm/raw t), passrate(std/strict)。閾値は `experiments/Completion_Criteria.md` 準拠（std=0.01788, strict=0.01604）。
 
+
 ## 結果（hold-out, n=8372）
 
 ### 定量評価
