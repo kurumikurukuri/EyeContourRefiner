@@ -649,7 +649,7 @@ def get_error_patch(idx: str, exp_path: Optional[str] = None, split: str = "test
 
     try:
         import cv2
-        from tools.analyze_errors import _draw_patch_with_markers, _patch_to_base64
+        from annotator.analyze_errors import _draw_patch_with_markers, _patch_to_base64
         bgr = cv2.imread(target["image_path"])
         if bgr is None:
             raise HTTPException(status_code=404, detail="画像を読み込めません")

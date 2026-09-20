@@ -25,7 +25,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from annotator import db as _db  # noqa: E402
 from annotator.face_pose import compute_face_orientation  # noqa: E402
-from eyeliner.data.eyeliner_landmarks import EYELINER_CORRECTION_MAP  # noqa: E402
+from eyeliner.data.eyeliner_landmarks import EYELINER_SAMPLE_PQ  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
@@ -35,36 +35,9 @@ def _normalize_path(p: str) -> str:
     return Path(p).as_posix()
 
 
-def _deduplicated_eyeliner_map() -> Dict[str, Dict[str, list]]:
-    """upper[0] が lower の最後 edge と重複する場合、upper から除外したマップを返す。"""
-    filtered: Dict[str, Dict[str, list]] = {}
-    for part_name, sub_map in EYELINER_CORRECTION_MAP.items():
-        upper_list = sub_map["upper"]
-        lower_list = sub_map["lower"]
-
-        # lower の最後の edge を取得
-        last_lower_edge = None
-        for entry in reversed(lower_list):
-            if isinstance(entry, tuple):
-                last_lower_edge = entry
-                break
-
-        # upper の先頭 edge が lower 末尾と重複していれば除外
-        new_upper: list = []
-        skipped_first_edge = False
-        for entry in upper_list:
-            if isinstance(entry, tuple) and not skipped_first_edge:
-                if entry == last_lower_edge:
-                    skipped_first_edge = True
-                    continue
-            new_upper.append(entry)
-
-        filtered[part_name] = {"upper": new_upper, "lower": lower_list}
-    return filtered
-
-
-# サンプル生成用（重複除外済み）
-EYELINER_SAMPLES_MAP = _deduplicated_eyeliner_map()
+# サンプル生成用: {part_name: {sub_key: ((edge_id, p_idx, q_idx), ...)}}。
+# 並び順が point_index（0〜6）に対応する。tools/imagesdb_maintenance も参照する。
+EYELINER_SAMPLES_MAP = EYELINER_SAMPLE_PQ
 
 
 def _landmark_centroid(coords: np.ndarray) -> Tuple[float, float]:
@@ -230,8 +203,6 @@ def _extract_samples_from_image(
             for sub_key, index_list in sub_map.items():
                 point_index = 0
                 for entry in index_list:
-                    if not isinstance(entry, tuple):
-                        continue
                     _, p_idx, q_idx = entry
                     px, py = coords[p_idx]
                     qx, qy = coords[q_idx]
@@ -292,6 +263,10 @@ def generate_samples(
 
     既存の DB が存在する場合、t / skip_flag 値を保持してマージする。
     face_index は既存 DB の PQ 重心との最近傍マッチングにより揃える。
+
+    DB は全置換される。images_dir に既存 DB の画像の一部しか無い場合は生成数が急減し、
+    急減ガードで中断する。既存 DB へ画像を追加する用途には、増分マージする
+    tools/imagesdb_maintenance/preprocess_new_images.py を使うこと。
 
     workers >= 2 の場合、ThreadPoolExecutor で並列処理する。
     """
