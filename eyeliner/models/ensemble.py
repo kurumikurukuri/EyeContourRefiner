@@ -50,8 +50,8 @@ def build_model(
         from eyeliner.models.eyeliner_cnn import EyelinerCNN
         return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape, pool_width=pool_width)
     if backbone == "soft_argmax":
-        from eyeliner.models.soft_argmax import SoftArgmaxEyelinerCNN
-        return SoftArgmaxEyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
+        from eyeliner.models.soft_argmax import SoftArgmaxEdgeCNN
+        return SoftArgmaxEdgeCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
     from eyeliner.models.transfer import TransferModel
     return TransferModel(backbone, pretrained=pretrained, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper)
 

@@ -33,13 +33,13 @@ Open Images V7 から商用利用・再配布可能な顔画像を取得する�
 を大幅に削減。
 
 使い方:
-    python tools/download_open_images.py --output data/images/
-    python tools/download_open_images.py --split train --max-images 2000 --output data/images/
+    python tools/data_management/download_open_images.py --output data/images/
+    python tools/data_management/download_open_images.py --split train --max-images 2000 --output data/images/
 
     # train 分割を3回に分けてダウンロード（アノテーション前処理は初回のみ）
-    python tools/download_open_images.py --split train --shard 0 --shard-count 3
-    python tools/download_open_images.py --split train --shard 1 --shard-count 3
-    python tools/download_open_images.py --split train --shard 2 --shard-count 3
+    python tools/data_management/download_open_images.py --split train --shard 0 --shard-count 3
+    python tools/data_management/download_open_images.py --split train --shard 1 --shard-count 3
+    python tools/data_management/download_open_images.py --split train --shard 2 --shard-count 3
 """
 from __future__ import annotations
 

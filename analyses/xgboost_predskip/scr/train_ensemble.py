@@ -5,7 +5,7 @@ OOF 確率と test 確率を 3 モデル × seed 数の単純平均で統合す�
 
 Usage:
     python -m analyses.xgboost_predskip.scr.train_ensemble \
-        --config analyses/xgboost_predskip/config/ensemble.yaml
+        --config <config.yaml>
 """
 from __future__ import annotations
 
@@ -238,7 +238,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("analyses/xgboost_predskip/config/ensemble.yaml"),
+        required=True,
     )
     args = parser.parse_args()
 

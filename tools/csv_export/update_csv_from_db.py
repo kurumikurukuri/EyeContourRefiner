@@ -1,7 +1,7 @@
 """
 DB の skip_flag / t (true_t_raw) を CSV に反映する。
 
-通常運用: python tools/update_csv_from_db.py
+通常運用: python tools/csv_export/update_csv_from_db.py
   → skip_flag / true_t_raw のみ更新（高速）
 
 初回のみ (--add-image-features):

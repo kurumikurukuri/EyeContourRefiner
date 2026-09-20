@@ -8,8 +8,8 @@ lap_var      : 目領域ラプラシアン分散（ブレ指標）
                ── images.db の max_lap_var を per-image として転用
 
 Usage:
-    python tools/backfill_db_features.py [--db data/samples.db] [--images-db data/images.db]
-    python tools/backfill_db_features.py --skip-dims  # norm_eye_scale を省略（高速）
+    python tools/imagesdb_maintenance/backfill_db_features.py [--db data/samples.db] [--images-db data/images.db]
+    python tools/imagesdb_maintenance/backfill_db_features.py --skip-dims  # norm_eye_scale を省略（高速）
 """
 from __future__ import annotations
 

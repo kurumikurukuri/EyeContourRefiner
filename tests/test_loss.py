@@ -25,6 +25,9 @@ from eyeliner.evaluation.loss import (
     error_ratio_loss,
     error_ratio_huber_loss,
     wing_px_loss,
+    dead_zone_huber_loss,
+    t_weighted_huber_loss,
+    eye_normalized_smooth_l1_loss,
     get_loss_fn,
     LOSS_FN_REGISTRY,
 )
@@ -220,6 +223,109 @@ class TestWingPxLoss:
         loss.backward()
         assert loss.item() >= 0.0 and torch.isfinite(loss)
         assert torch.isfinite(pred.grad).all()
+
+
+# ===========================================================
+# t_weighted — 正規化t × 重み付き Huber
+# ===========================================================
+
+class TestTWeightedHuberLoss:
+
+    def test_zero_when_perfect(self):
+        y = torch.rand(10, 1)
+        w = torch.rand(10, 1)
+        assert t_weighted_huber_loss(y, y, w).item() == pytest.approx(0.0, abs=1e-12)
+
+    def test_weights_multiply_per_sample(self):
+        """loss = mean(huber(dt_i) * w_i)（重みは正規化しない）。"""
+        pred = torch.tensor([[0.02], [0.06]])
+        y = torch.zeros(2, 1)
+        w = torch.tensor([[2.0], [4.0]])
+        delta = 0.05
+        # dt=0.02 < delta -> huber = 0.5*0.02^2/delta = 0.004
+        # dt=0.06 >= delta -> huber = 0.06 - 0.025 = 0.035
+        expected = (0.004 * 2.0 + 0.035 * 4.0) / 2.0
+        assert t_weighted_huber_loss(pred, y, w, delta=delta).item() == pytest.approx(
+            expected, rel=1e-6
+        )
+
+    def test_equal_weights_reduce_to_huber_t(self):
+        """重みが全て 1 のとき huber_t_loss に一致する。"""
+        pred, y = _rand_pair(seed=11)
+        ones = torch.ones(64, 1)
+        assert t_weighted_huber_loss(pred, y, ones).item() == pytest.approx(
+            huber_t_loss(pred, y).item(), rel=1e-6
+        )
+
+
+# ===========================================================
+# dead_zone — epsilon-insensitive Huber
+# ===========================================================
+
+class TestDeadZoneHuberLoss:
+
+    def test_zero_in_dead_zone(self):
+        """|dt| < epsilon は損失 0。"""
+        pred = torch.tensor([[0.005]])
+        y = torch.zeros(1, 1)
+        assert dead_zone_huber_loss(pred, y, epsilon=0.01, delta=0.05).item() == pytest.approx(
+            0.0, abs=1e-12
+        )
+
+    def test_zero_at_dead_zone_boundary(self):
+        """|dt| == epsilon でちょうど 0。"""
+        pred = torch.tensor([[0.01]])
+        y = torch.zeros(1, 1)
+        assert dead_zone_huber_loss(pred, y, epsilon=0.01, delta=0.05).item() == pytest.approx(
+            0.0, abs=1e-12
+        )
+
+    def test_quadratic_above_dead_zone(self):
+        """epsilon <= |dt| < epsilon+delta は 0.5*(|dt|-eps)^2/delta。"""
+        pred = torch.tensor([[0.03]])  # |dt|=0.03, shifted=0.02 < delta=0.05
+        y = torch.zeros(1, 1)
+        expected = 0.5 * 0.02**2 / 0.05
+        assert dead_zone_huber_loss(pred, y, epsilon=0.01, delta=0.05).item() == pytest.approx(
+            expected, rel=1e-6
+        )
+
+    def test_linear_above_dead_zone_plus_delta(self):
+        """|dt| >= epsilon+delta は (|dt|-eps) - 0.5*delta。"""
+        pred = torch.tensor([[0.10]])  # |dt|=0.10, shifted=0.09 >= 0.05
+        y = torch.zeros(1, 1)
+        expected = 0.09 - 0.5 * 0.05
+        assert dead_zone_huber_loss(pred, y, epsilon=0.01, delta=0.05).item() == pytest.approx(
+            expected, rel=1e-6
+        )
+
+    def test_negative_error_is_symmetric(self):
+        """残差の符号に依らず |dt| で評価される。"""
+        plus = dead_zone_huber_loss(torch.tensor([[0.10]]), torch.zeros(1, 1), epsilon=0.01, delta=0.05)
+        minus = dead_zone_huber_loss(torch.tensor([[-0.10]]), torch.zeros(1, 1), epsilon=0.01, delta=0.05)
+        assert plus.item() == pytest.approx(minus.item(), rel=1e-6)
+
+
+# ===========================================================
+# normalized_pixel — 目正規化 Smooth L1
+# ===========================================================
+
+class TestEyeNormalizedSmoothL1Loss:
+
+    def test_zero_when_perfect(self):
+        y = torch.rand(10, 1)
+        w = torch.rand(10, 1)
+        assert eye_normalized_smooth_l1_loss(y, y, w).item() == pytest.approx(0.0, abs=1e-12)
+
+    def test_weight_multiplies_per_sample(self):
+        """loss = mean(huber(dt_i) * weight_i)。"""
+        pred = torch.tensor([[0.02], [0.06]])
+        y = torch.zeros(2, 1)
+        weight = torch.tensor([[3.0], [5.0]])
+        delta = 0.05
+        expected = (0.004 * 3.0 + 0.035 * 5.0) / 2.0
+        assert eye_normalized_smooth_l1_loss(pred, y, weight, delta=delta).item() == pytest.approx(
+            expected, rel=1e-6
+        )
 
 
 # ===========================================================

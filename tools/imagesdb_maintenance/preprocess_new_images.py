@@ -6,16 +6,16 @@ images.db にあり samples.db にない新規画像に対して FaceMesh を実
 
 使い方:
     # 4プロセスで全工程実行
-    python tools/preprocess_new_images.py --workers 4
+    python tools/imagesdb_maintenance/preprocess_new_images.py --workers 4
 
     # 特定シャードのみ実行（手動並列用）
-    python tools/preprocess_new_images.py --shard 0 --total 4
+    python tools/imagesdb_maintenance/preprocess_new_images.py --shard 0 --total 4
 
     # 中間ファイルのマージのみ
-    python tools/preprocess_new_images.py --merge-only
+    python tools/imagesdb_maintenance/preprocess_new_images.py --merge-only
 
     # 小規模テスト
-    python tools/preprocess_new_images.py --workers 2 --limit 100
+    python tools/imagesdb_maintenance/preprocess_new_images.py --workers 2 --limit 100
 """
 from __future__ import annotations
 

@@ -223,7 +223,7 @@ def main() -> None:
     parser.add_argument(
         "--config",
         type=Path,
-        default=Path("analyses/xgboost_predskip/config/baseline.yaml"),
+        required=True,
     )
     args = parser.parse_args()
 

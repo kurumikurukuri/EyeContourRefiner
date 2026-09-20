@@ -6,7 +6,8 @@
         --images data/images/ \\
         --db data/samples.db
 
-既存の DB が存在する場合、t / skip_flag 値を保持してマージします（再実行しても上書きしません）。
+既存の DB が存在する場合、t / skip_flag 値を保持してマージします（全置換のため、
+生成サンプルが 0 件または既存件数から急減する場合は DB を更新せず中断します）。
 face_index は既存 DB の PQ 重心と最近傍マッチングにより揃えます。
 """
 from __future__ import annotations
@@ -276,6 +277,11 @@ def _process_chunk(
     return samples
 
 
+# 既存アノテーション件数に対する生成サンプル数の下限比率。これを下回る急減は
+# mediapipe API 互換性の崩れ等による異常とみなし、DB の全置換を中断する。
+_MIN_SAMPLE_RETENTION_RATIO = 0.5
+
+
 def generate_samples(
     images_dir: Path,
     db_path: Path,
@@ -358,6 +364,20 @@ def generate_samples(
             ann = existing_annotations[key]
             sample["t"] = ann["t"]
             sample["skip_flag"] = ann["skip_flag"]
+
+    existing_count = len(existing_annotations)
+    if not all_samples:
+        logger.error(
+            "生成されたサンプルが 0 件のため DB を更新しません（既存アノテーション %d 件を保護）。",
+            existing_count,
+        )
+        return
+    if existing_count > 0 and len(all_samples) < existing_count * _MIN_SAMPLE_RETENTION_RATIO:
+        logger.error(
+            "生成サンプル %d 件が既存 %d 件の %d%% を下回るため DB を更新しません（異常な減少を検出）。",
+            len(all_samples), existing_count, int(_MIN_SAMPLE_RETENTION_RATIO * 100),
+        )
+        return
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
     _db.replace_all_samples(all_samples, db_path)

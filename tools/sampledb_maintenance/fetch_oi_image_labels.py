@@ -6,8 +6,8 @@ samples.db に含まれる ImageID に絞った Open Images image-level human la
   columns: image_id, label_name  (Confidence=1 のみ)
 
 Usage:
-    python tools/fetch_oi_image_labels.py
-    python tools/fetch_oi_image_labels.py --force   # キャッシュ再取得
+    python tools/sampledb_maintenance/fetch_oi_image_labels.py
+    python tools/sampledb_maintenance/fetch_oi_image_labels.py --force   # キャッシュ再取得
 """
 from __future__ import annotations
 

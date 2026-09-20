@@ -4,7 +4,7 @@ fiftyone キャッシュの detections.csv と classes.csv を読み込み、
 samples.db に image_labels テーブルとしてラベル・フィルタフラグを保存する。
 
 使い方:
-    python tools/populate_image_metadata.py
+    python tools/sampledb_maintenance/populate_image_metadata.py
 """
 from __future__ import annotations
 

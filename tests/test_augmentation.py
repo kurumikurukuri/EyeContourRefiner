@@ -10,10 +10,14 @@ import pytest
 from eyeliner.data.augmentation import (
     AUG_ALL,
     AUG_ENDPOINT_BLEND,
+    AUG_FLIP,
+    AUG_NOISE,
     AUG_NONE,
     ENDPOINT_BLEND_RANGE,
+    augment,
     augment_endpoints,
 )
+from eyeliner.training.trainer import set_seed
 
 
 def _reconstruct_r(px: float, py: float, qx: float, qy: float, t: float) -> tuple[float, float]:
@@ -195,3 +199,104 @@ class TestEndpointBlendRangeParam:
             endpoint_blend_range=ENDPOINT_BLEND_RANGE,
         )
         assert out_default == pytest.approx(out_explicit, abs=1e-12)
+
+
+class TestNoiseRngSeedControlled:
+    """AUG_NOISE が set_seed() の制御下にあることの回帰テスト。
+
+    NOISE だけが `np.random.default_rng()`（引数なし）を呼んでおり、set_seed() が固定する
+    legacy グローバル状態の外にあった。そのため seed を固定しても NOISE の乱数列は
+    run ごとに変わり、dataset_dual の枝A/B同期（RNG 状態の保存・復元）も素通りしていた。
+    """
+
+    def _patch(self) -> np.ndarray:
+        return np.full((8, 8, 3), 0.5, dtype=np.float32)
+
+    def test_same_seed_gives_same_output(self):
+        """同一 seed で 2 回呼ぶと完全一致する。"""
+        set_seed(0)
+        out_a, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        set_seed(0)
+        out_b, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        assert np.array_equal(out_a, out_b)
+
+    def test_different_seed_gives_different_output(self):
+        """seed を変えれば乱数列も変わる（seed が実際に効いていることの確認）。"""
+        set_seed(0)
+        out_a, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        set_seed(1)
+        out_b, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        assert not np.array_equal(out_a, out_b)
+
+    def test_noise_reproducible_via_legacy_state_save_restore(self):
+        """dataset_dual の枝A/B同期と同じ手順（legacy RNG 状態の保存・復元）で再現できる。
+
+        NOISE の振幅は random.uniform、実現値は np.random から引かれるため、
+        両方の legacy 状態を戻す必要がある。dataset_dual.py が枝Aのもとで保存し
+        枝Bの前に復元しているのはこの2つ。
+        """
+        random.seed(3)
+        np_state = np.random.get_state()
+        py_state = random.getstate()
+
+        out_a, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+
+        np.random.set_state(np_state)
+        random.setstate(py_state)
+        out_b, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+
+        assert np.array_equal(out_a, out_b)
+
+    def test_noise_is_actually_applied(self):
+        """sigma>0 のとき値が変化する（テスト自体が空振りしていないこと）。"""
+        set_seed(0)
+        out, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        assert not np.allclose(out, 0.5)
+
+    def test_dtype_and_shape_preserved(self):
+        """float32 / 入力 shape を維持する。"""
+        set_seed(0)
+        out, _ = augment(self._patch(), 0.5, aug_flags=AUG_NOISE)
+        assert out.dtype == np.float32
+        assert out.shape == (8, 8, 3)
+
+    def test_t_unaffected_by_noise(self):
+        """NOISE は t を変えない。"""
+        set_seed(0)
+        _, t_out = augment(self._patch(), 0.37, aug_flags=AUG_NOISE)
+        assert t_out == pytest.approx(0.37)
+
+
+class TestFlipLabelTransform:
+    """AUG_FLIP のラベル変換（t → t_min + t_max - t）と水平反転の直接テスト。
+
+    以前は flip ラベル変換に直接テストが無く、`t_max - t`（t_min 欠落）等に書き間違えても
+    検出できなかった。ここでは非対称な [t_min, t_max] でも反転式が厳密に成り立つことを確認する。
+    """
+
+    def _patch(self) -> np.ndarray:
+        return np.arange(4 * 4 * 3, dtype=np.float32).reshape(4, 4, 3) / 255.0
+
+    def test_flip_reflects_t_label(self, monkeypatch):
+        """t が区間中点で反転する（t' = t_min + t_max - t）。"""
+        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        _, t_out = augment(self._patch(), 0.3, t_min=0.0, t_max=1.0, aug_flags=AUG_FLIP)
+        assert t_out == pytest.approx(0.7)
+
+    def test_flip_respects_asymmetric_range(self, monkeypatch):
+        """非対称な [t_min, t_max] でも t_min + t_max - t が成り立つ。"""
+        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        _, t_out = augment(self._patch(), 0.5, t_min=0.2, t_max=1.1, aug_flags=AUG_FLIP)
+        assert t_out == pytest.approx(0.2 + 1.1 - 0.5)
+
+    def test_flip_horizontally_mirrors_patch(self, monkeypatch):
+        """パッチが水平反転される。"""
+        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        patch = self._patch()
+        out, _ = augment(patch, 0.5, aug_flags=AUG_FLIP)
+        assert np.array_equal(out, patch[:, ::-1])
+
+    def test_no_flip_preserves_t(self):
+        """フラグ OFF のとき t は不変。"""
+        _, t_out = augment(self._patch(), 0.3, aug_flags=AUG_NONE)
+        assert t_out == pytest.approx(0.3)
