@@ -17,6 +17,7 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 ROOT = Path(__file__).parent.parent
 
@@ -139,6 +140,21 @@ def test_all_third_party_imports_in_tests_are_declared():
 
     report = {dist: sorted(files)[:3] for dist, files in sorted(missing.items())}
     assert not missing, f"dependencies にも dev extra にも未宣言の import がある: {report}"
+
+
+def test_mediapipe_is_capped_to_versions_with_legacy_solutions_api():
+    """`mp.solutions`（FaceMesh）は 0.10.30 以降の wheel に含まれないため上限を宣言する。
+
+    annotator/preprocessor・tools/imagesdb_maintenance・EXP027 は mp.solutions.face_mesh に
+    依存する。face_makeup が固定する 0.10.21 で、samples.db の P/Q 座標を誤差 0 で
+    再現できることを確認済み（0.10.32 では AttributeError になる）。
+    """
+    (line,) = [r for r in _pyproject_dependencies() if _requirement_key(r)[0] == "mediapipe"]
+    specifier = Requirement(line).specifier
+
+    assert Version("0.10.21") in specifier
+    assert Version("0.10.30") not in specifier
+    assert Version("0.10.32") not in specifier
 
 
 def test_requirements_txt_matches_pyproject_dependencies():

@@ -142,8 +142,6 @@ def process_image(
             for sub_key, index_list in sub_map.items():
                 point_index = 0
                 for entry in index_list:
-                    if not isinstance(entry, tuple):
-                        continue
                     _, p_idx, q_idx = entry
                     px, py = coords[p_idx]
                     qx, qy = coords[q_idx]

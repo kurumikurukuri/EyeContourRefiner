@@ -7,18 +7,18 @@ infer_eyeliner_detection.py の出力 CSV を受け取り、
 
 使い方:
     # 既存の predictions CSV を分析（誤差の大きい順に CSV 出力）
-    python scripts/analyze_errors.py \\
+    python annotator/analyze_errors.py \\
         --predictions data/predictions.csv \\
         --top 50
 
     # パッチ画像付き HTML レポートも生成
-    python scripts/analyze_errors.py \\
+    python annotator/analyze_errors.py \\
         --predictions data/predictions.csv \\
         --top 50 \\
         --report data/error_report.html
 
     # 閾値以上の誤差のみ対象にする
-    python scripts/analyze_errors.py \\
+    python annotator/analyze_errors.py \\
         --predictions data/predictions.csv \\
         --threshold 0.15
 
