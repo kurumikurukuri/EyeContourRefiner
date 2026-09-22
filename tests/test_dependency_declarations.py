@@ -3,9 +3,10 @@
 コアライブラリ・annotator・評価スクリプト・実験の train/infer エントリポイントが
 import エラーにならないことを保証する。import は base dependencies だけでなく
 optional-dependencies（analysis 等の extra）も含めた宣言と突き合わせる。
-データ取得系スクリプト（例: scripts/download_open_images.py の fiftyone）は
+分析・エクスポート系の依存（tensorboard / scikit-image / pyiqa / thop 等）は
 `analysis` extra に宣言されているため、base のみの `pip install .` では
-必要時に import エラーになる（スクリプト側で `pip install fiftyone` を案内する）。
+必要時に import エラーになる。Open Images の画像取得（tools/data_management/fetch_images.py）は
+fiftyone に依存せず、base の requests だけで動く。
 tests/ 自身の import は dev extra を含めた宣言と突き合わせる。
 """
 from __future__ import annotations

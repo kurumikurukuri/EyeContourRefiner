@@ -53,6 +53,7 @@ data/            samples.db（アノテーション DB）+ 画像ファイル（
 ### データベース
 
 - `data/samples.db` (SQLite) — **唯一の真実 (source of truth)**
+- `data/` は `.gitignore` 対象。クローン直後は `python tools/data_management/restore_dataset.py` で最新実験の manifest から復元できる（詳細: `tools/data_management/README.md`）
 - 主要カラム: `idx`, `image_path`, `part_name` (eyeliner_right/left), `sub_key` (upper/lower), `point_index` (0-6), `px/py/qx/qy`, `t`, `skip_flag`, `face_yaw/pitch/roll`, `eye_scale`, `norm_eye_scale`, `lap_var`
 - 眼単位: 1画像あたり最大 2 眼 (left, right)。1 眼 = upper 7 点 + lower 7 点 の計 14 点（`part_name` で左右、`sub_key` で upper/lower を区別）
 

@@ -44,16 +44,16 @@ dev = [
     "pytest>=7",
     "pytest-cov>=4",
     "packaging>=23",
+    "httpx2>=2.0.0",  # starlette.testclient が要求（tests/test_t_pred_webui_server.py）
     "black",
     "isort",
     "ruff",
 ]
 analysis = [
-    # 分析・可視化・データ取得・エクスポート用。学習/推論だけなら不要。
+    # 分析・可視化・エクスポート用。学習/推論だけなら不要。
     "tensorboard>=2.14",   # 学習ログ可視化（任意）
     "scikit-image==0.26",  # tools/csv_export, analyses/xgboost_baseline
     "pyiqa==0.1.15",       # tools/csv_export（NIQE 再計算）
-    "fiftyone>=0.23",      # scripts/download_open_images.py
     "thop>=0.1.1",         # tools/model_benchmark（MACs 推定）
 ]
 
