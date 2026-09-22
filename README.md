@@ -13,13 +13,35 @@ ONNX モデルを生成する。
 ## セットアップ
 
 ```bash
-python -m venv .venv
+py -3.11 -m venv .venv   # Windows。Unix系は python3.11 -m venv .venv
 .venv/Scripts/activate   # Windows。Unix系は .venv/bin/activate
 pip install -r requirements.txt
 pip install xgboost optuna joblib tqdm  # 分析用追加依存
+pip install pytest httpx2  # テスト実行用（「テスト」節参照）
 ```
 
 Python 3.11 以上が必要（`pyproject.toml` 参照）。
+
+## データセットの復元（クローン直後）
+
+`data/`（`samples.db` と画像）は `.gitignore` 対象のためクローン直後には無い。リポジトリ同梱の
+**最新実験の manifest**（`experiments/EXP*/manifests/`）から、学習・評価用データを復元できる。
+
+```bash
+python tools/data_management/restore_dataset.py --dry-run   # 件数・容量の目安を確認
+python tools/data_management/restore_dataset.py             # 画像取得 → samples.db 再構築 → 顔姿勢・画質特徴量の復元
+```
+
+| ステップ | 処理 |
+|---------|------|
+| `fetch` | manifest の画像を Open Images の公開 S3 から `data/images/` に取得 |
+| `db` | manifest から `samples.db` を再構築（既存 DB は一致しない限り `--overwrite-db` なしでは触らない） |
+| `features` | MediaPipe FaceMesh を再実行して `face_yaw/pitch/roll`・`lap_var` を復元（画像同一性を検証） |
+
+`--steps db features` のように一部だけ実行でき、`--exp 32` で使う manifest の実験を指定できる。
+復元できないもの（未アノテーション行・`skip_flag=1`・`image_labels`）や環境上の注意（`features` は
+`mediapipe<0.10.30` が必要、`requirements.txt` の PyTorch は CPU 版）、Open Images の追加取得
+（`fetch_images.py`）の詳細は [`tools/data_management/README.md`](tools/data_management/README.md) を参照。
 
 ## ディレクトリ構成
 
