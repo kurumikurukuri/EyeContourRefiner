@@ -85,6 +85,29 @@ class TestGenerateSamplesDbGuard:
 
         assert calls == []
 
+    def test_aborts_when_existing_db_unreadable(self, tmp_path, monkeypatch):
+        """既存 DB の読込が失敗したとき、急減ガードを素通りして replace しない。"""
+        images_dir = tmp_path / "images"
+        images_dir.mkdir()
+        _write_dummy_image(images_dir)
+        db_path = tmp_path / "samples.db"
+
+        def _raise(path):
+            raise RuntimeError("database is locked")
+
+        monkeypatch.setattr(pp._db, "init_db", lambda path: None)
+        monkeypatch.setattr(pp._db, "load_all_samples", _raise)
+        monkeypatch.setattr(pp, "_extract_samples_from_image", lambda *a, **k: [_new_sample()])
+
+        calls = []
+        monkeypatch.setattr(
+            pp._db, "replace_all_samples", lambda samples, path: calls.append(samples)
+        )
+
+        pp.generate_samples(images_dir, db_path, workers=1)
+
+        assert calls == []
+
     def test_replaces_when_samples_are_healthy(self, tmp_path, monkeypatch):
         """正常に生成できた場合は replace を呼ぶ（ガードの誤爆がないこと）。"""
         images_dir = tmp_path / "images"
