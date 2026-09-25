@@ -43,6 +43,8 @@ OUTPUT_FILE = "oi_image_labels.csv"
 
 
 def load_db_image_ids(db_path: str) -> Set[str]:
+    if not Path(db_path).exists():
+        raise FileNotFoundError(f"samples.db が見つかりません: {db_path}")
     conn = sqlite3.connect(db_path)
     rows = conn.execute("SELECT DISTINCT image_path FROM samples").fetchall()
     conn.close()

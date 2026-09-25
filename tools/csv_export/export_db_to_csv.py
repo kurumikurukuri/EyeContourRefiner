@@ -8,6 +8,7 @@ pred_* / true_t_norm / rx_pred / ry_pred は空。
 
 import logging
 import math
+import os
 import sqlite3
 from collections import defaultdict
 from csv import DictWriter
@@ -104,6 +105,8 @@ scipy.misc.imresize = _imresize
 # DB
 # -----------------------------
 def load_records() -> list[dict]:
+    if not os.path.exists(DB_PATH):
+        raise FileNotFoundError(f"samples.db が見つかりません: {DB_PATH}")
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

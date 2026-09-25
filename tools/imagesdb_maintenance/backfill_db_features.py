@@ -142,6 +142,8 @@ def backfill(
     skip_dims: bool  = False,
     overwrite: bool  = False,
 ) -> None:
+    if not samples_db.exists():
+        raise FileNotFoundError(f"samples.db が見つかりません: {samples_db}")
     conn = sqlite3.connect(str(samples_db), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
