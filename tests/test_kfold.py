@@ -11,6 +11,7 @@ from unittest import mock
 import cv2
 import numpy as np
 import pytest
+import torch
 
 import eyeliner.training.kfold as kfold_module
 from eyeliner.training.kfold import FoldResult, run_kfold
@@ -227,3 +228,32 @@ class TestGroupFoldCompleteness:
             assert train_images.isdisjoint(val_images), (
                 f"fold {fold_idx} で同一画像が train/val に分割された"
             )
+
+
+# ---------------------------------------------------------------------------
+# _build_oof_predictions: pq_rescale 時は t' 予測を生 t に戻してから t_true と並べる
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("pq_rescale_mode", ["eye_scale", "none"])
+def test_build_oof_predictions_returns_raw_t(pq_rescale_mode):
+    from eyeliner.data.patch_utils import compute_pq_rescale
+
+    rec = {
+        "idx": "7", "image_path": "a.jpg", "part_name": "eyeliner_right",
+        "sub_key": "upper", "point_index": "3",
+        "px": "100.0", "py": "50.0", "qx": "130.0", "qy": "60.0",
+        "eye_scale": "80.0", "t": "0.8",
+    }
+    config = TrainConfig(pq_rescale_mode=pq_rescale_mode, pq_rescale_factor=0.5, use_t_norm=True)
+    label_t_min, label_range = -0.5, 2.0
+    *_, t_prime, _ = compute_pq_rescale(
+        100.0, 50.0, 130.0, 60.0, 0.8, rec, pq_rescale_mode, 0.5,
+    )
+    pred_norm = torch.tensor([[(t_prime - label_t_min) / label_range]])
+
+    oof = kfold_module._build_oof_predictions(
+        [rec], pred_norm, config, label_range, label_t_min, fold_idx=0,
+    )
+
+    assert oof[0].t_pred == pytest.approx(0.8, abs=1e-5)
+    assert oof[0].t_true == pytest.approx(0.8)
