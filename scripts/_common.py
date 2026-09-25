@@ -185,3 +185,38 @@ def find_predictions_csv(exp_dir: Path, config: str) -> Path:
             f"{' または '.join(PREDICTIONS_CSV_NAMES)} が見つかりません: {searched}"
         )
     return csv_path
+
+
+# 評価ツールが読む標準列名 → scripts/infer.py が出力する別名。どちらも元の PQ 座標系の生 t 値。
+PREDICTION_COLUMN_ALIASES: dict[str, str] = {
+    "t_true": "true_t_raw",
+    "t_pred": "pred_t_raw",
+}
+
+
+def read_predictions_csv(csv_path: str | Path) -> pd.DataFrame:
+    """predictions CSV を読み込み、真値・予測値の列名を t_true / t_pred に揃える。
+
+    学習・実験ごとの infer スクリプトは t_true / t_pred を、scripts/infer.py は
+    true_t_raw / pred_t_raw を出力する。標準列がある場合はそれを優先し、無いときだけ別名から
+    rename する（別名の列は残す）。どちらの形式でも揃わなければ ValueError にする。
+
+    Raises:
+        FileNotFoundError: csv_path が存在しない
+        ValueError: t_true / t_pred のどちらか（別名を含む）が CSV に無い
+    """
+    df = pd.read_csv(csv_path)
+    renames = {
+        alias: canonical
+        for canonical, alias in PREDICTION_COLUMN_ALIASES.items()
+        if canonical not in df.columns and alias in df.columns
+    }
+    df = df.rename(columns=renames)
+
+    missing = [c for c in PREDICTION_COLUMN_ALIASES if c not in df.columns]
+    if missing:
+        accepted = ", ".join(f"{c}（別名 {PREDICTION_COLUMN_ALIASES[c]}）" for c in missing)
+        raise ValueError(
+            f"predictions CSV に必要な列がありません: {accepted} / {csv_path} の列: {list(df.columns)}"
+        )
+    return df

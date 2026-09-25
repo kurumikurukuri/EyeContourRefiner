@@ -30,6 +30,7 @@ from _common import (
     find_predictions_csv,
     load_db_index,
     locate_config_file,
+    read_predictions_csv,
     sanitize_for_json,
 )
 
@@ -91,8 +92,8 @@ def paired_comparison(
                                       "improvement_pct": float, "ttest_p": float, "sig": str } },
         }
     """
-    base_df = pd.read_csv(baseline_csv)
-    tgt_df = pd.read_csv(target_csv)
+    base_df = read_predictions_csv(baseline_csv)
+    tgt_df = read_predictions_csv(target_csv)
 
     # 共通 idx で突き合わせ
     common_idx = sorted(set(base_df["idx"]) & set(tgt_df["idx"]))
