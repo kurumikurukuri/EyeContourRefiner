@@ -28,6 +28,7 @@ from _common import (
     is_missing,
     load_db_index,
     locate_config_file,
+    read_predictions_csv,
 )
 from compute_passrate import (
     collect_prediction_files,
@@ -67,7 +68,7 @@ def generate_summary_md(
 
     all_configs: dict[str, dict] = {}
     for config_name, csv_path in pred_files:
-        pred_df = pd.read_csv(csv_path)
+        pred_df = read_predictions_csv(csv_path)
         stats = compute_band_stats(pred_df, db_df)
         exp_json = load_experiment_json(exp_dir, config_name)
         all_configs[config_name] = {

@@ -34,6 +34,7 @@ from _common import (
     is_missing,
     load_db_index,
     locate_config_file,
+    read_predictions_csv,
     sanitize_for_json,
 )
 
@@ -282,13 +283,17 @@ def print_passrate_table(all_stats: list[dict]) -> None:
 def _read_predictions_csv(csv_path: Path) -> pd.DataFrame | None:
     """predictions.csv を読み込む。エラー時はメッセージを表示して None を返す。"""
     try:
-        return pd.read_csv(csv_path)
+        return read_predictions_csv(csv_path)
     except pd.errors.ParserError as e:
         print(f"[ERROR] CSV のパースに失敗しました: {csv_path}")
         print(f"  {e}")
         return None
     except FileNotFoundError:
         print(f"[ERROR] CSV ファイルが見つかりません: {csv_path}")
+        return None
+    except ValueError as e:
+        print(f"[ERROR] CSV の列が評価に使えません: {csv_path}")
+        print(f"  {e}")
         return None
 
 
