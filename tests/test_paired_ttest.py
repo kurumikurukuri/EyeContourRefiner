@@ -163,6 +163,24 @@ class TestPairedComparison:
         result = paired_comparison(csv, csv, db_df, metric="raw_t")
         assert "error" in result
 
+    def test_raw_t_excludes_nan_rows(self, db_df, tmp_path):
+        """raw_t で NaN 行があっても全体が NaN → p=1.0 に化けず、NaN 行を除外して検定する。"""
+        n = 20
+        t_true = np.linspace(0.1, 0.9, n)
+        base_pred = t_true + 0.05 + np.linspace(0.0, 0.01, n)
+        tgt_pred = t_true + 0.01
+        base_pred[0] = np.nan
+        base_csv = tmp_path / "base.csv"
+        tgt_csv = tmp_path / "tgt.csv"
+        pd.DataFrame({"idx": range(n), "t_true": t_true, "t_pred": base_pred}).to_csv(base_csv, index=False)
+        pd.DataFrame({"idx": range(n), "t_true": t_true, "t_pred": tgt_pred}).to_csv(tgt_csv, index=False)
+
+        result = paired_comparison(base_csv, tgt_csv, db_df, metric="raw_t")
+
+        assert result["n_common"] == n - 1
+        assert not np.isnan(result["overall"]["mae_base"])
+        assert result["overall"]["ttest_p"] < 0.001
+
     def test_non_overlapping_idx(self, db_df, tmp_path):
         """共通 idx なし → error"""
         base_df = pd.DataFrame({
