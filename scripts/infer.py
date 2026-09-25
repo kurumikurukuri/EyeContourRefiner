@@ -396,6 +396,7 @@ def run_single(
     patch_perp_scale: float = 1.0,
     patch_size: tuple = PATCH_SIZE,
     use_t_norm: bool = True,
+    point_index: int | None = None,
 ) -> None:
     bgr = cv2.imread(str(image_path))
     if bgr is None:
@@ -408,7 +409,7 @@ def run_single(
         patch_perp_scale=patch_perp_scale,
         patch_size=patch_size,
         use_t_norm=use_t_norm,
-        point_index=args.point_index,
+        point_index=point_index,
     )
     if use_t_norm:
         eff_label_min = label_t_min if label_t_min is not None else patch_t_min
@@ -556,6 +557,7 @@ def main() -> None:
             patch_perp_scale=args.patch_perp_scale,
             patch_size=patch_size,
             use_t_norm=use_t_norm,
+            point_index=args.point_index,
         )
 
 
