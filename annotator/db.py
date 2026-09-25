@@ -167,6 +167,23 @@ def batch_update_t(
         )
 
 
+def fill_unannotated_t(
+    updates: List[Tuple[int, float]],
+    db_path: Path = DB_PATH,
+) -> int:
+    """(idx, t) のうち t が未設定の行だけを更新し、実際に更新した件数を返す。
+
+    予測の一括適用中に手動保存された値を上書きしないよう、UPDATE 時点で t IS NULL を再確認する。
+    """
+    with _connect(db_path) as conn:
+        before = conn.total_changes
+        conn.executemany(
+            "UPDATE samples SET t = ? WHERE idx = ? AND t IS NULL",
+            [(t, idx) for idx, t in updates],
+        )
+        return conn.total_changes - before
+
+
 def reset_t_for_eye(
     image_path: str,
     face_index: Optional[int],
