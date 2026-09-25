@@ -110,15 +110,14 @@ def paired_comparison(
     if metric == "error_ratio":
         base_err = compute_error_ratio(base_df, db_df)
         tgt_err = compute_error_ratio(tgt_df, db_df)
-        # error_ratio が有効なサンプルのみに絞る
-        valid = base_err.notna() & tgt_err.notna()
-        base_err = base_err[valid]
-        tgt_err = tgt_err[valid]
-        common_idx_valid = [idx for i, idx in enumerate(common_idx) if valid.iloc[i]]
     else:
         base_err = (base_df["t_pred"] - base_df["t_true"]).abs()
         tgt_err = (tgt_df["t_pred"] - tgt_df["t_true"]).abs()
-        common_idx_valid = common_idx
+    # 誤差が有効なサンプルのみに絞る（NaN が 1 件でも残ると検定全体が NaN になる）
+    valid = base_err.notna() & tgt_err.notna()
+    base_err = base_err[valid]
+    tgt_err = tgt_err[valid]
+    common_idx_valid = [idx for i, idx in enumerate(common_idx) if valid.iloc[i]]
 
     n_common = len(common_idx_valid)
     if n_common < 2:
@@ -159,9 +158,7 @@ def paired_comparison(
         result["overall"]["pass_std_base"] = float((base_arr <= THRESHOLD_STD).mean() * 100)
         result["overall"]["pass_std_target"] = float((tgt_arr <= THRESHOLD_STD).mean() * 100)
 
-    t_true = base_df["t_true"].values
-    if metric == "error_ratio":
-        t_true = t_true[valid.values]
+    t_true = base_df["t_true"].values[valid.values]
 
     for bname, bfn in T_BANDS:
         mask = bfn(t_true)
