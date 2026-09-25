@@ -343,7 +343,9 @@ def generate_samples(
             }
         logger.info("既存の DB から %d 件のアノテーションを読み込みました。", len(existing_annotations))
     except Exception as exc:
-        logger.warning("既存の DB を読み込めませんでした: %s", exc)
+        # 読めないまま続行すると既存件数 0 扱いで急減ガードが効かず、全置換で全アノテーションを失う。
+        logger.error("既存の DB を読み込めないため DB を更新しません（既存アノテーションを保護）: %s", exc)
+        return
 
     all_samples: List[Dict[str, Any]] = []
 
