@@ -12,6 +12,7 @@ import torch
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
+from eyeliner.data.patch_utils import get_pq_prime_dist, invert_pq_rescale_t
 from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
 from eyeliner.models.ensemble import build_model, load_model, save_model
 from eyeliner.training.checkpoint import load_checkpoint, remove_checkpoint, save_checkpoint
@@ -77,6 +78,15 @@ def _label_range_and_min(config: TrainConfig) -> tuple[float, float]:
     return 1.0, 0.0
 
 
+def _to_raw_t(t_pred: float, rec: dict, config: TrainConfig) -> float:
+    """pq_rescale 学習モデルの予測 t'（P'Q' 座標系）を生 PQ 座標系の t に戻す。"""
+    if config.pq_rescale_mode == "none":
+        return t_pred
+    pq_dist = float(np.hypot(float(rec["qx"]) - float(rec["px"]), float(rec["qy"]) - float(rec["py"])))
+    pq_prime_dist = get_pq_prime_dist(rec, pq_dist, config.pq_rescale_mode, config.pq_rescale_factor)
+    return invert_pq_rescale_t(t_pred, pq_dist, pq_prime_dist)
+
+
 def _build_oof_predictions(
     val_records: list[dict],
     val_preds: torch.Tensor,
@@ -89,11 +99,13 @@ def _build_oof_predictions(
 
     val_loader は shuffle=False のため、val_preds の順序は val_records と一致する。
     t_true は manifest の生 t（rec["t"]）をそのまま使う（infer_*.py と同じ convention）。
+    pq_rescale_mode != "none" のモデルは P'Q' 座標系の t' を予測するため、生 t に逆変換して揃える。
     """
     preds = val_preds.reshape(-1).tolist()
     oof: list[OofPrediction] = []
     for rec, pred_norm in zip(val_records, preds):
         t_pred = pred_norm * label_range + label_t_min if config.use_t_norm else pred_norm
+        t_pred = _to_raw_t(t_pred, rec, config)
         oof.append(OofPrediction(
             idx=str(rec.get("idx", "")),
             image_path=rec["image_path"],
