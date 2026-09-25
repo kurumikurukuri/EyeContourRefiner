@@ -1110,6 +1110,7 @@ def apply_pred_eye(idx: int):
         for s in targets
     ]
     updates: List[tuple] = []
+    out_of_range = 0
     for s in targets:
         is_upper = 1.0 if s.get("sub_key", "") == "upper" else 0.0
         orig_pq = math.sqrt((float(s["qx"]) - float(s["px"])) ** 2 + (float(s["qy"]) - float(s["py"])) ** 2)
@@ -1119,17 +1120,25 @@ def apply_pred_eye(idx: int):
             float(s["qx"]), float(s["qy"]), is_upper,
             pq_prime=pq_prime_val,
         )
-        if t_norm is not None:
-            t_raw = t_norm * (T_MAX - T_MIN) + T_MIN
-            updates.append((s["idx"], t_raw))
+        if t_norm is None:
+            continue
+        # 手動保存（/api/annotate）と同じ t_norm [0, 1] の範囲外は DB に書かず、未ラベルのまま残す
+        if not (0.0 <= t_norm <= 1.0):
+            out_of_range += 1
+            continue
+        updates.append((s["idx"], t_norm * (T_MAX - T_MIN) + T_MIN))
 
+    if out_of_range:
+        logger.warning("[apply_pred] idx=%d 範囲外の予測 %d 件を適用しませんでした", idx, out_of_range)
     if not updates:
-        raise HTTPException(status_code=500, detail="全サンプルの予測に失敗しました")
+        raise HTTPException(
+            status_code=500, detail="適用できる予測がありません（予測失敗または範囲外）"
+        )
 
-    _db.batch_update_t(updates)
+    updated = _db.fill_unannotated_t(updates)
     _build_image_index()
-    logger.info("[apply_pred] idx=%d updated=%d", idx, len(updates))
-    return {"ok": True, "updated": len(updates)}
+    logger.info("[apply_pred] idx=%d updated=%d predicted=%d", idx, updated, len(updates))
+    return {"ok": True, "updated": updated}
 
 
 @app.post("/api/reset_eye/{idx}")

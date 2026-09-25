@@ -17,6 +17,7 @@ from annotator.db import (
     update_skip_flag,
     get_unannotated_samples_for_eye,
     batch_update_t,
+    fill_unannotated_t,
     delete_samples_by_image_paths,
     delete_orphan_samples,
     replace_all_samples,
@@ -231,6 +232,23 @@ class TestBatchUpdateT:
 
     def test_empty_updates(self, populated_db):
         batch_update_t([], populated_db)  # エラーにならない
+
+
+# ---------------------------------------------------------------------------
+# fill_unannotated_t
+# ---------------------------------------------------------------------------
+
+class TestFillUnannotatedT:
+    def test_fills_only_null_rows(self, populated_db):
+        """SELECT 後に手動保存された行は上書きしない（lost update 防止）。"""
+        update_annotation(1, 0.9, populated_db)
+        n = fill_unannotated_t([(0, 0.1), (1, 0.2)], populated_db)
+        assert n == 1
+        assert abs(get_sample_by_idx(0, populated_db)["t"] - 0.1) < 1e-9
+        assert abs(get_sample_by_idx(1, populated_db)["t"] - 0.9) < 1e-9
+
+    def test_empty_updates(self, populated_db):
+        assert fill_unannotated_t([], populated_db) == 0
 
 
 # ---------------------------------------------------------------------------
