@@ -5,12 +5,16 @@ data/samples.json と data/images/ の孤立エントリを削除するスクリ
 - data/images/ に存在するが samples.json に参照が無い画像を削除する
 - data/open_images_attribution.csv に存在するが samples.json に参照が無い行を削除する
 
+data/images/ は git 管理外で削除すると復旧できないため、DB が 0 件のとき、および孤立画像が
+画像全体の過半（MAX_ORPHAN_RATIO）を占めるとき（別 DB の取り違えの疑い）は何も削除せず中断する。
+後者は --force で上書きできるが、DB が 0 件のときは --force でも中断する。
+
 使い方:
     # 確認のみ（削除しない）
-    python scripts/cleanup_orphans.py --dry-run
+    python tools/data_management/cleanup_orphans.py --dry-run
 
     # 実際に削除する
-    python scripts/cleanup_orphans.py
+    python tools/data_management/cleanup_orphans.py
 """
 from __future__ import annotations
 
@@ -33,6 +37,9 @@ DB_PATH = ROOT / "data" / "samples.db"
 IMAGES_DIR = ROOT / "data" / "images"
 ATTRIBUTION_CSV = ROOT / "data" / "open_images_attribution.csv"
 
+# 孤立画像が data/images/ の画像数に占める割合がこれを超えたら、DB の取り違えを疑って中断する。
+MAX_ORPHAN_RATIO = 0.5
+
 
 def resolve_image_path(image_path_str: str) -> Path:
     """samples.json の image_path を絶対パスに変換する。"""
@@ -42,21 +49,43 @@ def resolve_image_path(image_path_str: str) -> Path:
     return ROOT / p
 
 
-def main(dry_run: bool) -> None:
+def main(dry_run: bool, force: bool = False) -> int:
+    """孤立エントリ・画像・attribution 行を削除する。正常終了は 0、中断は 1 を返す。"""
     if not DB_PATH.exists():
         log.error("samples.db が見つかりません: %s", DB_PATH)
-        return
+        return 1
     if not IMAGES_DIR.exists():
         log.error("images ディレクトリが見つかりません: %s", IMAGES_DIR)
-        return
+        return 1
 
     samples = _db.load_all_samples(DB_PATH)
     log.info("DB エントリ数: %d", len(samples))
+    if not samples:
+        log.error(
+            "DB が 0 件です。data/images/ の全画像と attribution 行が孤立扱いになるため、"
+            "何も削除せず中断します: %s",
+            DB_PATH,
+        )
+        return 1
 
     # DB から参照されている画像パスのセット
     referenced_images: set[Path] = {
         resolve_image_path(s["image_path"]).resolve() for s in samples
     }
+
+    image_files = list(IMAGES_DIR.glob("*.jpg")) + list(IMAGES_DIR.glob("*.png"))
+    orphan_images = [img for img in image_files if img.resolve() not in referenced_images]
+    orphan_ratio = len(orphan_images) / len(image_files) if image_files else 0.0
+    if orphan_ratio > MAX_ORPHAN_RATIO:
+        # % を含む文字列なので logging の引数書式を使わず、完成した文字列をそのまま渡す。
+        message = (
+            f"孤立画像が {len(orphan_images)}/{len(image_files)} 件（{orphan_ratio:.0%}）と過半です。"
+            f"別の DB を読んでいる可能性があります（DB_PATH: {DB_PATH}）。"
+        )
+        if not force:
+            log.error(message + "何も削除せず中断します。意図した結果なら --force を付けてください。")
+            return 1
+        log.warning(message + "--force が指定されたため続行します。")
 
     # --- 1. 画像が存在しない DB エントリを除去 ---
     valid_paths: list[str] = [
@@ -72,8 +101,6 @@ def main(dry_run: bool) -> None:
         log.info("DB を更新しました（残り %d エントリ）", len(valid_paths))
 
     # --- 2. DB から参照されていない画像ファイルを削除 ---
-    image_files = list(IMAGES_DIR.glob("*.jpg")) + list(IMAGES_DIR.glob("*.png"))
-    orphan_images = [img for img in image_files if img.resolve() not in referenced_images]
     log.info("DB に参照が無い孤立画像: %d 件", len(orphan_images))
 
     for img in orphan_images:
@@ -115,6 +142,7 @@ def main(dry_run: bool) -> None:
             len(orphan_images),
             removed_csv_rows,
         )
+    return 0
 
 
 if __name__ == "__main__":
@@ -124,5 +152,10 @@ if __name__ == "__main__":
         action="store_true",
         help="実際には削除せず、対象ファイルを表示するだけ",
     )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help=f"孤立画像が過半（{MAX_ORPHAN_RATIO:.0%} 超）でも削除する。DB が 0 件のときは効かない",
+    )
     args = parser.parse_args()
-    main(dry_run=args.dry_run)
+    sys.exit(main(dry_run=args.dry_run, force=args.force))
