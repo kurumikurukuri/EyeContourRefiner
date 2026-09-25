@@ -223,22 +223,18 @@ def _remove_from_attribution_csv(stems: set[str], dry_run: bool) -> int:
     if not ATTRIBUTION_CSV.exists():
         return 0
     with ATTRIBUTION_CSV.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = reader.fieldnames or []
-        rows = list(reader)
+        header, *rows = list(csv.reader(f)) or [[]]
 
-    kept = [r for r in rows if r.get("image_id", "") not in stems]
+    id_col = header.index("image_id") if "image_id" in header else 0
+    kept = [r for r in rows if not r or r[id_col] not in stems]
     removed = len(rows) - len(kept)
     log.info("attribution.csv: %d 行削除 (残り %d)", removed, len(kept))
 
     if not dry_run and removed > 0:
-        ATTRIBUTION_CSV.write_text(
-            "\n".join(
-                [",".join(fieldnames)]
-                + [",".join(r.get(f, "") for f in fieldnames) for r in kept]
-            ),
-            encoding="utf-8",
-        )
+        # author / title はカンマ・引用符を含み得るため csv モジュールでエスケープする。
+        # DictWriter ではなく行リストで書き戻し、旧 writer が残した列ずれ行も内容を変えずに残す。
+        with ATTRIBUTION_CSV.open("w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerows([header, *kept])
     return removed
 
 
