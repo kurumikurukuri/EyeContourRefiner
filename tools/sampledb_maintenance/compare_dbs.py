@@ -11,8 +11,15 @@ from pathlib import Path
 KEY_COLUMNS = ("image_path", "face_index", "part_name", "sub_key", "point_index")
 
 
+def _require_db(db_path: Path) -> None:
+    """sqlite3.connect が存在しないパスに空 DB を作るのを防ぐ。"""
+    if not Path(db_path).exists():
+        raise FileNotFoundError(f"DB が見つかりません: {db_path}")
+
+
 def load_keys_with_t(db_path: Path) -> set[tuple, ...]:
     """Load composite keys of rows where t IS NOT NULL."""
+    _require_db(db_path)
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
         "SELECT image_path, face_index, part_name, sub_key, point_index "
@@ -24,6 +31,7 @@ def load_keys_with_t(db_path: Path) -> set[tuple, ...]:
 
 def load_all_keys(db_path: Path) -> set[tuple, ...]:
     """Load all composite keys."""
+    _require_db(db_path)
     conn = sqlite3.connect(db_path)
     rows = conn.execute(
         "SELECT image_path, face_index, part_name, sub_key, point_index "
