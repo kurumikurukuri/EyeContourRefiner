@@ -11,8 +11,11 @@ images.db にあり samples.db にない新規画像に対して FaceMesh を実
     # 特定シャードのみ実行（手動並列用）
     python tools/imagesdb_maintenance/preprocess_new_images.py --shard 0 --total 4
 
-    # 中間ファイルのマージのみ
+    # 中間ファイルのマージのみ（再実行しても samples.db に既にある行は挿入しない）
     python tools/imagesdb_maintenance/preprocess_new_images.py --merge-only
+
+    # マージ件数の確認のみ（samples.db は変更しない）
+    python tools/imagesdb_maintenance/preprocess_new_images.py --merge-only --dry-run
 
     # 小規模テスト
     python tools/imagesdb_maintenance/preprocess_new_images.py --workers 2 --limit 100
@@ -55,6 +58,9 @@ def get_new_image_paths() -> List[str]:
     images.db にはファイル名のみ格納されているため、
     samples.db と同じ ``data/images/<name>`` 形式に変換する。
     """
+    _require_samples_db()
+    if not IMAGES_DB.exists():
+        raise FileNotFoundError(f"images.db が見つかりません: {IMAGES_DB}")
     conn_img = sqlite3.connect(str(IMAGES_DB))
     conn_samp = sqlite3.connect(str(SAMPLES_DB))
 
@@ -263,74 +269,96 @@ def _run_shard_inner(
         face_mesh.close()
 
 
-def merge_to_samples_db(shard_paths: List[Path]) -> None:
-    """JSONL 中間ファイルを samples.db にマージする。"""
-    from annotator import db as _db
+NaturalKey = Tuple[str, int, str, str, int]
 
-    _db.init_db(SAMPLES_DB)
+_INSERT_SQL = (
+    "INSERT INTO samples "
+    "(idx, image_path, face_index, part_name, sub_key, point_index, "
+    "px, py, qx, qy, t, skip_flag, face_yaw, face_pitch, face_roll) "
+    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)"
+)
 
-    # 既存サンプルの max idx を取得
-    conn = sqlite3.connect(str(SAMPLES_DB))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA synchronous=NORMAL")
-    row = conn.execute("SELECT MAX(idx) FROM samples").fetchone()
-    next_idx = (row[0] or 0) + 1
-    logger.info("Existing max idx: %d, new samples start from %d", next_idx - 1, next_idx)
 
-    total_inserted = 0
-    insert_sql = (
-        "INSERT INTO samples "
-        "(idx, image_path, face_index, part_name, sub_key, point_index, "
-        "px, py, qx, qy, t, skip_flag, face_yaw, face_pitch, face_roll) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, ?, ?, ?)"
-    )
+def _require_samples_db() -> None:
+    """samples.db が無ければ中断する（sqlite3.connect が空 DB を作るのを防ぐ）。"""
+    if not SAMPLES_DB.exists():
+        raise FileNotFoundError(f"samples.db が見つかりません: {SAMPLES_DB}")
 
+
+def _iter_shard_samples(shard_paths: List[Path]):
+    """JSONL 中間ファイルから (natural_key, (px, py, qx, qy, yaw, pitch, roll)) を順に返す。"""
     for shard_path in shard_paths:
         if not shard_path.exists():
             logger.warning("Shard file not found: %s", shard_path)
             continue
-
-        batch_rows: List[Tuple[Any, ...]] = []
         with open(shard_path, "r", encoding="utf-8") as f:
             for line in f:
                 try:
                     obj = json.loads(line.strip())
                 except json.JSONDecodeError:
                     continue
-
-                image_path = obj["image_path"]
                 for face in obj["faces"]:
-                    fi = face["face_index"]
-                    fy = face.get("face_yaw")
-                    fp = face.get("face_pitch")
-                    fr = face.get("face_roll")
+                    pose = (face.get("face_yaw"), face.get("face_pitch"), face.get("face_roll"))
                     for s in face["samples"]:
-                        batch_rows.append((
-                            next_idx,
-                            image_path,
-                            fi,
-                            s["part_name"],
-                            s["sub_key"],
-                            s["point_index"],
-                            s["px"], s["py"], s["qx"], s["qy"],
-                            fy, fp, fr,
-                        ))
-                        next_idx += 1
+                        key = (obj["image_path"], face["face_index"],
+                               s["part_name"], s["sub_key"], s["point_index"])
+                        yield key, (s["px"], s["py"], s["qx"], s["qy"], *pose)
 
-                if len(batch_rows) >= 5000:
-                    conn.executemany(insert_sql, batch_rows)
-                    conn.commit()
-                    total_inserted += len(batch_rows)
-                    batch_rows.clear()
-                    logger.info("Merge: %d samples inserted so far...", total_inserted)
 
-        if batch_rows:
-            conn.executemany(insert_sql, batch_rows)
-            conn.commit()
-            total_inserted += len(batch_rows)
+def _load_existing_keys(conn: sqlite3.Connection) -> set[NaturalKey]:
+    rows = conn.execute(
+        "SELECT image_path, face_index, part_name, sub_key, point_index FROM samples"
+    ).fetchall()
+    return {tuple(r) for r in rows}
 
-    conn.close()
-    logger.info("Merge complete: %d new samples inserted", total_inserted)
+
+def _collect_new_rows(
+    shard_paths: List[Path], existing_keys: set[NaturalKey], start_idx: int,
+) -> Tuple[List[Tuple[Any, ...]], int]:
+    """既存・シャード間重複の natural key を除いた INSERT 行と、スキップ件数を返す。"""
+    seen = set(existing_keys)
+    rows: List[Tuple[Any, ...]] = []
+    skipped = 0
+    for key, values in _iter_shard_samples(shard_paths):
+        if key in seen:
+            skipped += 1
+            continue
+        seen.add(key)
+        rows.append((start_idx + len(rows), *key, *values))
+    return rows, skipped
+
+
+def merge_to_samples_db(shard_paths: List[Path], dry_run: bool = False) -> None:
+    """JSONL 中間ファイルを samples.db にマージする。
+
+    (image_path, face_index, part_name, sub_key, point_index) が既に samples.db にある行は
+    挿入しないため、--merge-only のやり直しや全工程の再実行でも行は重複しない。
+    """
+    from annotator import db as _db
+
+    _require_samples_db()
+    if not dry_run:
+        _db.init_db(SAMPLES_DB)  # 旧スキーマの DB に追加カラム（face_yaw 等）を補充する
+    uri = f"{SAMPLES_DB.resolve().as_uri()}{'?mode=ro' if dry_run else ''}"
+    conn = sqlite3.connect(uri, uri=True)
+    try:
+        row = conn.execute("SELECT MAX(idx) FROM samples").fetchone()
+        next_idx = (row[0] or 0) + 1
+        logger.info("Existing max idx: %d, new samples start from %d", next_idx - 1, next_idx)
+
+        rows, skipped = _collect_new_rows(shard_paths, _load_existing_keys(conn), next_idx)
+        logger.info("Merge: %d new samples, %d skipped (already in samples.db)", len(rows), skipped)
+        if dry_run:
+            logger.info("[dry-run] samples.db は変更しません")
+            return
+
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        with conn:
+            conn.executemany(_INSERT_SQL, rows)
+    finally:
+        conn.close()
+    logger.info("Merge complete: %d new samples inserted", len(rows))
 
 
 def main() -> None:
@@ -349,6 +377,10 @@ def main() -> None:
     parser.add_argument("--total", type=int, default=4, help="シャード総数 (default: 4)")
     parser.add_argument("--merge-only", action="store_true", help="中間ファイルのマージのみ")
     parser.add_argument("--limit", type=int, default=None, help="処理画像数上限（テスト用）")
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="samples.db に書き込まず、マージされる件数だけ表示する（中間 JSONL は生成する）",
+    )
     args = parser.parse_args()
 
     if args.merge_only:
@@ -356,7 +388,7 @@ def main() -> None:
             SHARD_DIR / f"preprocess_shard_{i}.jsonl"
             for i in range(args.total)
         ]
-        merge_to_samples_db(shard_paths)
+        merge_to_samples_db(shard_paths, dry_run=args.dry_run)
         return
 
     logger.info("Getting new image paths...")
@@ -413,7 +445,7 @@ def main() -> None:
         SHARD_DIR / f"preprocess_shard_{i}.jsonl"
         for i in range(total)
     ]
-    merge_to_samples_db(shard_paths)
+    merge_to_samples_db(shard_paths, dry_run=args.dry_run)
 
     # 最終状態を表示
     conn = sqlite3.connect(str(SAMPLES_DB))
