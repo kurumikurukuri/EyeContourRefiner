@@ -125,6 +125,54 @@ class TestExtractSamplesFromImage:
         _assert_pq_matches_landmarks(by_face[1], _pixel_coords(right_face))
 
 
+class TestFaceIndexMatchingWithExistingAnnotations:
+    """再生成時、既存アノテーションの face_index を保つ。"""
+
+    def _saved_centroids(self, tmp_path, monkeypatch, faces):
+        """`faces` が検出済みで DB に保存された状態を作り、その画像の既存重心を返す。"""
+        _install_fake_mediapipe(monkeypatch, faces)
+        image_path = _write_image(tmp_path)
+        samples = pp._extract_samples_from_image(image_path, {})
+        return image_path, pp._build_existing_centroids(pp._normalize_path(str(image_path)), samples)
+
+    def test_missing_detection_does_not_steal_the_other_faces_index(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        left_face, right_face = _landmarks(), _landmarks(x_shift=0.5)
+        image_path, existing = self._saved_centroids(tmp_path, monkeypatch, [left_face, right_face])
+        assert set(existing) == {0, 1}
+
+        _install_fake_mediapipe(monkeypatch, [right_face])  # 左の顔が検出漏れ
+        samples = pp._extract_samples_from_image(image_path, existing)
+
+        assert {s["face_index"] for s in samples} == {1}
+        _assert_pq_matches_landmarks(samples, _pixel_coords(right_face))
+        assert "[0]" in caplog.text  # 対応する顔が検出されなかった face_index を警告する
+
+    def test_faces_keep_their_index_when_detection_order_changes(self, tmp_path, monkeypatch):
+        left_face, right_face = _landmarks(), _landmarks(x_shift=0.5)
+        image_path, existing = self._saved_centroids(tmp_path, monkeypatch, [left_face, right_face])
+
+        _install_fake_mediapipe(monkeypatch, [right_face, left_face])
+        samples = pp._extract_samples_from_image(image_path, existing)
+
+        by_face = {i: [s for s in samples if s["face_index"] == i] for i in (0, 1)}
+        _assert_pq_matches_landmarks(by_face[0], _pixel_coords(left_face))
+        _assert_pq_matches_landmarks(by_face[1], _pixel_coords(right_face))
+
+    def test_new_face_gets_a_fresh_index_and_existing_faces_are_kept(self, tmp_path, monkeypatch):
+        left_face, right_face = _landmarks(), _landmarks(x_shift=0.5)
+        image_path, existing = self._saved_centroids(tmp_path, monkeypatch, [left_face])
+        assert set(existing) == {0}
+
+        _install_fake_mediapipe(monkeypatch, [right_face, left_face])
+        samples = pp._extract_samples_from_image(image_path, existing)
+
+        by_face = {i: [s for s in samples if s["face_index"] == i] for i in (0, 1)}
+        _assert_pq_matches_landmarks(by_face[0], _pixel_coords(left_face))
+        _assert_pq_matches_landmarks(by_face[1], _pixel_coords(right_face))
+
+
 class TestPreprocessNewImages:
     """増分マージ用ツールも同じ対応表を使う。"""
 

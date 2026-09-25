@@ -8,7 +8,8 @@
 
 既存の DB が存在する場合、t / skip_flag 値を保持してマージします（全置換のため、
 生成サンプルが 0 件または既存件数から急減する場合は DB を更新せず中断します）。
-face_index は既存 DB の PQ 重心と最近傍マッチングにより揃えます。
+face_index は既存 DB の PQ 重心と最近傍マッチングにより揃えます。重心から顔スケールの
+半分を超えて離れた顔は別人とみなし、既存の face_index には対応付けません。
 """
 from __future__ import annotations
 
@@ -40,9 +41,33 @@ def _normalize_path(p: str) -> str:
 EYELINER_SAMPLES_MAP = EYELINER_SAMPLE_PQ
 
 
-def _landmark_centroid(coords: np.ndarray) -> Tuple[float, float]:
-    """ランドマーク配列 (N, 2) の重心を返す。"""
-    return float(np.mean(coords[:, 0])), float(np.mean(coords[:, 1]))
+_MP_OUTER_EYE_CORNERS = (33, 263)
+
+# 検出顔を既存 face_index と同一人物とみなす最大距離（顔スケールに対する比）。
+# 同じ画像を再検出した顔の重心はほぼ一致し、別の顔との距離は実測で外眼角間距離の 1.03 倍以上
+# （data/images の複数顔 92 枚・123 ペアの最小値）だったので、その半分を上限にする。
+_FACE_MATCH_MAX_DIST_RATIO = 0.5
+
+
+def _face_centroid(coords: np.ndarray) -> Tuple[float, float]:
+    """検出顔のアイライン重心（全 PQ 中点の平均）を返す。
+
+    DB 側の重心（_build_existing_centroids）と同じ統計量にして、両者を直接比較できるようにする。
+    全ランドマーク平均だと同一顔でも外眼角間距離の 0.27〜0.74 倍ずれ、距離閾値が使えない。
+    """
+    mids = np.array([
+        (coords[p] + coords[q]) / 2
+        for sub_map in EYELINER_SAMPLES_MAP.values()
+        for entries in sub_map.values()
+        for _, p, q in entries
+    ])
+    return float(np.mean(mids[:, 0])), float(np.mean(mids[:, 1]))
+
+
+def _face_scale(coords: np.ndarray) -> float:
+    """検出顔の大きさの目安として、外眼角間距離（ランドマーク 33 - 263）を返す。"""
+    left, right = _MP_OUTER_EYE_CORNERS
+    return float(np.linalg.norm(coords[left] - coords[right]))
 
 
 def _match_face_order(
@@ -51,16 +76,22 @@ def _match_face_order(
 ) -> List[int]:
     """検出された顔を既存 DB の face_index に最近傍マッチングで対応付ける。
 
+    既存 face_index の重心から検出顔の顔スケール × _FACE_MATCH_MAX_DIST_RATIO を超えて離れた
+    顔は対応付けない。複数人の画像で一方が検出漏れしたとき、残った別人の顔に既存の
+    face_index（と t / skip_flag）が付け替わるのを防ぐ。
+
     Args:
-        face_coords_list: MediaPipe が返した顔ごとの (N, 2) ランドマーク配列リスト。
+        face_coords_list: MediaPipe が返した顔ごとの (478, 2) ランドマーク配列リスト。
         existing_centroids: 既存 DB の {face_index: (cx, cy)} マップ。
 
     Returns:
         detect_to_face_index[i] = 検出順 i の顔に割り当てる face_index。
-        既存データがない画像は x 座標昇順で 0, 1, 2, … を割り当てる（安定正準順序）。
+        既存 face_index に対応付けられなかった顔と、既存データがない画像の顔には、
+        既存最大 + 1 以降（既存データがなければ x 座標昇順の 0, 1, 2, …）を割り当てる。
     """
     n = len(face_coords_list)
-    new_centroids = [_landmark_centroid(c) for c in face_coords_list]
+    new_centroids = [_face_centroid(c) for c in face_coords_list]
+    max_dists = [_face_scale(c) * _FACE_MATCH_MAX_DIST_RATIO for c in face_coords_list]
 
     if not existing_centroids:
         order = sorted(range(n), key=lambda i: (new_centroids[i][0], new_centroids[i][1]))
@@ -69,7 +100,7 @@ def _match_face_order(
             result[det_i] = rank
         return result
 
-    # 既存 face_index -> 最近傍の検出顔 をグリーディに割り当て
+    # 既存 face_index -> 閾値内で最近傍の検出顔 をグリーディに割り当て
     detect_to_face: Dict[int, int] = {}
     used_detect: set = set()
 
@@ -81,6 +112,8 @@ def _match_face_order(
             if det_i in used_detect:
                 continue
             d = (nc[0] - ex_c[0]) ** 2 + (nc[1] - ex_c[1]) ** 2
+            if d > max_dists[det_i] ** 2:
+                continue  # 顔スケールに対して遠すぎる → 別人
             if d < best_dist:
                 best_dist = d
                 best_i = det_i
@@ -184,6 +217,12 @@ def _extract_samples_from_image(
 
     # 既存 DB の face_index に合わせた順序を決定
     face_index_list = _match_face_order(all_coords, existing_centroids)
+    unmatched_existing = sorted(set(existing_centroids) - set(face_index_list))
+    if unmatched_existing:
+        logger.warning(
+            "既存の face_index %s に対応する顔が検出されませんでした（t / skip_flag は引き継がれません）: %s",
+            unmatched_existing, image_path.name,
+        )
 
     samples: List[Dict[str, Any]] = []
     for det_i, (coords, coords_xyz) in enumerate(zip(all_coords, all_coords_xyz)):
