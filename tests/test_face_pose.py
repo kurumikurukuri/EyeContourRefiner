@@ -10,7 +10,12 @@ from annotator.face_pose import (
     LANDMARK_INDICES_FOR_POSE,
     compute_face_orientation,
 )
-from annotator.preprocessor import _build_existing_centroids, _match_face_order
+from annotator.preprocessor import (
+    EYELINER_SAMPLES_MAP,
+    _build_existing_centroids,
+    _face_centroid,
+    _match_face_order,
+)
 
 
 # -----------------------------------------------------------------------------
@@ -113,11 +118,17 @@ class TestComputeFaceOrientation:
 # -----------------------------------------------------------------------------
 # _match_face_order
 # -----------------------------------------------------------------------------
-def _make_coords(cx: float, cy: float, n: int = 10) -> np.ndarray:
-    """重心が (cx, cy) の合成ランドマーク (n, 2)。"""
+def _make_coords(cx: float, cy: float, scale: float = 100.0, n: int = 478) -> np.ndarray:
+    """アイライン重心が (cx, cy)、外眼角間距離（顔スケール）が scale の合成ランドマーク (n, 2)。
+
+    全点を (cx, cy) に置き、外眼角（33, 263）だけを左右に scale/2 ずらす。33 / 263 は
+    アイライン P/Q に使われないため、PQ 中点の重心は (cx, cy) のまま変わらない。
+    """
     pts = np.zeros((n, 2), dtype=np.float32)
     pts[:, 0] = cx
     pts[:, 1] = cy
+    pts[33, 0] = cx - scale / 2
+    pts[263, 0] = cx + scale / 2
     return pts
 
 
@@ -169,6 +180,57 @@ class TestMatchFaceOrder:
     def test_empty_coords_list(self):
         result = _match_face_order([], {})
         assert result == []
+
+    # --- 距離閾値（外眼角間距離 = 顔スケールの 0.5 倍。scale=100 なら 50px） ---
+    def test_missing_detection_does_not_steal_the_other_faces_index(self):
+        """face_index=0 の顔が検出漏れしても、face_index=1 の顔を 0 に取り違えない。"""
+        existing = {0: (100.0, 100.0), 1: (400.0, 100.0)}
+        result = _match_face_order([_make_coords(402.0, 99.0)], existing)
+        assert result == [1]
+
+    def test_far_detection_is_not_forced_onto_the_only_existing_face(self):
+        """閾値より遠い検出顔は既存顔と対応付けず、新しい face_index を割り当てる。"""
+        existing = {0: (100.0, 100.0)}
+        result = _match_face_order([_make_coords(500.0, 100.0)], existing)
+        assert result == [1]
+
+    def test_detection_within_threshold_is_matched(self):
+        existing = {0: (100.0, 100.0)}
+        assert _match_face_order([_make_coords(140.0, 100.0)], existing) == [0]  # 40px < 50px
+
+    def test_detection_beyond_threshold_is_not_matched(self):
+        existing = {0: (100.0, 100.0)}
+        assert _match_face_order([_make_coords(160.0, 100.0)], existing) == [1]  # 60px > 50px
+
+    def test_threshold_scales_with_the_detected_face_size(self):
+        """同じ 40px のずれでも、小さい顔（閾値 20px）では別の顔とみなす。"""
+        existing = {0: (100.0, 100.0)}
+        assert _match_face_order([_make_coords(140.0, 100.0, scale=40.0)], existing) == [1]
+
+    def test_unmatched_existing_face_does_not_block_matching_the_others(self):
+        existing = {0: (100.0, 100.0), 1: (400.0, 100.0), 2: (700.0, 100.0)}
+        coords_list = [_make_coords(698.0, 100.0), _make_coords(101.0, 101.0)]  # face 1 が検出漏れ
+        assert _match_face_order(coords_list, existing) == [2, 0]
+
+    # --- 重心の定義: 検出顔と DB は同じ統計量（PQ 中点の平均）で比べる ---
+    def test_detected_centroid_equals_db_centroid_of_the_same_face(self):
+        """同じ顔から作ったレコードの重心と、検出顔の重心が一致する（定義の食い違いが無い）。"""
+        coords = np.random.default_rng(0).uniform(0.0, 500.0, size=(478, 2))
+        records = [
+            {
+                "image_path": "a.jpg", "face_index": 0,
+                "px": coords[p][0], "py": coords[p][1], "qx": coords[q][0], "qy": coords[q][1],
+            }
+            for sub_map in EYELINER_SAMPLES_MAP.values()
+            for entries in sub_map.values()
+            for _, p, q in entries
+        ]
+        assert len(records) == 28
+
+        db_centroid = _build_existing_centroids("a.jpg", records)[0]
+
+        assert _face_centroid(coords) == pytest.approx(db_centroid)
+        assert _match_face_order([coords], {0: db_centroid}) == [0]
 
 
 # -----------------------------------------------------------------------------
