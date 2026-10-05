@@ -12,15 +12,17 @@ EXP020/EXP021 双方から import される共有実装になるため、モジ�
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 from unittest import mock
 
 import cv2
 import numpy as np
 import pytest
+import torch
 
+import eyeliner.training.dual_averaging as dual_averaging_module
 import eyeliner.training.dual_kfold as dual_kfold_module
-from eyeliner.data.dataset_dual import BranchConfig
 from eyeliner.data.augmentation import (
     AUG_ALL,
     AUG_SOURCE_JPEG,
@@ -28,6 +30,7 @@ from eyeliner.data.augmentation import (
     augment,
     check_aug_flags,
 )
+from eyeliner.data.dataset_dual import BranchConfig
 from eyeliner.training.dual_kfold import (
     DualKfoldResult,
     DualTrainConfig,
@@ -387,3 +390,137 @@ class TestSourceDegradeFlags:
         with caplog.at_level("WARNING"):
             check_aug_flags(AUG_ALL)
         assert caplog.text == ""
+
+
+class TestWeightAveragingVariants:
+    """EXP034: EMA / SWA の派生モデルを base と同一 run 内で作る。"""
+
+    def test_default_config_creates_no_variant_dirs(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        outputs = tmp_path / "outputs"
+        run_dual_kfold(manifest_train, manifest_test, outputs / "base", _fast_config())
+        assert sorted(p.name for p in outputs.iterdir()) == ["base"]
+
+    def test_ema_saves_fold_models_to_sibling_dir(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        outputs = tmp_path / "outputs"
+        config = _fast_config(epochs=2, patience=5, ema_decays=[0.9])
+        run_dual_kfold(manifest_train, manifest_test, outputs / "base", config)
+
+        ema_dir = outputs / "base_ema09"
+        saved = sorted(ema_dir.glob("eyeliner_detection_fold*.pt"))
+        assert [p.name for p in saved] == ["eyeliner_detection_fold1.pt", "eyeliner_detection_fold2.pt"]
+        for path in saved:
+            assert dual_kfold_module.load_dual_model(path) is not None
+        folds = json.loads((ema_dir / "variant_folds.json").read_text(encoding="utf-8"))
+        assert sorted(folds) == ["1", "2"]
+        assert all(v["val_mae"] >= 0.0 and v["epoch"] >= 1 for v in folds.values())
+
+    def test_swa_saves_bn_model_to_sibling_dir(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        outputs = tmp_path / "outputs"
+        config = _fast_config(
+            epochs=1, use_batchnorm=True, swa_epochs=2, swa_lr=2.5e-4,
+        )
+        run_dual_kfold(manifest_train, manifest_test, outputs / "base", config)
+
+        swa_dir = outputs / "base_swa"
+        saved = sorted(swa_dir.glob("eyeliner_detection_fold*.pt"))
+        assert len(saved) == 2
+        folds = json.loads((swa_dir / "variant_folds.json").read_text(encoding="utf-8"))
+        assert len(folds["1"]["swa_epoch_val_maes"]) == 2
+        assert not list((outputs / "base").glob("checkpoint_fold*.pt"))
+
+    def test_variants_do_not_change_base_models(self, tmp_path, manifests):
+        """EMA 評価・SWA の乱数消費が base（次 fold を含む）の学習に影響しない。"""
+        manifest_train, manifest_test = manifests
+        plain = tmp_path / "plain" / "base"
+        averaged = tmp_path / "averaged" / "base"
+        run_dual_kfold(manifest_train, manifest_test, plain, _fast_config(epochs=2, patience=5))
+        run_dual_kfold(
+            manifest_train, manifest_test, averaged,
+            _fast_config(epochs=2, patience=5, ema_decays=[0.9], swa_epochs=1),
+        )
+        for fold in (1, 2):
+            name = f"eyeliner_detection_fold{fold}.pt"
+            a = torch.load(plain / name, map_location="cpu", weights_only=True)["state_dict"]
+            b = torch.load(averaged / name, map_location="cpu", weights_only=True)["state_dict"]
+            for key in a:
+                assert torch.equal(a[key], b[key]), (fold, key)
+
+    def test_crash_during_swa_resumes_without_retraining_main_epochs(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "base"
+        config = _fast_config(epochs=3, patience=10, ema_decays=[0.9], swa_epochs=1)
+
+        recorded: list[tuple[str, int]] = []
+        real_save_checkpoint = dual_kfold_module.save_checkpoint
+        real_run_swa = dual_averaging_module.run_swa
+        state = {"raised": False}
+
+        def recording_save_checkpoint(path, *, epoch, **kwargs):
+            real_save_checkpoint(path, epoch=epoch, **kwargs)
+            recorded.append((Path(path).name, epoch))
+
+        def flaky_run_swa(*args, **kwargs):
+            if not state["raised"]:
+                state["raised"] = True
+                raise RuntimeError("simulated crash in swa")
+            return real_run_swa(*args, **kwargs)
+
+        with mock.patch.object(dual_kfold_module, "save_checkpoint", side_effect=recording_save_checkpoint), \
+                mock.patch.object(dual_averaging_module, "run_swa", side_effect=flaky_run_swa):
+            with pytest.raises(RuntimeError, match="simulated crash in swa"):
+                run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+            run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        fold1_epochs = [e for name, e in recorded if name == "checkpoint_fold1.pt"]
+        assert fold1_epochs == [1, 2, 3]
+        assert len(list((tmp_path / "outputs" / "base_swa").glob("eyeliner_detection_fold*.pt"))) == 2
+        assert len(list((tmp_path / "outputs" / "base_ema09").glob("eyeliner_detection_fold*.pt"))) == 2
+
+    def test_early_stopped_fold_does_not_train_extra_epoch_on_resume(self, tmp_path, manifests):
+        """早期終了済みの fold は、SWA 中のクラッシュから再開しても本学習を再開しない。"""
+        manifest_train, manifest_test = manifests
+        exp_dir = tmp_path / "outputs" / "base"
+        config = _fast_config(epochs=20, patience=1, swa_epochs=1)
+        real_run_swa = dual_averaging_module.run_swa
+        state = {"raised": False}
+        counts = {"first": 0, "second": 0}
+        real_save_checkpoint = dual_kfold_module.save_checkpoint
+        phase = {"name": "first"}
+
+        def counting_save_checkpoint(path, *, epoch, **kwargs):
+            real_save_checkpoint(path, epoch=epoch, **kwargs)
+            if Path(path).name == "checkpoint_fold1.pt":
+                counts[phase["name"]] += 1
+
+        def flaky_run_swa(*args, **kwargs):
+            if not state["raised"]:
+                state["raised"] = True
+                raise RuntimeError("simulated crash in swa")
+            return real_run_swa(*args, **kwargs)
+
+        with mock.patch.object(dual_kfold_module, "save_checkpoint", side_effect=counting_save_checkpoint), \
+                mock.patch.object(dual_averaging_module, "run_swa", side_effect=flaky_run_swa):
+            with pytest.raises(RuntimeError):
+                run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+            phase["name"] = "second"
+            run_dual_kfold(manifest_train, manifest_test, exp_dir, config)
+
+        assert counts["first"] < config.epochs
+        assert counts["second"] == 0
+
+    def test_record_contains_averaging_settings(self, tmp_path, manifests):
+        config = _fast_config(ema_decays=[0.999, 0.9998], swa_epochs=30, swa_lr=2.5e-4)
+        branch = BranchConfig(
+            patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
+        )
+        result = DualKfoldResult(
+            fold_results=[], n_train=0, n_holdout=0,
+            train_images=[], holdout_images=[], cfg_a=branch, cfg_b=branch,
+        )
+        hp = build_dual_experiment_record("t", config, result)["hyperparameters"]
+        assert hp["ema_decays"] == [0.999, 0.9998]
+        assert hp["swa_epochs"] == 30
+        assert hp["swa_lr"] == 2.5e-4

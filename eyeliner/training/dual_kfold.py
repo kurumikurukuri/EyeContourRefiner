@@ -15,6 +15,7 @@ import logging
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -46,18 +47,18 @@ from eyeliner.training.checkpoint import (
     remove_checkpoint,
     save_checkpoint,
 )
+from eyeliner.training.dual_averaging import run_fold_swa, track_ema_best
 from eyeliner.training.dual_branch import (
-    branch_pred_to_raw_t,
     build_branch_configs,
-    ensemble_raw_t,
     fold_ensemble_raw_t,
     model_pred_raw_t,
-    normalize_to_branch_a,
 )
+from eyeliner.training.dual_epoch import evaluate_val_mae, train_one_epoch
 from eyeliner.training.kfold import FoldResult
 from eyeliner.training.oof import OofPrediction
 from eyeliner.training.scheduler import make_optimizer_and_scheduler
 from eyeliner.training.trainer import set_seed
+from eyeliner.training.weight_averaging import EmaTracker
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,13 @@ class DualTrainConfig:
     source_res_jitter_prob: float = 0.5
     source_res_scale_min: float = 1.0
     source_res_scale_max: float = 2.5
+    # EXP034: 重み平均。いずれも既定は無効（base の学習は一切変わらない）。
+    # ema_decays: 指定 decay ごとに EMA モデルを追跡し、val 最良を `{exp_dir}_ema{decay}` に保存。
+    # swa_epochs>0: fold 完了後、base 最良重みから一定 lr=swa_lr で追加学習した各 epoch 末の
+    # 重みを等重み平均し（BN 統計は再計算）、`{exp_dir}_swa` に保存する。
+    ema_decays: list = field(default_factory=list)
+    swa_epochs: int = 0
+    swa_lr: float = 2.5e-4
 
 
 def effective_aux_features(config: DualTrainConfig) -> list[str]:
@@ -333,11 +341,21 @@ def _train_single_dual_fold(
         model, "full", config.lr, config.weight_decay,
         len(train_loader), config.epochs,
     )
+    ema = EmaTracker(model, config.ema_decays) if config.ema_decays else None
+    ema_best: dict[str, dict] = {
+        name: {"val_mae": float("inf"), "epoch": 0} for name, _ in (ema.items() if ema else [])
+    }
+
+    val_mae_of = partial(
+        evaluate_val_mae, loader=val_loader, fusion_mode=config.fusion_mode,
+        cfg_a=cfg_a, cfg_b=cfg_b, aux_features=aux_features, device=device,
+    )
 
     best_mae = float("inf")
     no_improve = 0
     best_epoch = 0
     start_epoch = 0
+    main_done = False
     model_path = exp_dir / f"eyeliner_detection_fold{fold_idx}.pt"
     checkpoint_path = exp_dir / f"checkpoint_fold{fold_idx}.pt"
 
@@ -350,67 +368,23 @@ def _train_single_dual_fold(
         best_mae = ckpt["best_mae"]
         best_epoch = ckpt["best_epoch"]
         no_improve = ckpt["no_improve"]
+        extra = ckpt.get("extra") or {}
+        main_done = bool(extra.get("main_done", False))
+        if ema is not None:
+            ema.load_state_dict(extra["ema"])
+            ema_best = extra["ema_best"]
         logger.info(
-            "Fold %d: チェックポイントから再開 (epoch %d〜, best_mae=%.6f)",
-            fold_idx, start_epoch + 1, best_mae,
+            "Fold %d: チェックポイントから再開 (epoch %d〜, best_mae=%.6f, 本学習完了=%s)",
+            fold_idx, start_epoch + 1, best_mae, main_done,
         )
 
-    for epoch in range(start_epoch, config.epochs):
-        model.train()
-        total_loss = 0.0
-        n_batches = 0
-        for batch in train_loader:
-            x_a = batch[0].to(device)
-            x_b = batch[1].to(device)
-            is_upper = batch[2].to(device)
-            y_a = batch[4].to(device)
-            y_b = batch[5].to(device)
-            pq_dist = batch[12].to(device)
-            pq_prime = batch[13].to(device)
-            aux = batch[14].to(device) if aux_features else None
-
-            if config.fusion_mode == "attention":
-                pred_a, pred_b, alpha = model(x_a, x_b, is_upper, aux)
-                t_a = branch_pred_to_raw_t(pred_a, cfg_a, pq_dist, pq_prime)
-                t_b = branch_pred_to_raw_t(pred_b, cfg_b, pq_dist, pq_prime)
-                ens_norm = normalize_to_branch_a(ensemble_raw_t(t_a, t_b, alpha), cfg_a)
-                loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b) + loss_fn(ens_norm, y_a)
-            else:
-                pred_a, pred_b = model(x_a, x_b, is_upper, aux)
-                loss = loss_fn(pred_a, y_a) + loss_fn(pred_b, y_b)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-            scheduler.step()
-            total_loss += loss.item()
-            n_batches += 1
-        avg_loss = total_loss / max(n_batches, 1)
-
-        model.eval()
-        all_preds: list[torch.Tensor] = []
-        all_labels: list[torch.Tensor] = []
-        with torch.no_grad():
-            for batch in val_loader:
-                x_a = batch[0].to(device)
-                x_b = batch[1].to(device)
-                is_upper = batch[2].to(device)
-                y_a = batch[4]
-                pq_dist = batch[12].to(device)
-                pq_prime = batch[13].to(device)
-                aux = batch[14].to(device) if aux_features else None
-                t_ens = model_pred_raw_t(
-                    model, x_a, x_b, is_upper, config.fusion_mode,
-                    cfg_a, cfg_b, pq_dist, pq_prime, aux,
-                )
-                pred_norm = normalize_to_branch_a(t_ens, cfg_a)
-                all_preds.append(pred_norm.cpu())
-                all_labels.append(y_a)
-
-        preds_t = torch.cat(all_preds)
-        labels_t = torch.cat(all_labels)
-        val_mae = (preds_t - labels_t).abs().mean().item()
-
+    for epoch in range(config.epochs if main_done else start_epoch, config.epochs):
+        avg_loss = train_one_epoch(
+            model, train_loader, optimizer, scheduler, loss_fn, config.fusion_mode,
+            cfg_a, cfg_b, aux_features, device,
+            on_step=ema.update if ema is not None else None,
+        )
+        val_mae = val_mae_of(model)
         current_lr = scheduler.get_last_lr()[0]
         logger.info(
             "Fold %d Epoch %3d  loss=%.6f  val_mae=%.6f  lr=%.2e",
@@ -425,13 +399,23 @@ def _train_single_dual_fold(
         else:
             no_improve += 1
 
+        if ema is not None:
+            ema_best = track_ema_best(
+                ema, ema_best, val_mae_of, exp_dir, fold_idx, epoch + 1, config,
+            )
+
+        main_done = no_improve >= config.patience
         save_checkpoint(
             checkpoint_path, epoch=epoch + 1, model=model, optimizer=optimizer,
             scheduler=scheduler, best_mae=best_mae, best_epoch=best_epoch,
             no_improve=no_improve,
+            extra={
+                "main_done": main_done,
+                **({"ema": ema.state_dict(), "ema_best": ema_best} if ema is not None else {}),
+            },
         )
 
-        if no_improve >= config.patience:
+        if main_done:
             logger.info("Early stopping (fold %d, epoch %d)", fold_idx, epoch + 1)
             break
 
@@ -442,9 +426,15 @@ def _train_single_dual_fold(
         model_path=str(model_path),
     )
     logger.info("Fold %d: Best MAE=%.6f (epoch %d)", fold_idx, best_mae, best_epoch)
+
+    if config.swa_epochs > 0:
+        run_fold_swa(
+            model_path, train_loader, loss_fn, val_mae_of, exp_dir, fold_idx,
+            config, cfg_a, cfg_b, aux_features, device,
+        )
     remove_checkpoint(checkpoint_path)
 
-    del model, optimizer, scheduler, train_loader, val_loader, train_ds, val_ds
+    del model, optimizer, scheduler, ema, train_loader, val_loader, train_ds, val_ds
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
     gc.collect()
@@ -742,6 +732,9 @@ def build_dual_experiment_record(
             "source_res_jitter": bool(config.aug_flags & AUG_SOURCE_RES_JITTER),
             "source_res_jitter_prob": config.source_res_jitter_prob,
             "source_res_scale": [config.source_res_scale_min, config.source_res_scale_max],
+            "ema_decays": list(config.ema_decays),
+            "swa_epochs": config.swa_epochs,
+            "swa_lr": config.swa_lr,
         },
         "data": {
             "n_train_samples": result.n_train,
