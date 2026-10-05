@@ -1,0 +1,31 @@
+# EXP034 base: 現行dual標準（EXP033 dual_s42 と同一構成）+ 重み平均の派生モデル。
+# 1 回の学習から 4 モデルを作り、同一 run 内で paired 比較する（run 間の非決定性を排除）。
+#   base            早期終了で選んだ val 最良（= dual標準そのもの）
+#   base_ema0999    EMA decay=0.999（半減期 ≈ 2 epoch）の val 最良
+#   base_ema09998   EMA decay=0.9998（半減期 ≈ 10 epoch）の val 最良
+#   base_swa        base 最良重みから lr=2.5e-4 一定で 30 epoch 追加学習 → 各 epoch 末を等重み平均
+# 早期終了の判定は base の val のみ。EMA/SWA は乱数状態を保存・復元するため base の学習に影響しない。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63   # = 0x03F: パッチ空間 aug のみ（FLIP off / source 劣化 off）
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+ema_decays: [0.999, 0.9998]
+swa_epochs: 30
+swa_lr: 2.5e-4
