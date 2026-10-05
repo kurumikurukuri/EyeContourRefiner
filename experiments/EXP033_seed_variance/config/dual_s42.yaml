@@ -1,0 +1,24 @@
+# EXP033 dual_s42: 現行dual標準（EXP031 SD0_baseline と同一構成）を seed=42 で学習。
+# seed 以外の値は 3 config で完全に同一（seed 間ばらつきの測定が目的）。
+# seed は fold 分割・重み初期化・augmentation の乱数列すべてに効く。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_flags: 63   # = 0x03F: パッチ空間 aug のみ（FLIP off / source 劣化 off）
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
