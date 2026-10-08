@@ -25,6 +25,7 @@ import eyeliner.training.dual_averaging as dual_averaging_module
 import eyeliner.training.dual_kfold as dual_kfold_module
 from eyeliner.data.augmentation import (
     AUG_ALL,
+    AUG_PQ_JITTER,
     AUG_SOURCE_JPEG,
     AUG_SOURCE_RES_JITTER,
     augment,
@@ -524,3 +525,102 @@ class TestWeightAveragingVariants:
         assert hp["ema_decays"] == [0.999, 0.9998]
         assert hp["swa_epochs"] == 30
         assert hp["swa_lr"] == 2.5e-4
+
+
+class TestPqJitterConfig:
+    """EXP035: PQ 回転摂動の強度パラメータが config → dataset → record に流れる。"""
+
+    def test_default_is_disabled(self):
+        config = _fast_config()
+        assert config.pq_jitter_rot_deg == 0.0
+        assert config.pq_jitter_prob == 1.0
+        assert not (config.aug_flags & AUG_PQ_JITTER)
+
+    def test_only_train_dataset_receives_jitter_params(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        config = _fast_config(
+            aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, pq_jitter_prob=0.5,
+        )
+        real_cls = dual_kfold_module.EyelinerPatchDualDataset
+        calls: list[dict] = []
+
+        def spy(*args, **kwargs):
+            calls.append(kwargs)
+            return real_cls(*args, **kwargs)
+
+        with mock.patch.object(dual_kfold_module, "EyelinerPatchDualDataset", side_effect=spy):
+            run_dual_kfold(manifest_train, manifest_test, tmp_path / "base", config)
+
+        train_calls = [c for c in calls if c.get("augment_data")]
+        assert train_calls
+        for c in train_calls:
+            assert c["pq_jitter_rot_deg"] == 5.0
+            assert c["pq_jitter_prob"] == 0.5
+        # fold ごとに異なる seed（train の乱数列が fold 間で同一にならない）
+        assert len({c["pq_jitter_seed"] for c in train_calls}) == len(train_calls)
+        for c in calls:
+            if not c.get("augment_data"):
+                assert c.get("pq_jitter_rot_deg", 0.0) == 0.0
+
+    def test_experiment_record_contains_pq_jitter(self):
+        config = _fast_config(
+            aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=10.0, pq_jitter_prob=0.5,
+        )
+        branch = BranchConfig(
+            patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
+        )
+        result = DualKfoldResult(
+            fold_results=[], n_train=0, n_holdout=0,
+            train_images=[], holdout_images=[], cfg_a=branch, cfg_b=branch,
+        )
+        hp = build_dual_experiment_record("t", config, result)["hyperparameters"]
+        assert hp["pq_jitter"] is True
+        assert hp["pq_jitter_rot_deg"] == 10.0
+        assert hp["pq_jitter_prob"] == 0.5
+
+    def test_record_flags_disabled_when_bit_off(self):
+        config = _fast_config(aug_flags=63, pq_jitter_rot_deg=10.0)
+        branch = BranchConfig(
+            patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
+        )
+        result = DualKfoldResult(
+            fold_results=[], n_train=0, n_holdout=0,
+            train_images=[], holdout_images=[], cfg_a=branch, cfg_b=branch,
+        )
+        hp = build_dual_experiment_record("t", config, result)["hyperparameters"]
+        assert hp["pq_jitter"] is False
+
+    def test_invalid_params_rejected(self, tmp_path, manifests):
+        manifest_train, manifest_test = manifests
+        for bad in (dict(pq_jitter_rot_deg=-1.0), dict(pq_jitter_prob=1.5), dict(pq_jitter_prob=-0.1)):
+            with pytest.raises(ValueError):
+                run_dual_kfold(manifest_train, manifest_test, tmp_path / "x", _fast_config(**bad))
+
+
+class TestPqJitterValidation:
+    """EXP035 レビュー指摘: 無音の no-op・NaN・worker 複製・aux 角度の不整合を弾く。"""
+
+    @pytest.mark.parametrize("bad", [
+        dict(aug_flags=63, pq_jitter_rot_deg=5.0),                       # ビット忘れ
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=0.0),       # 強度忘れ
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=float("nan")),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=float("inf")),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, pq_jitter_prob=float("nan")),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, num_workers=2),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, use_aux_face_shape=True),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, use_aux_face_shape=True,
+             aux_features=["pq_angle_cos"]),
+    ])
+    def test_inconsistent_config_rejected(self, bad):
+        with pytest.raises(ValueError):
+            dual_kfold_module.validate_pq_jitter_config(_fast_config(**bad))
+
+    @pytest.mark.parametrize("ok", [
+        dict(),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, pq_jitter_prob=0.5),
+        dict(aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, use_aux_face_shape=True,
+             aux_features=["face_yaw_sin"]),
+    ])
+    def test_consistent_config_accepted(self, ok):
+        dual_kfold_module.validate_pq_jitter_config(_fast_config(**ok))

@@ -24,6 +24,7 @@ from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader
 
 from eyeliner.data.augmentation import (
+    AUG_PQ_JITTER,
     AUG_SOURCE_JPEG,
     AUG_SOURCE_RES_JITTER,
     check_aug_flags,
@@ -222,6 +223,40 @@ class DualTrainConfig:
     ema_decays: list = field(default_factory=list)
     swa_epochs: int = 0
     swa_lr: float = 2.5e-4
+    # EXP035: PQ 回転摂動（R 中心に P, Q を θ ~ U(±rot_deg) 回転、t は不変）。train のみ。
+    # ON/OFF は aug_flags の AUG_PQ_JITTER (0x200) ビット、rot_deg=0 でも無効（既定は無効）。
+    pq_jitter_rot_deg: float = 0.0
+    pq_jitter_prob: float = 1.0
+
+
+def validate_pq_jitter_config(config: DualTrainConfig) -> None:
+    """PQ 回転摂動の設定を検証する（無音の no-op や学習/推論の不整合を事前に弾く）。
+
+    - 強度は有限で範囲内（rot_deg >= 0, prob ∈ [0, 1]）。
+    - AUG_PQ_JITTER ビットと rot_deg > 0 は両立させる（片方だけだと J0 と同一の無駄な run になる）。
+    - 有効時は num_workers=0 必須（専用 RNG が worker に複製され、θ 系列が重複するため）。
+    - 有効時は pq_angle_* の aux 特徴と併用不可（aux 角度はクリーン値のままパッチだけ回転し、
+      推論時と食い違うため）。
+    """
+    rot, prob = config.pq_jitter_rot_deg, config.pq_jitter_prob
+    if not math.isfinite(rot) or rot < 0:
+        raise ValueError(f"pq_jitter_rot_deg は有限かつ 0 以上: {rot}")
+    if not math.isfinite(prob) or not 0.0 <= prob <= 1.0:
+        raise ValueError(f"pq_jitter_prob は [0, 1]: {prob}")
+
+    bit_on = bool(config.aug_flags & AUG_PQ_JITTER)
+    if bit_on != (rot > 0):
+        raise ValueError(
+            "AUG_PQ_JITTER ビット(0x200)と pq_jitter_rot_deg>0 は両方指定が必要: "
+            f"aug_flags={config.aug_flags}, pq_jitter_rot_deg={rot}"
+        )
+    if not bit_on:
+        return
+    if config.num_workers > 0:
+        raise ValueError("PQ 回転摂動の使用時は num_workers=0 が必要（乱数が worker 間で複製される）")
+    stale = [f for f in effective_aux_features(config) if f.startswith("pq_angle")]
+    if stale:
+        raise ValueError(f"PQ 回転摂動は aux 特徴 {stale} と併用できません（回転後の角度と不整合）")
 
 
 def effective_aux_features(config: DualTrainConfig) -> list[str]:
@@ -312,6 +347,9 @@ def _train_single_dual_fold(
         perspective_alpha=config.perspective_alpha,
         source_degrade=source_degrade,
         source_degrade_seed=config.seed + fold_idx,
+        pq_jitter_rot_deg=config.pq_jitter_rot_deg,
+        pq_jitter_prob=config.pq_jitter_prob,
+        pq_jitter_seed=config.seed + fold_idx,
     )
     val_ds = EyelinerPatchDualDataset(
         val_records, cfg_a, cfg_b,
@@ -526,6 +564,7 @@ def run_dual_kfold(
     Returns:
         DualKfoldResult
     """
+    validate_pq_jitter_config(config)
     set_seed(config.seed)
     exp_dir = Path(exp_dir)
     exp_dir.mkdir(parents=True, exist_ok=True)
@@ -735,6 +774,9 @@ def build_dual_experiment_record(
             "ema_decays": list(config.ema_decays),
             "swa_epochs": config.swa_epochs,
             "swa_lr": config.swa_lr,
+            "pq_jitter": bool(config.aug_flags & AUG_PQ_JITTER) and config.pq_jitter_rot_deg > 0,
+            "pq_jitter_rot_deg": config.pq_jitter_rot_deg,
+            "pq_jitter_prob": config.pq_jitter_prob,
         },
         "data": {
             "n_train_samples": result.n_train,

@@ -11,7 +11,9 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
+from eyeliner.data.augmentation import (
+    AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints, augment_pq_jitter,
+)
 from eyeliner.data.source_degradation import (
     SourceDegradeConfig,
     SourceDegradeSample,
@@ -88,6 +90,9 @@ class EyelinerPatchDualDataset(Dataset):
         perspective_alpha: float = 2.0,
         source_degrade: SourceDegradeConfig | None = None,
         source_degrade_seed: int = 42,
+        pq_jitter_rot_deg: float = 0.0,
+        pq_jitter_prob: float = 1.0,
+        pq_jitter_seed: int = 42,
     ) -> None:
         self.records = records
         self.perspective_alpha = perspective_alpha
@@ -97,6 +102,11 @@ class EyelinerPatchDualDataset(Dataset):
         self.aug_flags = aug_flags
         self.aug_prob = aug_prob
         self.endpoint_blend_range = endpoint_blend_range
+        # EXP035: PQ 回転摂動。AUG_PQ_JITTER ビットと rot_deg>0 の両方が必要。
+        # 他 aug の乱数列を乱さないよう専用 RNG を持つ。
+        self.pq_jitter_rot_deg = pq_jitter_rot_deg
+        self.pq_jitter_prob = pq_jitter_prob
+        self._pq_jitter_rng = random.Random(pq_jitter_seed)
         self.use_aux_face_shape = use_aux_face_shape
         # aux_features 指定時はその部分集合、未指定で use_aux_face_shape ならデフォルト11次元。
         self.aux_features = list(aux_features) if aux_features else (
@@ -191,6 +201,16 @@ class EyelinerPatchDualDataset(Dataset):
             )
         else:
             px_a, py_a, qx_a, qy_a, t_aug = px_raw, py_raw, qx_raw, qy_raw, t_raw
+
+        # PQ 回転摂動（EXP035）: R 中心の回転なので t は不変。endpoint blend の後、perspective の前。
+        if self.augment_data:
+            px_a, py_a, qx_a, qy_a, t_aug = augment_pq_jitter(
+                px_a, py_a, qx_a, qy_a, t_aug,
+                aug_flags=self.aug_flags,
+                rot_deg=self.pq_jitter_rot_deg,
+                prob=self.pq_jitter_prob,
+                rng=self._pq_jitter_rng,
+            )
 
         # Branch A の augmented |PQ|（t'→t 逆変換・記録用）
         pq_dist = math.hypot(qx_a - px_a, qy_a - py_a)

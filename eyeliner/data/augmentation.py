@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import random
 
 import numpy as np
@@ -26,7 +27,11 @@ AUG_FLIP:            int = 0x40  # 水平反転
 AUG_SOURCE_JPEG:       int = 0x080  # 元画像空間 JPEG 圧縮
 AUG_SOURCE_RES_JITTER: int = 0x100  # 元画像空間 解像度ジッタ（縮小→拡大）
 
-AUG_ALL:        int = 0x1FF  # 全オーグメンテーション有効
+# --- 端点の回転摂動（EXP035）----------------------------------------------
+# augment() ではなく augment_pq_jitter() が座標に適用する（augment_endpoints と同じ段）。
+AUG_PQ_JITTER:         int = 0x200  # R 中心の P, Q 回転（R・t は不変）
+
+AUG_ALL:        int = 0x3FF  # 全オーグメンテーション有効
 AUG_NONE:       int = 0x000  # 全オーグメンテーション無効
 
 
@@ -73,7 +78,7 @@ def augment(
         t:         位置 t ∈ [t_min, t_max]
         t_min:     t の最小値（正規化時は 0.0、raw 時は patch_t_min）
         t_max:     t の最大値（正規化時は 1.0、raw 時は patch_t_max）
-        aug_flags: ビットフラグ（デフォルト AUG_ALL=0x1FF で全て有効）
+        aug_flags: ビットフラグ（デフォルト AUG_ALL=0x3FF で全て有効）
         aug_prob:  BRIGHTNESS/BLUR/COLOR_TEMP/FLIP（基準確率 0.5 のもの）の発火確率に
                    掛ける倍率。0.5*aug_prob を [0, 1] にクランプして使う（EXP030 発火頻度
                    sweep用）。NOISE（常時発火）・GRAYSCALE（基準0.2）は対象外で固定のまま。
@@ -166,3 +171,50 @@ def augment_endpoints(
     new_px = b * qx + (1.0 - b) * px
     new_py = b * qy + (1.0 - b) * py
     return new_px, new_py, new_qx, new_qy, new_t
+
+
+def augment_pq_jitter(
+    px: float,
+    py: float,
+    qx: float,
+    qy: float,
+    t: float,
+    aug_flags: int = AUG_ALL,
+    rot_deg: float = 0.0,
+    prob: float = 1.0,
+    rng: random.Random | None = None,
+) -> tuple[float, float, float, float, float]:
+    """R = t·P + (1-t)·Q を中心に P, Q を θ ~ U(±rot_deg) だけ回転する。
+
+    R は回転中心なので動かず、|RP|・|RQ| も保たれる。R は P'Q' 線上に残るため
+    t は解析的に不変（再計算も範囲外 fallback も不要）。FaceMesh 由来の PQ 向きの
+    誤差を学習時に再現するための摂動。
+
+    AUG_PQ_JITTER が OFF、rot_deg == 0、prob <= 0 のときは identity を返し、
+    乱数を消費しない（他 aug の乱数列を乱さない）。発火判定には prob を使い、
+    発火しなかった場合も identity を返す。
+
+    Args:
+        rng: 専用の乱数源。None のときはグローバルな random を使う。
+    """
+    if rot_deg < 0:
+        raise ValueError(f"rot_deg は 0 以上である必要があります: {rot_deg}")
+    if not (aug_flags & AUG_PQ_JITTER) or rot_deg == 0.0 or prob <= 0.0:
+        return px, py, qx, qy, t
+
+    src = rng if rng is not None else random
+    if prob < 1.0 and src.random() >= prob:
+        return px, py, qx, qy, t
+
+    theta = math.radians(src.uniform(-rot_deg, rot_deg))
+    cos_t, sin_t = math.cos(theta), math.sin(theta)
+    rx = t * px + (1.0 - t) * qx
+    ry = t * py + (1.0 - t) * qy
+
+    def _rot(x: float, y: float) -> tuple[float, float]:
+        dx, dy = x - rx, y - ry
+        return rx + cos_t * dx - sin_t * dy, ry + sin_t * dx + cos_t * dy
+
+    new_px, new_py = _rot(px, py)
+    new_qx, new_qy = _rot(qx, qy)
+    return new_px, new_py, new_qx, new_qy, t
