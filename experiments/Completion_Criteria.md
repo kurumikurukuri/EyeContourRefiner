@@ -93,3 +93,8 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP028_label_noise | LN0_baseline | 8666 | 88.25 | 85.22 |
 | EXP029_fixed_test | db_replica | 4900 | 89.27 | 85.92 |
 | EXP030_aug_freq_sweep | AF2_p0p75 | 4900 | 89.27 | 86.31 |
+| EXP031_source_space_aug | SD0_baseline | 4900 | 89.04 | 85.45 |
+| EXP032_single_branch | SB_eyescale | 4900 | 87.98 | 84.35 |
+| EXP033_seed_variance | dual_s43 | 4900 | 89.06 | 85.82 |
+| EXP034_swa_ema | base_swa | 4900 | 89.20 | 85.69 |
+| EXP035_pq_jitter | J4_rot20 | 4900 | 90.02 | 87.16 |
