@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eyeliner-detector"
+version = "0.1.0"
+description = "アイライン輪郭検出 CNN — face_makeup 向け ONNX モデルと参考推論実装"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.11"
+authors = [
+    { name = "kurumikurukuri" },
+]
+keywords = ["eyeliner", "makeup", "beauty-ai", "onnx", "cnn"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "torch>=2.0,<3",
+    "torchvision>=0.15,<1",
+    "onnx>=1.14",
+    "onnxruntime>=1.14",
+    "opencv-python>=4.8",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "pandas>=2.0",
+    "scikit-learn>=1.3",
+]
+
+[project.optional-dependencies]
+demo = [
+    # models/demo_visualize.py（MediaPipe Face Mesh で P,Q を自動構成するデモ）専用。
+    # mp.solutions（FaceMesh）は 0.10.30 以降の wheel に含まれないため上限を設ける。
+    "mediapipe>=0.10.21,<0.10.30",
+]
+dev = [
+    "pytest>=7",
+    "pytest-cov>=4",
+    "packaging>=23",
+    "black",
+    "isort",
+    "ruff",
+]
+
+[project.urls]
+Repository = "https://github.com/kurumikurukuri/EyelinerDetector"
+
+[tool.setuptools.packages.find]
+include = ["eyeliner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
