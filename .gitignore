@@ -34,3 +34,6 @@ htmlcov/
 .idea/
 .DS_Store
 Thumbs.db
+
+# ローカルの学習データ（画像・アノテーションDB）は追跡しない
+/data/

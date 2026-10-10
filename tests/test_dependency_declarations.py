@@ -152,6 +152,20 @@ def test_mediapipe_is_capped_to_versions_with_legacy_solutions_api():
     assert Version("0.10.32") not in specifier
 
 
+def test_opencv_is_capped_below_5():
+    """OpenCV 5.0 は warpAffine の固定小数点丸めが 4.x と異なり、パッチ画素が 1/255 ずれる。
+
+    学習・配布モデルは 4.x で作られており、tests/test_source_degradation.py の
+    bbox 含有性テスト（ビット一致を検定）も 4.x 前提のため 5 未満に固定する。
+    """
+    (line,) = [r for r in _pyproject_dependencies() if _requirement_key(r)[0] == "opencv-python"]
+    specifier = Requirement(line).specifier
+
+    assert Version("4.8.0") in specifier
+    assert Version("4.14.0") in specifier
+    assert Version("5.0.0") not in specifier
+
+
 def test_requirements_txt_matches_pyproject_dependencies():
     pyproject = {_requirement_key(r) for r in _pyproject_dependencies()}
     requirements = {_requirement_key(r) for r in _requirements_txt_lines()}
