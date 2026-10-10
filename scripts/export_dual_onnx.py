@@ -43,7 +43,7 @@ def export(
             "PyTorch が見つかりません。`pip install torch` でインストールしてください。"
         ) from exc
     try:
-        import onnx
+        import onnx  # noqa: F401  エクスポート前に可用性だけ確認する（使用は finalize_onnx）
     except ImportError as exc:
         raise ImportError(
             "onnx が見つかりません。`pip install onnx` でインストールしてください。"
@@ -93,10 +93,25 @@ def export(
         opset_version=17,
         do_constant_folding=True,
     )
+    finalize_onnx(output_path)
+    logger.info("ONNX モデルをエクスポートしました: %s", output_path)
 
-    # torch 2.9+ の既定エクスポータは重みを外部データファイル（<output>.data）に
-    # 分離する。配布は単一 .onnx 前提（package-data も *.onnx のみ）のため
-    # initializer をインライン化してから保存し直す。
+    total_params = sum(p.numel() for p in wrapper.parameters())
+    logger.info("パラメータ数: %d (folds=%d)", total_params, len(models))
+
+
+def finalize_onnx(output_path: Path) -> None:
+    """torch.onnx.export 直後の .onnx を配布用の形に整えて上書き保存する。
+
+    torch 2.9+ の既定エクスポータは重みを外部データファイル（<output>.data）に
+    分離する。配布は単一 .onnx 前提（package-data も *.onnx のみ）のため
+    initializer をインライン化する。あわせて、エクスポータが埋め込むスタックトレース
+    （エクスポート環境の絶対パスを含む）等のデバッグ情報を除去する。
+    """
+    import onnx
+
+    from eyeliner.models.onnx_sanitize import strip_debug_metadata
+
     data_file = output_path.with_name(output_path.name + ".data")
     onnx_model = onnx.load(str(output_path), load_external_data=True)
     if data_file.exists():
@@ -104,14 +119,13 @@ def export(
             if tensor.data_location == onnx.TensorProto.EXTERNAL:
                 tensor.ClearField("data_location")
                 tensor.ClearField("external_data")
-        onnx.save(onnx_model, str(output_path))
+    onnx_model = strip_debug_metadata(onnx_model)
+    onnx.save(onnx_model, str(output_path))
+    if data_file.exists():
         data_file.unlink()
         logger.info("外部データ %s を .onnx にインライン化しました", data_file.name)
+    logger.info("デバッグ情報（スタックトレース等）を除去しました")
     onnx.checker.check_model(onnx_model)
-    logger.info("ONNX モデルをエクスポートしました: %s", output_path)
-
-    total_params = sum(p.numel() for p in wrapper.parameters())
-    logger.info("パラメータ数: %d (folds=%d)", total_params, len(models))
 
 
 def verify_against_pytorch(

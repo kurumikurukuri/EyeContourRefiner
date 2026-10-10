@@ -16,7 +16,9 @@
   `tests/test_export_dual_onnx.py` のgoldenテストが同じ重みから再エクスポートして検証する。
 - opset: 18（torch 2.11 の dynamo エクスポータ）。batch軸は動的。
   重みは単一 .onnx にインライン済み（外部 .data ファイル不要。エクスポートスクリプトが
-  自動でインライン化する）。
+  自動でインライン化する）。エクスポータが埋め込むスタックトレース等のデバッグ情報
+  （`metadata_props` / `doc_string`、エクスポート環境の絶対パスを含む）は除去済み
+  （`eyeliner.models.onnx_sanitize`）。
 
 ## t値の意味
 

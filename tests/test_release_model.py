@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import onnx
 import onnxruntime as ort
 import pytest
 
@@ -60,3 +61,19 @@ class TestInference:
         out1 = session.run(None, feed)[0]
         out2 = session.run(None, feed)[0]
         np.testing.assert_array_equal(out1, out2)
+
+
+class TestNoDebugMetadata:
+    """配布ONNXにエクスポート環境のスタックトレース（絶対パス）等が残っていないこと。"""
+
+    def test_no_debug_metadata(self) -> None:
+        if not MODEL_PATH.exists():
+            pytest.skip(f"モデルが見つかりません: {MODEL_PATH}")
+        from eyeliner.models.onnx_sanitize import find_debug_metadata
+
+        assert find_debug_metadata(onnx.load(str(MODEL_PATH))) == []
+
+    def test_no_site_packages_path(self) -> None:
+        if not MODEL_PATH.exists():
+            pytest.skip(f"モデルが見つかりません: {MODEL_PATH}")
+        assert b"site-packages" not in MODEL_PATH.read_bytes()
