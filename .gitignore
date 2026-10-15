@@ -10,6 +10,13 @@ experiments/*/outputs/**/events.out.*
 # experiments/*/outputs/**/*_prediction*.csv  # tracked
 # experiments/*/outputs/**/*_predictions*.csv  # tracked
 experiments/*/runs/
+experiments/*/logs/
+experiments/*/outputs/passrate_*
+experiments/*/outputs/ttest_*.json
+experiments/*/outputs/EXP*_summary.json
+experiments/*/outputs/*.log
+experiments/*/outputs/*log*.txt
+experiments/*/outputs/**/dual_kfold_progress.json
 
 __pycache__/
 *.pyc
