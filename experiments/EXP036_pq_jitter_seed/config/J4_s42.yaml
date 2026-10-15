@@ -1,0 +1,24 @@
+# EXP036 J4_s42: J0 + PQ 回転摂動 θ ~ U(±20°)（EXP035 J4_rot20 と同一構成、R 中心、t 不変）。 seed=42。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 42
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+aug_flags: 575  # = 63 | 0x200 (AUG_PQ_JITTER)
+pq_jitter_rot_deg: 20.0
+pq_jitter_prob: 1.0
