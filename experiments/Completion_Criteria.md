@@ -98,3 +98,6 @@ ratio 分布の下位パーセンタイル値をそのまま採用する。
 | EXP033_seed_variance | dual_s43 | 4900 | 89.06 | 85.82 |
 | EXP034_swa_ema | base_swa | 4900 | 89.20 | 85.69 |
 | EXP035_pq_jitter | J4_rot20 | 4900 | 90.02 | 87.16 |
+| EXP036_pq_jitter_seed | J3_s42 | 4900 | 89.82 | 86.80 |
+
+> **EXP036 の補足**: 単体 run の最良は J3_s42 / J4_s44 の 89.82%。3 seed 平均は J3 89.62% / J4 89.67% で 90% に未達。3 seed アンサンブル J3_ens3（推論 3 倍）は 90.10% / 86.78%。EXP035 J4_rot20 の 90.02% は 1 seed のゆらぎと条件選択のバイアスによるもので、3 seed では再現しなかった（詳細: [EXP036_summary.md](EXP036_pq_jitter_seed/EXP036_summary.md)）。

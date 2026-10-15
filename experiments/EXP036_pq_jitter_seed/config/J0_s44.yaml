@@ -1,0 +1,22 @@
+# EXP036 J0_s44: 現行dual標準（EXP035 J0_base と同一構成）。PQ 回転摂動なし。 seed=44。
+backbone: custom_dual
+fusion_mode: independent
+pq_rescale_mode_b: eye_scale
+loss_fn: t_l1
+use_sigmoid: true
+use_batchnorm: true
+num_conv_layers: 4
+dropout_rate: 0.3
+lr: 1.0e-3
+weight_decay: 1.0e-4
+epochs: 200
+batch: 32
+k: 3
+patience: 50
+seed: 44
+aug_prob: 1.0
+endpoint_blend_range: 0.25
+base_channel: 32
+pool_width: 8
+use_is_upper: true
+aug_flags: 63   # = 0x03F: パッチ空間 aug のみ（FLIP off / source 劣化 off）
