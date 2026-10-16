@@ -1,4 +1,4 @@
-"""eyeliner/data/source_degradation.py のテスト（EXP031）。
+"""eye_contour/data/source_degradation.py のテスト（EXP031）。
 
 最重要の不変条件は **「ROI 切り出しがパッチ内容を変えないこと」**。これが崩れると
 SD1〜SD3 で「劣化の効果」と「ROI 切り出しの副作用」が交絡し、paired t-test の解釈が
@@ -20,8 +20,8 @@ import random
 import numpy as np
 import pytest
 
-from eyeliner.data.patch_utils import extract_patch
-from eyeliner.data.source_degradation import (
+from eye_contour.data.patch_utils import extract_patch
+from eye_contour.data.source_degradation import (
     JPEG_BLOCK_PX,
     SourceDegradeConfig,
     SourceDegradeSample,

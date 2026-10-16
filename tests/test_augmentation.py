@@ -1,4 +1,4 @@
-"""eyeliner/data/augmentation.py のテスト。"""
+"""eye_contour/data/augmentation.py のテスト。"""
 from __future__ import annotations
 
 import math
@@ -7,7 +7,7 @@ import random
 import numpy as np
 import pytest
 
-from eyeliner.data.augmentation import (
+from eye_contour.data.augmentation import (
     AUG_ALL,
     AUG_ENDPOINT_BLEND,
     AUG_FLIP,
@@ -17,7 +17,7 @@ from eyeliner.data.augmentation import (
     augment,
     augment_endpoints,
 )
-from eyeliner.training.trainer import set_seed
+from eye_contour.training.trainer import set_seed
 
 
 def _reconstruct_r(px: float, py: float, qx: float, qy: float, t: float) -> tuple[float, float]:
@@ -135,7 +135,7 @@ class TestAugmentEndpoints:
     def test_identity_when_a_b_zero(self, monkeypatch):
         """a = b = 0 のとき入力が保存される。"""
         monkeypatch.setattr(
-            "eyeliner.data.augmentation.random.uniform",
+            "eye_contour.data.augmentation.random.uniform",
             lambda lo, hi: 0.0,
         )
         px, py, qx, qy, t = 10.0, 20.0, 30.0, 40.0, 0.5
@@ -279,19 +279,19 @@ class TestFlipLabelTransform:
 
     def test_flip_reflects_t_label(self, monkeypatch):
         """t が区間中点で反転する（t' = t_min + t_max - t）。"""
-        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        monkeypatch.setattr("eye_contour.data.augmentation.random.random", lambda: 0.0)
         _, t_out = augment(self._patch(), 0.3, t_min=0.0, t_max=1.0, aug_flags=AUG_FLIP)
         assert t_out == pytest.approx(0.7)
 
     def test_flip_respects_asymmetric_range(self, monkeypatch):
         """非対称な [t_min, t_max] でも t_min + t_max - t が成り立つ。"""
-        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        monkeypatch.setattr("eye_contour.data.augmentation.random.random", lambda: 0.0)
         _, t_out = augment(self._patch(), 0.5, t_min=0.2, t_max=1.1, aug_flags=AUG_FLIP)
         assert t_out == pytest.approx(0.2 + 1.1 - 0.5)
 
     def test_flip_horizontally_mirrors_patch(self, monkeypatch):
         """パッチが水平反転される。"""
-        monkeypatch.setattr("eyeliner.data.augmentation.random.random", lambda: 0.0)
+        monkeypatch.setattr("eye_contour.data.augmentation.random.random", lambda: 0.0)
         patch = self._patch()
         out, _ = augment(patch, 0.5, aug_flags=AUG_FLIP)
         assert np.array_equal(out, patch[:, ::-1])

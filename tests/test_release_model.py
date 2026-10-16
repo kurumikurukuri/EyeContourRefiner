@@ -1,4 +1,4 @@
-"""配布ONNXのスモークテスト。models/eyeliner_detection_dual.onnx のみに
+"""配布ONNXのスモークテスト。models/eye_contour_refiner.onnx のみに
 依存する（.pt チェックポイント・実験データ不要）。"""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import onnx
 import onnxruntime as ort
 import pytest
 
-MODEL_PATH = Path(__file__).parent.parent / "models" / "eyeliner_detection_dual.onnx"
+MODEL_PATH = Path(__file__).parent.parent / "models" / "eye_contour_refiner.onnx"
 
 EXPECTED_INPUTS = ["patch_a", "patch_b", "is_upper", "px", "py", "qx", "qy", "eye_scale"]
 EXPECTED_OUTPUTS = ["t"]
@@ -69,7 +69,7 @@ class TestNoDebugMetadata:
     def test_no_debug_metadata(self) -> None:
         if not MODEL_PATH.exists():
             pytest.skip(f"モデルが見つかりません: {MODEL_PATH}")
-        from eyeliner.models.onnx_sanitize import find_debug_metadata
+        from eye_contour.models.onnx_sanitize import find_debug_metadata
 
         assert find_debug_metadata(onnx.load(str(MODEL_PATH))) == []
 

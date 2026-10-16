@@ -1,9 +1,9 @@
 """
 dual-branch モデル（fold群）を ONNX にエクスポートする。
 
-生t空間での正しい枝融合（eyeliner.training.dual_branch.fold_ensemble_raw_t）を
+生t空間での正しい枝融合（eye_contour.training.dual_branch.fold_ensemble_raw_t）を
 グラフに焼き込むため、単純に (pred_a+pred_b)/2 を平均する
-（tools/model_benchmark の DualBenchmarkEnsemble、eyeliner.models.dual_ensemble の
+（tools/model_benchmark の DualBenchmarkEnsemble、eye_contour.models.dual_ensemble の
 DualEnsembleModel=[非推奨]）とは異なり、本番推論と数値的に一致する。
 
 branch B（既定でeye_scale座標系）のt'→生t変換にpq_dist/pq_prime_distが必要なため、
@@ -12,7 +12,7 @@ branch B（既定でeye_scale座標系）のt'→生t変換にpq_dist/pq_prime_d
 使い方:
     python scripts/export_dual_onnx.py \\
         --models-dir experiments/EXP031_source_space_aug/outputs/SD0_baseline \\
-        --output models/eyeliner_detection_dual.onnx
+        --output models/eye_contour_refiner.onnx
 
 出力後、--verify-manifest を指定すると実データで
 「エクスポート前PyTorch」対「エクスポート後ONNX」の予測値を突き合わせ、数値一致を確認する。
@@ -49,8 +49,8 @@ def export(
             "onnx が見つかりません。`pip install onnx` でインストールしてください。"
         ) from exc
 
-    from eyeliner.models.dual_ensemble import DualRawTOnnxModel, load_dual_fold_models
-    from eyeliner.training.dual_branch import build_branch_configs
+    from eye_contour.models.dual_ensemble import DualRawTOnnxModel, load_dual_fold_models
+    from eye_contour.training.dual_branch import build_branch_configs
 
     logger.info("dual fold モデルを読み込み中: %s", models_dir)
     models = load_dual_fold_models(models_dir, fusion_mode)
@@ -110,7 +110,7 @@ def finalize_onnx(output_path: Path) -> None:
     """
     import onnx
 
-    from eyeliner.models.onnx_sanitize import strip_debug_metadata
+    from eye_contour.models.onnx_sanitize import strip_debug_metadata
 
     data_file = output_path.with_name(output_path.name + ".data")
     onnx_model = onnx.load(str(output_path), load_external_data=True)
@@ -141,11 +141,11 @@ def verify_against_pytorch(
     import onnxruntime as ort
     import torch
 
-    from eyeliner.data.dataset import load_manifest
-    from eyeliner.data.weights import compute_eye_meta
-    from eyeliner.models.dual_ensemble import load_dual_fold_models
-    from eyeliner.training.dual_branch import build_branch_configs, fold_ensemble_raw_t
-    from eyeliner.data.patch_utils import extract_patch, compute_pq_rescale, IMAGENET_MEAN, IMAGENET_STD
+    from eye_contour.data.dataset import load_manifest
+    from eye_contour.data.weights import compute_eye_meta
+    from eye_contour.models.dual_ensemble import load_dual_fold_models
+    from eye_contour.training.dual_branch import build_branch_configs, fold_ensemble_raw_t
+    from eye_contour.data.patch_utils import extract_patch, compute_pq_rescale, IMAGENET_MEAN, IMAGENET_STD
 
     norm_mean = torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1)
     norm_std = torch.tensor(IMAGENET_STD).view(1, 3, 1, 1)
@@ -228,7 +228,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="dual-branch モデルを ONNX にエクスポート（生t空間で正しく融合）")
     parser.add_argument("--models-dir", required=True, type=Path, help="fold*.ptが入ったディレクトリ")
-    parser.add_argument("--output", default=Path("models/eyeliner_detection_dual.onnx"), type=Path)
+    parser.add_argument("--output", default=Path("models/eye_contour_refiner.onnx"), type=Path)
     parser.add_argument("--pq-rescale-mode-b", default="eye_scale", choices=["eye_scale", "eye_height"])
     parser.add_argument("--fusion-mode", default="independent", choices=["independent", "attention"])
     parser.add_argument("--verify-manifest", type=Path, default=None,

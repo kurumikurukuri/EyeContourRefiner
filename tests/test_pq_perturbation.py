@@ -5,8 +5,8 @@ import math
 
 import pytest
 
-from eyeliner.data.patch_utils import reconstruct_point
-from eyeliner.data.pq_perturbation import perturb_records_pq_rotation
+from eye_contour.data.patch_utils import reconstruct_point
+from eye_contour.data.pq_perturbation import perturb_records_pq_rotation
 
 
 def _records() -> list[dict]:

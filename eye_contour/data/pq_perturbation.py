@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import random
 
-from eyeliner.data.augmentation import AUG_PQ_JITTER, augment_pq_jitter
+from eye_contour.data.augmentation import AUG_PQ_JITTER, augment_pq_jitter
 
 
 def perturb_records_pq_rotation(records: list[dict], rot_deg: float, seed: int) -> list[dict]:

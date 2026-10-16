@@ -1,4 +1,4 @@
-"""EyelinerPatchDualDataset: 2系統パッチ（生PQ + P'Q'）を返すデータセット。"""
+"""EyeContourPatchDualDataset: 2系統パッチ（生PQ + P'Q'）を返すデータセット。"""
 from __future__ import annotations
 
 import logging
@@ -11,23 +11,23 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import (
+from eye_contour.data.augmentation import (
     AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints, augment_pq_jitter,
 )
-from eyeliner.data.source_degradation import (
+from eye_contour.data.source_degradation import (
     SourceDegradeConfig,
     SourceDegradeSample,
     compute_patch_source_bbox,
     degrade_region,
     sample_source_degradation,
 )
-from eyeliner.data.patch_utils import (
+from eye_contour.data.patch_utils import (
     PATCH_SIZE, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
     compute_t_from_point, reconstruct_point,
     homography_from_pitch_yaw, warp_pq_with_homography,
 )
-from eyeliner.data.weights import DEFAULT_AUX_FEATURES, build_aux_vector
+from eye_contour.data.weights import DEFAULT_AUX_FEATURES, build_aux_vector
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ class BranchConfig:
     label_space: str = "raw_t"
 
 
-class EyelinerPatchDualDataset(Dataset):
+class EyeContourPatchDualDataset(Dataset):
     """2系統パッチ（枝A:生PQ / 枝B:P'Q'）を返すデータセット。
 
     Returns 14-tuple (use_aux_face_shape=False) or 15-tuple ([14]=aux, use_aux_face_shape=True):

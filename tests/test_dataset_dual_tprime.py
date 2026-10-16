@@ -2,7 +2,7 @@
 
 検証:
   1. invert_pq_rescale_t ∘ compute_pq_rescale が任意 t を round-trip 復元する。
-  2. EyelinerPatchDualDataset の Branch B ラベルが label_space により切り替わる:
+  2. EyeContourPatchDualDataset の Branch B ラベルが label_space により切り替わる:
        "t_prime" → 正規化済み clamp(t')
        "raw_t"   → 正規化済み clamp(生t)
   3. 極端 t（生tは枝Bレンジ外）でも t_prime なら表現可能、raw_t は飽和する。
@@ -14,8 +14,8 @@ import math
 import numpy as np
 import pytest
 
-from eyeliner.data.patch_utils import compute_pq_rescale, invert_pq_rescale_t
-from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
+from eye_contour.data.patch_utils import compute_pq_rescale, invert_pq_rescale_t
+from eye_contour.data.dataset_dual import BranchConfig, EyeContourPatchDualDataset
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +57,7 @@ def _make_rec(t: float, px=100.0, py=200.0, qx=102.47, qy=200.0, eye_scale=150.0
     }
 
 
-def _make_dataset(rec: dict, label_space: str) -> EyelinerPatchDualDataset:
+def _make_dataset(rec: dict, label_space: str) -> EyeContourPatchDualDataset:
     cfg_a = BranchConfig(
         patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
         pq_rescale_mode="none", patch_size=(64, 64),
@@ -67,7 +67,7 @@ def _make_dataset(rec: dict, label_space: str) -> EyelinerPatchDualDataset:
         pq_rescale_mode="eye_scale", pq_rescale_factor=0.2,
         label_space=label_space, patch_size=(64, 64),
     )
-    ds = EyelinerPatchDualDataset([rec], cfg_a, cfg_b, augment_data=False, preload_images=False)
+    ds = EyeContourPatchDualDataset([rec], cfg_a, cfg_b, augment_data=False, preload_images=False)
     # 画像 IO を避けてダミー画像を注入（ラベルは画像非依存）
     img = np.zeros((100, 100, 3), dtype=np.uint8)
     ds._image_cache["dummy.jpg"] = img

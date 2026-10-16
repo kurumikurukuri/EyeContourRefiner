@@ -1,6 +1,6 @@
 """pyproject.toml の依存宣言が実際の import と噛み合っていることを検証する。
 
-コアライブラリ（eyeliner/）・ONNX エクスポートスクリプト（scripts/）・配布モデルの
+コアライブラリ（eye_contour/）・ONNX エクスポートスクリプト（scripts/）・配布モデルの
 参考実装（models/）が import エラーにならないことを保証する。import は base
 dependencies だけでなく optional-dependencies（demo 等の extra）も含めた宣言と突き合わせる。
 mediapipe は models/demo_visualize.py 専用のため `demo` extra に宣言している。
@@ -19,8 +19,8 @@ from packaging.version import Version
 
 ROOT = Path(__file__).parent.parent
 
-SCANNED_DIRS = ("eyeliner", "scripts", "models")
-FIRST_PARTY_DIRS = ("eyeliner", "scripts", "models", "tests")
+SCANNED_DIRS = ("eye_contour", "scripts", "models")
+FIRST_PARTY_DIRS = ("eye_contour", "scripts", "models", "tests")
 
 # import 名と配布パッケージ名が異なるもの
 IMPORT_TO_DISTRIBUTION = {
@@ -98,7 +98,7 @@ def _requirements_txt_lines() -> list[str]:
 
 def test_scan_covers_core_and_release_entry_points():
     files = _scanned_files()
-    assert any(p.is_relative_to(ROOT / "eyeliner") for p in files)
+    assert any(p.is_relative_to(ROOT / "eye_contour") for p in files)
     assert any(p.name == "export_dual_onnx.py" for p in files)
     assert any(p.name == "infer_example.py" for p in files)
 

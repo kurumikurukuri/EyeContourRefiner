@@ -1,6 +1,6 @@
 """デュアルブランチ K-Fold CV オーケストレーション。
 
-eyeliner.training.kfold（単一ブランチ）に対応するデュアルブランチ版。
+eye_contour.training.kfold（単一ブランチ）に対応するデュアルブランチ版。
 旧 experiments/EXP020_dual_branch/scr/train_exp020.py の train_dual() から
 抽出（EXP020/EXP021 双方が import して再利用するため共有化）。
 
@@ -23,43 +23,43 @@ import torch
 from sklearn.model_selection import GroupKFold
 from torch.utils.data import DataLoader
 
-from eyeliner.data.augmentation import (
+from eye_contour.data.augmentation import (
     AUG_PQ_JITTER,
     AUG_SOURCE_JPEG,
     AUG_SOURCE_RES_JITTER,
     check_aug_flags,
 )
-from eyeliner.data.dataset import load_manifest
-from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
-from eyeliner.data.source_degradation import SourceDegradeConfig
-from eyeliner.data.weights import (
+from eye_contour.data.dataset import load_manifest
+from eye_contour.data.dataset_dual import BranchConfig, EyeContourPatchDualDataset
+from eye_contour.data.source_degradation import SourceDegradeConfig
+from eye_contour.data.weights import (
     DEFAULT_AUX_FEATURES,
     compute_aux_face_shape_meta,
     compute_eye_meta,
 )
-from eyeliner.evaluation.loss import get_loss_fn
-from eyeliner.models.dual_ensemble import (
+from eye_contour.evaluation.loss import get_loss_fn
+from eye_contour.models.dual_ensemble import (
     get_dual_model,
     load_dual_model,
     save_dual_model,
 )
-from eyeliner.training.checkpoint import (
+from eye_contour.training.checkpoint import (
     load_checkpoint,
     remove_checkpoint,
     save_checkpoint,
 )
-from eyeliner.training.dual_averaging import run_fold_swa, track_ema_best
-from eyeliner.training.dual_branch import (
+from eye_contour.training.dual_averaging import run_fold_swa, track_ema_best
+from eye_contour.training.dual_branch import (
     build_branch_configs,
     fold_ensemble_raw_t,
     model_pred_raw_t,
 )
-from eyeliner.training.dual_epoch import evaluate_val_mae, train_one_epoch
-from eyeliner.training.kfold import FoldResult
-from eyeliner.training.oof import OofPrediction
-from eyeliner.training.scheduler import make_optimizer_and_scheduler
-from eyeliner.training.trainer import set_seed
-from eyeliner.training.weight_averaging import EmaTracker
+from eye_contour.training.dual_epoch import evaluate_val_mae, train_one_epoch
+from eye_contour.training.kfold import FoldResult
+from eye_contour.training.oof import OofPrediction
+from eye_contour.training.scheduler import make_optimizer_and_scheduler
+from eye_contour.training.trainer import set_seed
+from eye_contour.training.weight_averaging import EmaTracker
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +339,7 @@ def _train_single_dual_fold(
     # EXP031: 元画像空間の劣化は train のみ。val/hold-out/推論は augment_data=False なので
     # 劣化パスに入らず、config 間でテスト入力は完全に同一になる。
     source_degrade = build_source_degrade_config(config)
-    train_ds = EyelinerPatchDualDataset(
+    train_ds = EyeContourPatchDualDataset(
         train_records, cfg_a, cfg_b,
         augment_data=True, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
@@ -351,7 +351,7 @@ def _train_single_dual_fold(
         pq_jitter_prob=config.pq_jitter_prob,
         pq_jitter_seed=config.seed + fold_idx,
     )
-    val_ds = EyelinerPatchDualDataset(
+    val_ds = EyeContourPatchDualDataset(
         val_records, cfg_a, cfg_b,
         augment_data=False, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
@@ -497,7 +497,7 @@ def _predict_dual_records(
     （manifest の生 t と直接比較できる）。augment_data=False・shuffle=False の専用推論パス。
     """
     aux_features = effective_aux_features(config)
-    ds = EyelinerPatchDualDataset(
+    ds = EyeContourPatchDualDataset(
         records, cfg_a, cfg_b,
         augment_data=False, aug_flags=config.aug_flags, aug_prob=config.aug_prob,
         endpoint_blend_range=config.endpoint_blend_range,
@@ -655,7 +655,7 @@ def run_dual_kfold(
         try:
             fold_paths = sorted(exp_dir.glob("eyeliner_detection_fold*.pt"))
             models = [load_dual_model(p).to(device) for p in fold_paths]
-            holdout_ds = EyelinerPatchDualDataset(
+            holdout_ds = EyeContourPatchDualDataset(
                 holdout_records, cfg_a, cfg_b, augment_data=False, aug_flags=config.aug_flags,
                 aug_prob=config.aug_prob,
                 endpoint_blend_range=config.endpoint_blend_range,

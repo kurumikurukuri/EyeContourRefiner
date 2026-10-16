@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 import pytest
 
-from eyeliner.data.patch_utils import (
+from eye_contour.data.patch_utils import (
     PATCH_SIZE,
     T_MIN,
     T_MAX,
@@ -21,7 +21,7 @@ from eyeliner.data.patch_utils import (
     reconstruct_point,
     warp_pq_with_homography,
 )
-from eyeliner.training.dual_kfold import (
+from eye_contour.training.dual_kfold import (
     PERSPECTIVE_PATTERNS_8,
     expand_perspective_records,
 )

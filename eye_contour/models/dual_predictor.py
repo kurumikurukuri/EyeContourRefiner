@@ -15,11 +15,11 @@ from typing import Callable
 
 import torch
 
-from eyeliner.data.patch_utils import (
+from eye_contour.data.patch_utils import (
     IMAGENET_MEAN, IMAGENET_STD, T_MIN, T_MAX, extract_patch,
 )
-from eyeliner.training.dual_branch import build_branch_configs, model_pred_raw_t
-from eyeliner.models.dual_ensemble import load_dual_fold_models
+from eye_contour.training.dual_branch import build_branch_configs, model_pred_raw_t
+from eye_contour.models.dual_ensemble import load_dual_fold_models
 
 logger = logging.getLogger(__name__)
 

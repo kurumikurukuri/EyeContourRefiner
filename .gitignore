@@ -2,7 +2,7 @@
 # （学習元の fold*.pt・experiment.json 等はローカルに置いても追跡しない）
 /models/*
 !/models/README.md
-!/models/eyeliner_detection_dual.onnx
+!/models/eye_contour_refiner.onnx
 !/models/DATA_ATTRIBUTION.csv
 !/models/infer_example.py
 !/models/demo_visualize.py

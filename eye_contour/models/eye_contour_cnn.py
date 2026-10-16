@@ -5,7 +5,7 @@ import torch
 import torch.nn as nn
 
 
-class EyelinerCNN(nn.Module):
+class EyeContourCNN(nn.Module):
     """軽量な可変深度 CNN + 全結合回帰ヘッド。
 
     入力: (B, 3, 64, 128) RGB パッチ + (B, 1) is_upper フラグ

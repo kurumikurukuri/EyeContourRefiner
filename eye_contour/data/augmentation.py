@@ -22,7 +22,7 @@ AUG_FLIP:            int = 0x40  # 水平反転
 # --- 元画像空間の劣化（EXP031）--------------------------------------------
 # bit0-6 は augment() がパッチに適用するが、以下 2 つは **ワープ前の元画像 ROI**
 # に適用するため適用箇所が違う（dataset_dual の _extract_patch_maybe_degraded 経路、
-# 実処理は eyeliner/data/source_degradation.py）。augment() はこれらのビットを見ない。
+# 実処理は eye_contour/data/source_degradation.py）。augment() はこれらのビットを見ない。
 # quality レンジ等の連続パラメータは source_jpeg_quality_min など別キーで指定する。
 AUG_SOURCE_JPEG:       int = 0x080  # 元画像空間 JPEG 圧縮
 AUG_SOURCE_RES_JITTER: int = 0x100  # 元画像空間 解像度ジッタ（縮小→拡大）

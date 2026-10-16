@@ -1,6 +1,6 @@
 """Dual モデルの保存・読み込み・アンサンブルユーティリティ。
 
-eyeliner.models.ensemble（単一ブランチ）に対応するデュアルブランチ版。
+eye_contour.models.ensemble（単一ブランチ）に対応するデュアルブランチ版。
 旧 experiments/EXP020_dual_branch/scr/dual_model_io.py から移植
 （EXP020/EXP021 双方・推論スクリプト・WebUI から再利用するため共有化）。
 """
@@ -11,10 +11,10 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from eyeliner.models.eyeliner_cnn_dual import EyelinerCNNDual
-from eyeliner.models.eyeliner_cnn_dual_branch import CrossFuseDualModel
-from eyeliner.data.dataset_dual import BranchConfig
-from eyeliner.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD
+from eye_contour.models.eye_contour_cnn_dual import EyeContourCNNDual
+from eye_contour.models.eye_contour_cnn_dual_branch import CrossFuseDualModel
+from eye_contour.data.dataset_dual import BranchConfig
+from eye_contour.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD
 
 
 class DualEnsembleModel(nn.Module):
@@ -51,7 +51,7 @@ class DualRawTOnnxModel(nn.Module):
     `DualEnsembleModel`（正規化空間で平均、[非推奨]）とは異なり、各枝の
     label_space（branch A="raw_t", branch B="t_prime"）に応じた変換を
     グラフ内で行ってから融合する。ロジックは
-    `eyeliner.training.dual_branch.fold_ensemble_raw_t` / `branch_pred_to_raw_t`
+    `eye_contour.training.dual_branch.fold_ensemble_raw_t` / `branch_pred_to_raw_t`
     と同一（実装を重複させず数値一致を保証するため、この2関数をそのまま呼ぶ）。
 
     branch Bのt'→生t変換にはpq_dist（元のP-Q距離）とpq_prime_dist（P'-Q'距離、
@@ -61,8 +61,8 @@ class DualRawTOnnxModel(nn.Module):
     既にこれらの値を持っているはずなので、追加の準備コストはない想定。
 
     外部の入力契約は学習データと同じ生[0,1]パッチのまま保つため、
-    学習時と同じ ImageNet mean/std 正規化（eyeliner.data.dataset_dual /
-    eyeliner.models.dual_predictor と同一）をグラフ内部で適用してから
+    学習時と同じ ImageNet mean/std 正規化（eye_contour.data.dataset_dual /
+    eye_contour.models.dual_predictor と同一）をグラフ内部で適用してから
     各枝のバックボーンに渡す。
     """
 
@@ -94,13 +94,13 @@ class DualRawTOnnxModel(nn.Module):
         qy: torch.Tensor,
         eye_scale: torch.Tensor,
     ) -> torch.Tensor:
-        from eyeliner.training.dual_branch import fold_ensemble_raw_t
+        from eye_contour.training.dual_branch import fold_ensemble_raw_t
 
         patch_a = (patch_a - self._norm_mean) / self._norm_std
         patch_b = (patch_b - self._norm_mean) / self._norm_std
 
         pq_dist = torch.sqrt((qx - px) ** 2 + (qy - py) ** 2)
-        # eyeliner.data.patch_utils.compute_pq_rescale の eye_scale 分岐と同一
+        # eye_contour.data.patch_utils.compute_pq_rescale の eye_scale 分岐と同一
         # （xxx = max(eye_scale * factor, 1.0)）。
         pq_prime_dist = torch.clamp(eye_scale * self.pq_rescale_factor_b, min=1.0)
         return fold_ensemble_raw_t(
@@ -113,7 +113,7 @@ def get_dual_model(fusion_mode: str, **model_kwargs) -> nn.Module:
     """fusion_mode に応じたモデルインスタンスを生成する。"""
     if fusion_mode == "crossfuse":
         return CrossFuseDualModel(**model_kwargs)
-    return EyelinerCNNDual(fusion_mode=fusion_mode, **model_kwargs)
+    return EyeContourCNNDual(fusion_mode=fusion_mode, **model_kwargs)
 
 
 def save_dual_model(
@@ -171,7 +171,7 @@ def load_dual_fold_models(
 ) -> list[nn.Module]:
     """ディレクトリ内の fold モデルを読み込んでリストで返す。
 
-    アンサンブル合成は呼び出し側で生 t 空間で行う（eyeliner.training.dual_branch.fold_ensemble_raw_t）。
+    アンサンブル合成は呼び出し側で生 t 空間で行う（eye_contour.training.dual_branch.fold_ensemble_raw_t）。
     枝A/B が異なる label_space を持つため、正規化空間での単純平均は不正。
     """
     fold_paths = sorted(models_dir.glob("eyeliner_detection_fold*.pt"))

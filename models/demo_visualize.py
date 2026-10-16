@@ -1,5 +1,5 @@
 """画像を読み込み、MediaPipe Face Meshで目のランドマークを検出し、
-eyeliner_detection_dual.onnxで各点を精密化して、目の輪郭（アイライン）を図示する。
+eye_contour_refiner.onnxで各点を精密化して、目の輪郭（アイライン）を図示する。
 
 **重要な注意**: 本番の学習データ生成（`annotator/preprocessor.py`）は、
 P,Qペアの正確な組み合わせを外部パッケージ`face_makeup.constants.EYELINER_CORRECTION_MAP`
@@ -32,7 +32,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(Path(__file__).parent))
 
-from eyeliner.data.patch_utils import compute_eye_scale  # noqa: E402
+from eye_contour.data.patch_utils import compute_eye_scale  # noqa: E402
 from infer_example import DEFAULT_MODEL_PATH, predict_point  # noqa: E402
 
 # MediaPipe FaceMesh 公式の目輪郭16点ループ（FACEMESH_LEFT_EYE/FACEMESH_RIGHT_EYE
@@ -151,9 +151,9 @@ def main() -> int:
     except (AttributeError, ValueError):
         pass
 
-    ap = argparse.ArgumentParser(description="MediaPipe + eyeliner_detection_dual.onnx デモ")
+    ap = argparse.ArgumentParser(description="MediaPipe + eye_contour_refiner.onnx デモ")
     ap.add_argument("--image", type=Path, required=True)
-    ap.add_argument("--output", type=Path, default=Path("eyeliner_result.jpg"))
+    ap.add_argument("--output", type=Path, default=Path("eye_contour_result.jpg"))
     ap.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     ap.add_argument("--max-faces", type=int, default=1)
     args = ap.parse_args()

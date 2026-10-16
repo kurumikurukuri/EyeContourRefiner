@@ -416,7 +416,7 @@ def compute_eye_scale(points: list[Tuple[float, float]]) -> float:
     """1つの目の全P,Q点（upper7+lower7=14点）から eye_scale を計算する。
 
     eye_scale = 全点のbounding boxの対角長（最小1.0）。
-    eyeliner.data.weights.compute_eye_meta の該当ロジックを単体で使えるよう抽出したもの。
+    eye_contour.data.weights.compute_eye_meta の該当ロジックを単体で使えるよう抽出したもの。
     branch B（eye_scale座標系）のパッチ抽出・生t変換（compute_pq_rescale/
     DualRawTOnnxModel）に必要。
     """

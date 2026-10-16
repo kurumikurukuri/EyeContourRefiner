@@ -21,18 +21,18 @@ from pathlib import Path
 
 from sklearn.model_selection import GroupKFold
 
-from eyeliner.data.dataset import load_manifest
-from eyeliner.data.weights import compute_eye_meta
-from eyeliner.training.dual_branch import build_branch_configs
-from eyeliner.training.dual_kfold import DualTrainConfig, _predict_dual_records, _train_single_dual_fold
-from eyeliner.training.kfold import (
+from eye_contour.data.dataset import load_manifest
+from eye_contour.data.weights import compute_eye_meta
+from eye_contour.training.dual_branch import build_branch_configs
+from eye_contour.training.dual_kfold import DualTrainConfig, _predict_dual_records, _train_single_dual_fold
+from eye_contour.training.kfold import (
     FoldResult,
     _label_range_and_min,
     _predict_records,
     _train_single_fold,
 )
-from eyeliner.training.oof import OofPrediction
-from eyeliner.training.trainer import TrainConfig, set_seed
+from eye_contour.training.oof import OofPrediction
+from eye_contour.training.trainer import TrainConfig, set_seed
 
 import torch
 

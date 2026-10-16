@@ -15,11 +15,11 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from eyeliner.data.dataset import load_manifest
-from eyeliner.data.dataset_dual import EyelinerPatchDualDataset
-from eyeliner.data.weights import compute_eye_meta
-from eyeliner.models.dual_ensemble import load_dual_fold_models
-from eyeliner.training.dual_branch import build_branch_configs, fold_ensemble_raw_t
+from eye_contour.data.dataset import load_manifest
+from eye_contour.data.dataset_dual import EyeContourPatchDualDataset
+from eye_contour.data.weights import compute_eye_meta
+from eye_contour.models.dual_ensemble import load_dual_fold_models
+from eye_contour.training.dual_branch import build_branch_configs, fold_ensemble_raw_t
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,7 @@ def infer_dual(
     logger.info("サンプル数: %d", len(records))
 
     cfg_a, cfg_b = build_branch_configs(rescale_b)
-    ds = EyelinerPatchDualDataset(records, cfg_a, cfg_b, augment_data=False)
+    ds = EyeContourPatchDualDataset(records, cfg_a, cfg_b, augment_data=False)
     loader = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=num_workers)
 
     models = [m.to(device) for m in load_dual_fold_models(model_dir, fusion_mode)]

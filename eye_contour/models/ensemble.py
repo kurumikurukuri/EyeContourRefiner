@@ -47,12 +47,12 @@ def build_model(
 ) -> nn.Module:
     """バックボーン名からモデルを構築する。"""
     if backbone == "custom":
-        from eyeliner.models.eyeliner_cnn import EyelinerCNN
-        return EyelinerCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape, pool_width=pool_width)
+        from eye_contour.models.eye_contour_cnn import EyeContourCNN
+        return EyeContourCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper, dropout_rate=dropout_rate, use_aux_face_shape=use_aux_face_shape, pool_width=pool_width)
     if backbone == "soft_argmax":
-        from eyeliner.models.soft_argmax import SoftArgmaxEdgeCNN
+        from eye_contour.models.soft_argmax import SoftArgmaxEdgeCNN
         return SoftArgmaxEdgeCNN(use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_batchnorm=use_batchnorm, num_conv_layers=num_conv_layers, use_distance_from_center=use_distance_from_center)
-    from eyeliner.models.transfer import TransferModel
+    from eye_contour.models.transfer import TransferModel
     return TransferModel(backbone, pretrained=pretrained, use_pq_ratio=use_pq_ratio, use_sigmoid=use_sigmoid, use_distance_from_center=use_distance_from_center, use_norm_eye_scale=use_norm_eye_scale, use_is_upper=use_is_upper)
 
 
@@ -60,13 +60,13 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
     """チェックポイントからモデルをロードする。新旧両形式に対応。
 
     新形式: {"backbone": str, "state_dict": dict}
-    旧形式: plain state_dict (EyelinerCNN として扱う)
+    旧形式: plain state_dict (EyeContourCNN として扱う)
 
     Args:
         path:            チェックポイントファイルのパス
         _preloaded_ckpt: 既に torch.load 済みの場合はここに渡す（二重読み込み回避）
     """
-    from eyeliner.models.eyeliner_cnn import EyelinerCNN
+    from eye_contour.models.eye_contour_cnn import EyeContourCNN
 
     ckpt = _preloaded_ckpt if _preloaded_ckpt is not None else torch.load(path, map_location="cpu", weights_only=True)
     if isinstance(ckpt, dict) and "backbone" in ckpt and ckpt.get("type") != "ensemble":
@@ -101,8 +101,8 @@ def load_model(path: Path, _preloaded_ckpt=None) -> nn.Module:
         ensemble.load_state_dict(ckpt["state_dict"])
         return ensemble
 
-    # 後方互換: 旧形式 state_dict → EyelinerCNN
-    model = EyelinerCNN()
+    # 後方互換: 旧形式 state_dict → EyeContourCNN
+    model = EyeContourCNN()
     model.load_state_dict(ckpt)
     return model
 

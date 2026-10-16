@@ -1,4 +1,4 @@
-"""EyelinerPatchDataset と manifest 読み込みユーティリティ。"""
+"""EyeContourPatchDataset と manifest 読み込みユーティリティ。"""
 from __future__ import annotations
 
 import csv
@@ -13,8 +13,8 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-from eyeliner.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
-from eyeliner.data.patch_utils import (
+from eye_contour.data.augmentation import AUG_ALL, ENDPOINT_BLEND_RANGE, augment, augment_endpoints
+from eye_contour.data.patch_utils import (
     PATCH_SIZE, T_MIN, T_MAX, IMAGENET_MEAN, IMAGENET_STD,
     extract_patch, compute_pq_rescale,
 )
@@ -67,7 +67,7 @@ def load_manifest_df(
     return pd.read_csv(path)
 
 
-class EyelinerPatchDataset(Dataset):
+class EyeContourPatchDataset(Dataset):
     """アイライン輪郭検出用パッチデータセット。
 
     各サンプルは以下を返す（8-tuple）:

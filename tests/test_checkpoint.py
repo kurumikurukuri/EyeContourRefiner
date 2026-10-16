@@ -1,4 +1,4 @@
-"""eyeliner.training.checkpoint の単体テスト。
+"""eye_contour.training.checkpoint の単体テスト。
 
 学習リジューム用のエポック単位チェックポイント保存・復元を検証する。
 モデル本体は checkpoint.py の関心事ではないため、軽量な nn.Linear で代替する。
@@ -10,7 +10,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from eyeliner.training.checkpoint import (
+from eye_contour.training.checkpoint import (
     load_checkpoint,
     remove_checkpoint,
     save_checkpoint,

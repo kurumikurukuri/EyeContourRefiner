@@ -12,9 +12,9 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 
-from eyeliner.data.dataset_dual import BranchConfig
-from eyeliner.models.dual_ensemble import save_dual_model
-from eyeliner.training.dual_branch import (
+from eye_contour.data.dataset_dual import BranchConfig
+from eye_contour.models.dual_ensemble import save_dual_model
+from eye_contour.training.dual_branch import (
     branch_pred_to_raw_t,
     ensemble_raw_t,
     model_pred_raw_t,

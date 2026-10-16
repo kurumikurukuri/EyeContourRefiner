@@ -1,4 +1,4 @@
-"""eyeliner/data/dataset.py のテスト。"""
+"""eye_contour/data/dataset.py のテスト。"""
 from __future__ import annotations
 
 import csv
@@ -9,13 +9,13 @@ import numpy as np
 import pytest
 import torch
 
-from eyeliner.data.dataset import (
+from eye_contour.data.dataset import (
     load_manifest,
     load_manifest_df,
     get_manifest_version,
-    EyelinerPatchDataset,
+    EyeContourPatchDataset,
 )
-from eyeliner.data.weights import compute_eye_meta
+from eye_contour.data.weights import compute_eye_meta
 
 
 def _make_manifest_csv(path: Path, rows: list[dict]) -> None:
@@ -104,10 +104,10 @@ class TestGetManifestVersion:
 
 
 # ===========================================================
-# EyelinerPatchDataset
+# EyeContourPatchDataset
 # ===========================================================
 
-class TestEyelinerPatchDataset:
+class TestEyeContourPatchDataset:
 
     def _make_dataset_records(self, n=3):
         """テスト用レコードを生成する（weight/val_weight 付き）。"""
@@ -118,13 +118,13 @@ class TestEyelinerPatchDataset:
     def test_len(self):
         """__len__ がレコード数を返す。"""
         records = self._make_dataset_records(5)
-        ds = EyelinerPatchDataset(records, preload_images=False)
+        ds = EyeContourPatchDataset(records, preload_images=False)
         assert len(ds) == 5
 
     def test_getitem_shapes(self):
         """__getitem__ の出力 shape が正しい。"""
         records = self._make_dataset_records(3)
-        ds = EyelinerPatchDataset(records, preload_images=False)
+        ds = EyeContourPatchDataset(records, preload_images=False)
         x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale = ds[0]
         assert x.shape == (3, 64, 128)       # CHW
         assert is_upper.shape == (1,)
@@ -138,7 +138,7 @@ class TestEyelinerPatchDataset:
     def test_getitem_dtypes(self):
         """出力がすべて float32 テンソル。"""
         records = self._make_dataset_records(2)
-        ds = EyelinerPatchDataset(records, preload_images=False)
+        ds = EyeContourPatchDataset(records, preload_images=False)
         x, is_upper, pq_ratio, y, weight, val_weight, dist_from_center, norm_eye_scale = ds[0]
         assert x.dtype == torch.float32
         assert is_upper.dtype == torch.float32
@@ -151,7 +151,7 @@ class TestEyelinerPatchDataset:
         rows[0]["sub_key"] = "upper"
         rows[1]["sub_key"] = "lower"
         compute_eye_meta(rows)
-        ds = EyelinerPatchDataset(rows, preload_images=False)
+        ds = EyeContourPatchDataset(rows, preload_images=False)
         _, is_upper_0, *_ = ds[0]
         _, is_upper_1, *_ = ds[1]
         assert is_upper_0.item() == 1.0
@@ -162,7 +162,7 @@ class TestEyelinerPatchDataset:
         rows = [_sample_rows(1)[0]]
         rows[0]["t"] = "0.567"
         compute_eye_meta(rows)
-        ds = EyelinerPatchDataset(rows, preload_images=False, t_quant_step=0.1, use_t_norm=False)
+        ds = EyeContourPatchDataset(rows, preload_images=False, t_quant_step=0.1, use_t_norm=False)
         _, _, _, y, *_ = ds[0]
         assert abs(y.item() - 0.6) < 1e-5
 
@@ -171,6 +171,6 @@ class TestEyelinerPatchDataset:
         rows = _sample_rows(1)
         rows[0]["image_path"] = "/nonexistent/image.jpg"
         compute_eye_meta(rows)
-        ds = EyelinerPatchDataset(rows, preload_images=False)
+        ds = EyeContourPatchDataset(rows, preload_images=False)
         x, *_ = ds[0]
         assert x.shape == (3, 64, 128)

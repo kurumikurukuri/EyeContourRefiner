@@ -1,4 +1,4 @@
-"""EyelinerCNNDual: 2系統入力（生PQ + P'Q'）デュアルブランチ CNN。"""
+"""EyeContourCNNDual: 2系統入力（生PQ + P'Q'）デュアルブランチ CNN。"""
 from __future__ import annotations
 
 import torch
@@ -44,7 +44,7 @@ def _build_head(in_dim: int, dropout_rate: float, use_sigmoid: bool) -> nn.Seque
     return nn.Sequential(*layers)
 
 
-class EyelinerCNNDual(nn.Module):
+class EyeContourCNNDual(nn.Module):
     """2系統パッチを受け取るデュアルブランチ CNN 回帰モデル。
 
     各ブランチが独立した出力ヘッドを持ち、それぞれ生 t_raw 空間で予測する。

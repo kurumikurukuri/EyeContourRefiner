@@ -8,13 +8,13 @@ MediaPipe FaceMesh（refine_landmarks=True, 478 点）から、アノテーシ�
   （https://github.com/kurumikurukuri/face_makeup）の `src/face_makeup/custom_landmark.py`
   （commit 09034270）の同名テーブルを移植したもの。edge ID（1401〜1707）は 478 点の外に
   ある論理 ID で、1 つが 1 本の P→Q エッジを表す（MediaPipe のインデックス 0〜477 ではない）。
-- `EYELINER_SAMPLE_EDGE_IDS`: samples.db の (part_name, sub_key, point_index) に対応する
+- `EYE_CONTOUR_SAMPLE_EDGE_IDS`: samples.db の (part_name, sub_key, point_index) に対応する
   edge ID。point_index 0〜6 の並び。mediapipe 0.10.21 を 400 画像に実行し、全 28 点が
   DB の px/py/qx/qy と誤差 0.0000 px で一致することを確認した。
   face_makeup の `EYELINER_*_INDICES` は描画用ポリラインで、上まぶたに 1408/1608 と
   下まぶた末尾のエッジ（1507/1707）の重複を含むが、アノテーション対象は upper/lower とも
   7 本なので、そのリストからは導出せずこの表で明示する。
-- `EYELINER_SAMPLE_PQ`: 上記を `(edge_id, p_idx, q_idx)` に解決したもの。
+- `EYE_CONTOUR_SAMPLE_PQ`: 上記を `(edge_id, p_idx, q_idx)` に解決したもの。
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ EDGE_LANDMARK_DIRECTIONS: dict[int, tuple[int, int]] = {
     1705: (380, 252), 1706: (381, 256), 1707: (382, 341),
 }
 
-EYELINER_SAMPLE_EDGE_IDS: dict[str, dict[str, tuple[int, ...]]] = {
+EYE_CONTOUR_SAMPLE_EDGE_IDS: dict[str, dict[str, tuple[int, ...]]] = {
     "eyeliner_left": {
         "upper": (1401, 1402, 1403, 1404, 1405, 1406, 1407),
         "lower": (1501, 1502, 1503, 1504, 1505, 1506, 1507),
@@ -49,7 +49,7 @@ def _resolve_pq(edge_ids: tuple[int, ...]) -> tuple[tuple[int, int, int], ...]:
     return tuple((edge_id, *EDGE_LANDMARK_DIRECTIONS[edge_id]) for edge_id in edge_ids)
 
 
-EYELINER_SAMPLE_PQ: dict[str, dict[str, tuple[tuple[int, int, int], ...]]] = {
+EYE_CONTOUR_SAMPLE_PQ: dict[str, dict[str, tuple[tuple[int, int, int], ...]]] = {
     part_name: {sub_key: _resolve_pq(edge_ids) for sub_key, edge_ids in sub_map.items()}
-    for part_name, sub_map in EYELINER_SAMPLE_EDGE_IDS.items()
+    for part_name, sub_map in EYE_CONTOUR_SAMPLE_EDGE_IDS.items()
 }

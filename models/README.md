@@ -1,15 +1,15 @@
-# eyeliner_detection_dual.onnx
+# eye_contour_refiner.onnx
 
 アイライン輪郭検出モデル（dual-branch標準構成）。目のパッチ画像から目のふち
 （eyeliner edge）位置を回帰する。
 
 - 由来: `eyeliner_detection_fold{1,2,3}.pt`
-  （=[`exp_3`](https://github.com/kurumikurukuri/EyelinerDetector/tree/exp_3) ブランチの
+  （=[`exp_3`](https://github.com/kurumikurukuri/EyeContourRefiner/tree/exp_3) ブランチの
   `experiments/EXP035_pq_jitter/outputs/J4_rot20`、PQ回転摂動±20°augmentation付き
   dual標準構成・k=3 fold）。精度: db_replica固定テストセットで
   pass_std=90.02% / holdout MAE(生t)=0.081145
   （詳細は `exp_3` ブランチの `experiments/EXP035_pq_jitter/EXP035_summary.md` 参照）。
-- エクスポート: `scripts/export_dual_onnx.py`（`eyeliner.models.dual_ensemble.DualRawTOnnxModel`）。
+- エクスポート: `scripts/export_dual_onnx.py`（`eye_contour.models.dual_ensemble.DualRawTOnnxModel`）。
   ImageNet正規化・fold平均・branch A/B融合・生t変換をすべてグラフに焼き込み済み。
   エクスポート時に実データ50サンプルで PyTorch参照（`fold_ensemble_raw_t`）との
   数値一致（max diff 1.8e-7）を確認済み。重み単体（.pt 3ファイル）は本リポジトリでは配布しない。手元で `models/` に置くと
@@ -18,7 +18,7 @@
   重みは単一 .onnx にインライン済み（外部 .data ファイル不要。エクスポートスクリプトが
   自動でインライン化する）。エクスポータが埋め込むスタックトレース等のデバッグ情報
   （`metadata_props` / `doc_string`、エクスポート環境の絶対パスを含む）は除去済み
-  （`eyeliner.models.onnx_sanitize`）。
+  （`eye_contour.models.onnx_sanitize`）。
 
 ## t値の意味
 
@@ -35,7 +35,7 @@ R = t * P + (1 - t) * Q
 ## 入力
 
 パッチ画像は生画像から「アイライン推定対象の1点」ごとに、P-Q方向に沿って回転・
-切り出ししたもの（`eyeliner.data.patch_utils.extract_patch`参照、詳細は
+切り出ししたもの（`eye_contour.data.patch_utils.extract_patch`参照、詳細は
 `infer_example.py`）。branch A/Bで異なる座標系のパッチを使う点に注意。
 
 | 名前 | shape | dtype | 説明 |
@@ -45,7 +45,7 @@ R = t * P + (1 - t) * Q
 | `is_upper` | (B, 1) | float32 | 上瞼のアイラインなら1.0、下瞼なら0.0 |
 | `px`, `py` | (B, 1) | float32 | ランドマーク点Pの**元の**画像ピクセル座標（リスケール前） |
 | `qx`, `qy` | (B, 1) | float32 | ランドマーク点Qの**元の**画像ピクセル座標（リスケール前） |
-| `eye_scale` | (B, 1) | float32 | 対象の目の全14点（upper7+lower7のP,Q）のbounding box対角長（最小1.0）。`eyeliner.data.patch_utils.compute_eye_scale`参照 |
+| `eye_scale` | (B, 1) | float32 | 対象の目の全14点（upper7+lower7のP,Q）のbounding box対角長（最小1.0）。`eye_contour.data.patch_utils.compute_eye_scale`参照 |
 
 **注意**: `px,py,qx,qy`はリスケール**前**の元座標を渡すこと（`patch_b`切り出しに使った
 リスケール後の座標P',Q'ではない）。グラフ内部で`pq_dist = sqrt((qx-px)^2+(qy-py)^2)`と
@@ -93,16 +93,16 @@ python models/demo_visualize.py --image path/to/face.jpg --output result.jpg
 # 現行配布重みの .pt を models/ に置いて作り直す場合
 python scripts/export_dual_onnx.py \
     --models-dir models \
-    --output models/eyeliner_detection_dual.onnx \
+    --output models/eye_contour_refiner.onnx \
     --verify-manifest <exp_3 の experiments/EXP035_pq_jitter/manifests/manifest_test.csv> \
     --verify-samples 50
 
 # 任意のfold*.ptディレクトリから作り直す場合
 python scripts/export_dual_onnx.py \
     --models-dir <fold*.ptが入ったディレクトリ> \
-    --output models/eyeliner_detection_dual.onnx \
+    --output models/eye_contour_refiner.onnx \
     --verify-manifest <manifest.csvのパス> --verify-samples 50
 ```
 
 学習・実験コード（`experiments/`・`annotator/`・データ復元ツール等）は
-[`exp_3`](https://github.com/kurumikurukuri/EyelinerDetector/tree/exp_3) ブランチを参照。
+[`exp_3`](https://github.com/kurumikurukuri/EyeContourRefiner/tree/exp_3) ブランチを参照。

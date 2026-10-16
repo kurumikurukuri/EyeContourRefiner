@@ -9,8 +9,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from eyeliner.evaluation.loss import get_loss_fn
-from eyeliner.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD
+from eye_contour.evaluation.loss import get_loss_fn
+from eye_contour.data.patch_utils import IMAGENET_MEAN, IMAGENET_STD
 
 logger = logging.getLogger(__name__)
 

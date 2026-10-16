@@ -80,8 +80,8 @@ class TestExportDualOnnxGolden:
         """
         import onnxruntime as ort
 
-        from eyeliner.training.dual_branch import build_branch_configs
-        from eyeliner.data.patch_utils import extract_patch, compute_pq_rescale
+        from eye_contour.training.dual_branch import build_branch_configs
+        from eye_contour.data.patch_utils import extract_patch, compute_pq_rescale
 
         session = ort.InferenceSession(str(exported_onnx_path), providers=["CPUExecutionProvider"])
         cfg_a, cfg_b = build_branch_configs("eye_scale")

@@ -1,4 +1,4 @@
-"""eyeliner.training.kfold.run_kfold() の回帰テスト。
+"""eye_contour.training.kfold.run_kfold() の回帰テスト。
 
 _train_single_fold() への抽出リファクタ後も既存の入出力・挙動が不変であることを確認する。
 """
@@ -13,9 +13,9 @@ import numpy as np
 import pytest
 import torch
 
-import eyeliner.training.kfold as kfold_module
-from eyeliner.training.kfold import FoldResult, run_kfold
-from eyeliner.training.trainer import TrainConfig
+import eye_contour.training.kfold as kfold_module
+from eye_contour.training.kfold import FoldResult, run_kfold
+from eye_contour.training.trainer import TrainConfig
 
 MANIFEST_FIELDNAMES = [
     "image_path", "part_name", "sub_key", "point_index", "px", "py", "qx", "qy", "t",
@@ -236,7 +236,7 @@ class TestGroupFoldCompleteness:
 
 @pytest.mark.parametrize("pq_rescale_mode", ["eye_scale", "none"])
 def test_build_oof_predictions_returns_raw_t(pq_rescale_mode):
-    from eyeliner.data.patch_utils import compute_pq_rescale
+    from eye_contour.data.patch_utils import compute_pq_rescale
 
     rec = {
         "idx": "7", "image_path": "a.jpg", "part_name": "eyeliner_right",

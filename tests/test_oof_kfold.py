@@ -1,4 +1,4 @@
-"""eyeliner.training.oof_kfold の単体テスト。
+"""eye_contour.training.oof_kfold の単体テスト。
 
 split_fixed_folds() の網羅性・重複なし・再現性、run_oof_kfold() の OOF 一意性
 （訓練全サンプルが重複なく 1 回ずつ予測を持つこと）を検証する。
@@ -13,15 +13,15 @@ import cv2
 import numpy as np
 import pytest
 
-from eyeliner.training.dual_kfold import DualTrainConfig
-from eyeliner.training.oof_kfold import (
+from eye_contour.training.dual_kfold import DualTrainConfig
+from eye_contour.training.oof_kfold import (
     run_dual_oof_kfold,
     run_nested_dual_oof_kfold,
     run_nested_oof_kfold,
     run_oof_kfold,
     split_fixed_folds,
 )
-from eyeliner.training.trainer import TrainConfig
+from eye_contour.training.trainer import TrainConfig
 
 MANIFEST_FIELDNAMES = [
     "idx", "image_path", "part_name", "sub_key", "point_index",

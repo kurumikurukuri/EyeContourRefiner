@@ -1,6 +1,6 @@
-"""eyeliner_detection_dual.onnx の自己完結型リファレンス実装。
+"""eye_contour_refiner.onnx の自己完結型リファレンス実装。
 
-依存: numpy, opencv-python, onnxruntime のみ（このリポジトリの eyeliner/ パッケージから
+依存: numpy, opencv-python, onnxruntime のみ（このリポジトリの eye_contour/ パッケージから
 パッチ抽出・座標変換の関数を再利用するが、torch はエクスポート済み.onnxを使う限り不要）。
 
 使い方:
@@ -28,15 +28,15 @@ import onnxruntime as ort
 ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT))
 
-from eyeliner.data.patch_utils import (  # noqa: E402
+from eye_contour.data.patch_utils import (  # noqa: E402
     compute_eye_scale,
     compute_pq_rescale,
     extract_patch,
     reconstruct_point,
 )
-from eyeliner.training.dual_branch import branch_a_x0, branch_b_eye_scale  # noqa: E402
+from eye_contour.training.dual_branch import branch_a_x0, branch_b_eye_scale  # noqa: E402
 
-DEFAULT_MODEL_PATH = Path(__file__).parent / "eyeliner_detection_dual.onnx"
+DEFAULT_MODEL_PATH = Path(__file__).parent / "eye_contour_refiner.onnx"
 
 
 def predict_point(
@@ -100,7 +100,7 @@ def main() -> int:
     except (AttributeError, ValueError):
         pass
 
-    ap = argparse.ArgumentParser(description="eyeliner_detection_dual.onnx 推論サンプル")
+    ap = argparse.ArgumentParser(description="eye_contour_refiner.onnx 推論サンプル")
     ap.add_argument("--model", type=Path, default=DEFAULT_MODEL_PATH)
     ap.add_argument("--dry-run", action="store_true", help="ダミー画像・ダミー座標で動作確認のみ行う")
     ap.add_argument("--image", type=Path, help="入力画像")

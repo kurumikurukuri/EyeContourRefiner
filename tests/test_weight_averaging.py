@@ -1,4 +1,4 @@
-"""eyeliner.training.weight_averaging（EMA / SWA / BN 統計再計算）の単体テスト。"""
+"""eye_contour.training.weight_averaging（EMA / SWA / BN 統計再計算）の単体テスト。"""
 from __future__ import annotations
 
 import random
@@ -9,7 +9,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from eyeliner.training.weight_averaging import (
+from eye_contour.training.weight_averaging import (
     EmaTracker,
     ema_variant_name,
     preserve_rng_state,
@@ -239,5 +239,5 @@ class TestPreserveRngState:
 
 
 def test_module_has_no_dependency_on_experiments():
-    source = Path("eyeliner/training/weight_averaging.py").read_text(encoding="utf-8")
+    source = Path("eye_contour/training/weight_averaging.py").read_text(encoding="utf-8")
     assert "experiments" not in source

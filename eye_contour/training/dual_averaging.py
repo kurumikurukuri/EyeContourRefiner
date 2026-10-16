@@ -12,14 +12,14 @@ from typing import TYPE_CHECKING
 import torch
 from torch.utils.data import DataLoader
 
-from eyeliner.data.dataset_dual import BranchConfig
-from eyeliner.models.dual_ensemble import load_dual_model
-from eyeliner.training.dual_epoch import (
+from eye_contour.data.dataset_dual import BranchConfig
+from eye_contour.models.dual_ensemble import load_dual_model
+from eye_contour.training.dual_epoch import (
     make_bn_forward,
     save_variant_fold,
     train_one_epoch,
 )
-from eyeliner.training.weight_averaging import (
+from eye_contour.training.weight_averaging import (
     EmaTracker,
     preserve_rng_state,
     run_swa,
@@ -27,7 +27,7 @@ from eyeliner.training.weight_averaging import (
 )
 
 if TYPE_CHECKING:
-    from eyeliner.training.dual_kfold import DualTrainConfig
+    from eye_contour.training.dual_kfold import DualTrainConfig
 
 import logging
 

@@ -1,10 +1,10 @@
-"""eyeliner.training.oof の単体テスト。"""
+"""eye_contour.training.oof の単体テスト。"""
 from __future__ import annotations
 
 import csv
 from pathlib import Path
 
-from eyeliner.training.oof import OOF_CSV_FIELDNAMES, OofPrediction, write_oof_csv
+from eye_contour.training.oof import OOF_CSV_FIELDNAMES, OofPrediction, write_oof_csv
 
 
 def _make_prediction(**overrides) -> OofPrediction:

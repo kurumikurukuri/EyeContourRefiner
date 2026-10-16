@@ -1,7 +1,7 @@
-"""eyeliner.training.dual_kfold の単体テスト。
+"""eye_contour.training.dual_kfold の単体テスト。
 
 旧 experiments/EXP020_dual_branch/scr/train_exp020.py の train_dual() を
-eyeliner/training/dual_kfold.py に抽出した run_dual_kfold() を検証する。
+eye_contour/training/dual_kfold.py に抽出した run_dual_kfold() を検証する。
 EXP020/EXP021 双方から import される共有実装になるため、モジュール定数
 （旧 MANIFEST_TRAIN/MANIFEST_TEST/OUTPUT_DIR）に依存せず、すべて明示的な
 引数で完全に制御できることをテストする
@@ -21,9 +21,9 @@ import numpy as np
 import pytest
 import torch
 
-import eyeliner.training.dual_averaging as dual_averaging_module
-import eyeliner.training.dual_kfold as dual_kfold_module
-from eyeliner.data.augmentation import (
+import eye_contour.training.dual_averaging as dual_averaging_module
+import eye_contour.training.dual_kfold as dual_kfold_module
+from eye_contour.data.augmentation import (
     AUG_ALL,
     AUG_PQ_JITTER,
     AUG_SOURCE_JPEG,
@@ -31,8 +31,8 @@ from eyeliner.data.augmentation import (
     augment,
     check_aug_flags,
 )
-from eyeliner.data.dataset_dual import BranchConfig
-from eyeliner.training.dual_kfold import (
+from eye_contour.data.dataset_dual import BranchConfig
+from eye_contour.training.dual_kfold import (
     DualKfoldResult,
     DualTrainConfig,
     build_dual_experiment_record,
@@ -541,14 +541,14 @@ class TestPqJitterConfig:
         config = _fast_config(
             aug_flags=63 | AUG_PQ_JITTER, pq_jitter_rot_deg=5.0, pq_jitter_prob=0.5,
         )
-        real_cls = dual_kfold_module.EyelinerPatchDualDataset
+        real_cls = dual_kfold_module.EyeContourPatchDualDataset
         calls: list[dict] = []
 
         def spy(*args, **kwargs):
             calls.append(kwargs)
             return real_cls(*args, **kwargs)
 
-        with mock.patch.object(dual_kfold_module, "EyelinerPatchDualDataset", side_effect=spy):
+        with mock.patch.object(dual_kfold_module, "EyeContourPatchDualDataset", side_effect=spy):
             run_dual_kfold(manifest_train, manifest_test, tmp_path / "base", config)
 
         train_calls = [c for c in calls if c.get("augment_data")]

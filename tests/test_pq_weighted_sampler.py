@@ -9,7 +9,7 @@ import math
 import pytest
 import torch
 
-from eyeliner.evaluation.loss import pq_weighted_huber_loss, get_loss_fn, LOSS_FN_REGISTRY
+from eye_contour.evaluation.loss import pq_weighted_huber_loss, get_loss_fn, LOSS_FN_REGISTRY
 
 
 # ===========================================================
@@ -27,7 +27,7 @@ class TestPqWeightedHuberLoss:
 
     def test_weight_one_equals_huber_t_loss(self):
         """weight=1 のとき huber_t_loss と同値になる。"""
-        from eyeliner.evaluation.loss import huber_t_loss
+        from eye_contour.evaluation.loss import huber_t_loss
         pred = torch.randn(16)
         y = torch.randn(16)
         pq_w = torch.ones(16)
@@ -127,7 +127,7 @@ class TestComputeAuxFaceShapeMeta:
 
     def test_pq_angle_cos_horizontal(self):
         """水平 PQ ベクトルで pq_angle_cos=1, pq_angle_sin=0。"""
-        from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
+        from eye_contour.data.weights import compute_eye_meta, compute_aux_face_shape_meta
         recs = [self._make_record(0, 0, 10, 0)]
         compute_eye_meta(recs)
         compute_aux_face_shape_meta(recs)
@@ -136,7 +136,7 @@ class TestComputeAuxFaceShapeMeta:
 
     def test_pq_angle_sin_vertical(self):
         """垂直 PQ ベクトルで pq_angle_cos=0, pq_angle_sin=1。"""
-        from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
+        from eye_contour.data.weights import compute_eye_meta, compute_aux_face_shape_meta
         recs = [self._make_record(0, 0, 0, 10)]
         compute_eye_meta(recs)
         compute_aux_face_shape_meta(recs)
@@ -145,7 +145,7 @@ class TestComputeAuxFaceShapeMeta:
 
     def test_position_polar_cos_upper0(self):
         """upper, point_index=0 → degree=22.5° → cos(22.5°)。"""
-        from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
+        from eye_contour.data.weights import compute_eye_meta, compute_aux_face_shape_meta
         recs = [self._make_record(0, 0, 10, 0, sub_key="upper", pi=0)]
         compute_eye_meta(recs)
         compute_aux_face_shape_meta(recs)

@@ -1,4 +1,4 @@
-"""eyeliner/evaluation/loss.py のテスト（EXP021 で追加した損失を含む）。
+"""eye_contour/evaluation/loss.py のテスト（EXP021 で追加した損失を含む）。
 
 EXP021 の損失 sweep は「空間 × カーネル」の 2 軸直積で構成される:
 
@@ -18,7 +18,7 @@ import math
 import pytest
 import torch
 
-from eyeliner.evaluation.loss import (
+from eye_contour.evaluation.loss import (
     huber_t_loss,
     l1_t_loss,
     wing_t_loss,
@@ -391,7 +391,7 @@ class TestTrainerDispatch:
     ])
     def test_train_one_epoch_runs(self, loss_name):
         """各損失で 1 エポックが有限の loss/mae を返し、パラメータが更新される。"""
-        from eyeliner.training.trainer import train_one_epoch
+        from eye_contour.training.trainer import train_one_epoch
 
         torch.manual_seed(0)
         model = _StubModel()
@@ -415,7 +415,7 @@ class TestTrainerDispatch:
         単一バッチで train の平均 loss が手計算の error_ratio に一致することを確認する
         （オプティマイザ更新前の forward に対する値で検証するため lr=0 で固定）。
         """
-        from eyeliner.training.trainer import train_one_epoch
+        from eye_contour.training.trainer import train_one_epoch
 
         torch.manual_seed(0)
         model = _StubModel()

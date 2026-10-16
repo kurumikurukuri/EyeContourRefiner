@@ -9,7 +9,7 @@ import random
 
 import pytest
 
-from eyeliner.data.augmentation import (
+from eye_contour.data.augmentation import (
     AUG_ALL,
     AUG_ENDPOINT_BLEND,
     AUG_NONE,
@@ -17,7 +17,7 @@ from eyeliner.data.augmentation import (
     augment_pq_jitter,
     check_aug_flags,
 )
-from eyeliner.data.patch_utils import compute_t_from_point, reconstruct_point
+from eye_contour.data.patch_utils import compute_t_from_point, reconstruct_point
 
 P = (120.0, 80.0)
 Q = (100.0, 90.0)

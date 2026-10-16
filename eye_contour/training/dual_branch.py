@@ -8,14 +8,14 @@
 予測するため、アンサンブル前に必ず生 t へ逆変換してから合成する。
 
 旧 experiments/EXP020_dual_branch/scr/dual_branch_utils.py から移植
-（EXP020/EXP021 双方から再利用するため eyeliner/training/ へ共有化）。
+（EXP020/EXP021 双方から再利用するため eye_contour/training/ へ共有化）。
 """
 from __future__ import annotations
 
 import torch
 
-from eyeliner.data.dataset_dual import BranchConfig
-from eyeliner.data.patch_utils import invert_pq_rescale_t  # noqa: F401 (re-export 用)
+from eye_contour.data.dataset_dual import BranchConfig
+from eye_contour.data.patch_utils import invert_pq_rescale_t  # noqa: F401 (re-export 用)
 
 
 # ---------------------------------------------------------------------------

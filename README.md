@@ -1,12 +1,13 @@
-# EyelinerDetector
+# EyeContourRefiner
 
-目のパッチ画像から目のふち（eyeliner edge）位置を回帰する CNN モデルの配布パッケージ。
+顔ランドマーク検出器が出した目の輪郭点を、目のふち（眼瞼縁 / eyelid margin）の位置へ
+補正する CNN モデルの配布パッケージ。目のパッチ画像から、アイラインを引くべき縁の位置を回帰する。
 [face_makeup](https://github.com/kurumikurukuri/face_makeup) 向けの ONNX モデル
-（`models/eyeliner_detection_dual.onnx`）と、その参考推論実装・コアライブラリを含む。
+（`models/eye_contour_refiner.onnx`）と、その参考推論実装・コアライブラリを含む。
 
 **このブランチ（`main`）はリリース用に絞った軽量パッケージです。** データ準備、
 アノテーションツール、k-fold 学習、分析・統計検証などの研究開発の全履歴（EXP001〜EXP035）は
-[`exp_3`](https://github.com/kurumikurukuri/EyelinerDetector/tree/exp_3) ブランチを参照。
+[`exp_3`](https://github.com/kurumikurukuri/EyeContourRefiner/tree/exp_3) ブランチを参照。
 
 ## セットアップ
 
@@ -34,7 +35,7 @@ python models/demo_visualize.py --image path/to/face.jpg --output out.jpg  # 画
 
 ```
 models/          配布モデル（ONNX）、参考推論実装、デモ、学習データの帰属表示
-eyeliner/        コアライブラリ — モデル定義、パッチ切り出し、データ読み込み、学習、評価
+eye_contour/     コアライブラリ — モデル定義、パッチ切り出し、データ読み込み、学習、評価
 scripts/         export_dual_onnx.py — fold チェックポイントから配布 ONNX を生成
 tests/           テスト（pytest）
 ```

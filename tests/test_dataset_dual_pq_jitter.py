@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import torch
 
-from eyeliner.data.augmentation import AUG_PQ_JITTER
-from eyeliner.data.dataset_dual import BranchConfig, EyelinerPatchDualDataset
+from eye_contour.data.augmentation import AUG_PQ_JITTER
+from eye_contour.data.dataset_dual import BranchConfig, EyeContourPatchDualDataset
 
 REC = {
     "image_path": "dummy.jpg",
@@ -19,7 +19,7 @@ REC = {
 }
 
 
-def _make_dataset(**kwargs) -> EyelinerPatchDualDataset:
+def _make_dataset(**kwargs) -> EyeContourPatchDualDataset:
     cfg_a = BranchConfig(
         patch_t_min=-2.0, patch_t_max=3.0, label_t_min=-1.0, label_t_max=2.0,
         pq_rescale_mode="none", patch_size=(32, 32),
@@ -29,7 +29,7 @@ def _make_dataset(**kwargs) -> EyelinerPatchDualDataset:
         pq_rescale_mode="eye_scale", pq_rescale_factor=0.2,
         label_space="t_prime", patch_size=(32, 32),
     )
-    ds = EyelinerPatchDualDataset([dict(REC)], cfg_a, cfg_b, preload_images=False, **kwargs)
+    ds = EyeContourPatchDualDataset([dict(REC)], cfg_a, cfg_b, preload_images=False, **kwargs)
     rng = np.random.default_rng(0)
     ds._image_cache["dummy.jpg"] = rng.integers(0, 255, (120, 140, 3), dtype=np.uint8)
     ds._img_diag_map["dummy.jpg"] = math.sqrt(120 * 140)
@@ -124,7 +124,7 @@ def test_with_endpoint_blend_labels_equal_blend_only():
 
     blend はグローバル random、jitter は専用 RNG なので、同じ seed なら blend の抽選は同一。
     """
-    from eyeliner.data.augmentation import AUG_ENDPOINT_BLEND
+    from eye_contour.data.augmentation import AUG_ENDPOINT_BLEND
     for seed in range(5):
         only = _getitem_with_seed(seed, AUG_ENDPOINT_BLEND, 0.0)
         both = _getitem_with_seed(seed, AUG_ENDPOINT_BLEND | AUG_PQ_JITTER, 10.0)
@@ -137,12 +137,12 @@ def test_jitter_rotates_about_blended_r():
     """blend 後の (P, Q, t) から R を復元して回転する（元の t から復元しない）。"""
     import random
 
-    from eyeliner.data.augmentation import (
+    from eye_contour.data.augmentation import (
         AUG_ENDPOINT_BLEND,
         augment_endpoints,
         augment_pq_jitter,
     )
-    from eyeliner.data.patch_utils import reconstruct_point
+    from eye_contour.data.patch_utils import reconstruct_point
 
     for seed in range(20):
         random.seed(seed)

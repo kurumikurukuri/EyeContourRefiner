@@ -1,4 +1,4 @@
-"""eyeliner/evaluation/metrics.py と eyeliner/models/ のテスト。"""
+"""eye_contour/evaluation/metrics.py と eye_contour/models/ のテスト。"""
 from __future__ import annotations
 
 import numpy as np
@@ -6,15 +6,15 @@ import pytest
 import torch
 from unittest.mock import patch as mock_patch
 
-from eyeliner.evaluation.metrics import (
+from eye_contour.evaluation.metrics import (
     cv_mae,
     pixel_mae,
     relative_mae,
     holdout_mae,
 )
-from eyeliner.models.eyeliner_cnn import EyelinerCNN
-from eyeliner.models.transfer import TransferModel, BACKBONE_CHOICES
-from eyeliner.models.ensemble import EnsembleModel, build_model, load_model, save_model
+from eye_contour.models.eye_contour_cnn import EyeContourCNN
+from eye_contour.models.transfer import TransferModel, BACKBONE_CHOICES
+from eye_contour.models.ensemble import EnsembleModel, build_model, load_model, save_model
 import tempfile
 from pathlib import Path
 
@@ -164,14 +164,14 @@ class TestHoldoutMae:
 
 
 # ===========================================================
-# EyelinerCNN モデル
+# EyeContourCNN モデル
 # ===========================================================
 
-class TestEyelinerCNN:
+class TestEyeContourCNN:
 
     def test_forward_output_shape(self):
         """forward の出力 shape が (B, 1)。"""
-        model = EyelinerCNN()
+        model = EyeContourCNN()
         model.eval()
         x = torch.zeros(4, 3, 64, 128)
         is_upper = torch.zeros(4, 1)
@@ -181,7 +181,7 @@ class TestEyelinerCNN:
 
     def test_forward_no_nan(self):
         """forward で NaN が発生しない。"""
-        model = EyelinerCNN()
+        model = EyeContourCNN()
         model.eval()
         x = torch.randn(4, 3, 64, 128)
         is_upper = torch.zeros(4, 1)
@@ -191,7 +191,7 @@ class TestEyelinerCNN:
 
     def test_batch_size_1(self):
         """バッチサイズ 1 でも動作する。"""
-        model = EyelinerCNN()
+        model = EyeContourCNN()
         model.eval()
         x = torch.zeros(1, 3, 64, 128)
         is_upper = torch.zeros(1, 1)
@@ -236,7 +236,7 @@ class TestEnsembleModel:
 
     def test_forward_output_shape(self):
         """forward の出力が各モデルの平均（shape は単一モデルと同じ）。"""
-        models = [EyelinerCNN() for _ in range(3)]
+        models = [EyeContourCNN() for _ in range(3)]
         ensemble = EnsembleModel(models)
         ensemble.eval()
         x = torch.zeros(4, 3, 64, 128)
@@ -247,7 +247,7 @@ class TestEnsembleModel:
 
     def test_save_load_roundtrip(self, tmp_path):
         """save_model / load_model の往復で重みが保存・復元される。"""
-        model = EyelinerCNN()
+        model = EyeContourCNN()
         model.eval()
         path = tmp_path / "test_model.pt"
         save_model(model, "custom", path)
@@ -263,9 +263,9 @@ class TestEnsembleModel:
         torch.testing.assert_close(out_orig, out_loaded)
 
     def test_build_model_custom(self):
-        """'custom' で EyelinerCNN が生成される。"""
+        """'custom' で EyeContourCNN が生成される。"""
         model = build_model("custom")
-        assert isinstance(model, EyelinerCNN)
+        assert isinstance(model, EyeContourCNN)
 
     def test_build_model_transfer(self):
         """バックボーン名で TransferModel が生成される。"""
@@ -274,17 +274,17 @@ class TestEnsembleModel:
 
     def test_build_model_soft_argmax(self):
         """'soft_argmax' で SoftArgmaxEdgeCNN が生成される（ImportError 回帰）。"""
-        from eyeliner.models.soft_argmax import SoftArgmaxEdgeCNN
+        from eye_contour.models.soft_argmax import SoftArgmaxEdgeCNN
 
         model = build_model("soft_argmax")
         assert isinstance(model, SoftArgmaxEdgeCNN)
 
 
 # ===========================================================
-# EyelinerPatchDataset crop/label 範囲分離
+# EyeContourPatchDataset crop/label 範囲分離
 # ===========================================================
 
-class TestEyelinerPatchDatasetLabelRange:
+class TestEyeContourPatchDatasetLabelRange:
 
     def _make_record(self, t: float) -> dict:
         return {
@@ -300,11 +300,11 @@ class TestEyelinerPatchDatasetLabelRange:
 
     def test_label_range_clips_t(self):
         """label_t_min/max でtがクリップされ、正規化される。"""
-        from eyeliner.data.dataset import EyelinerPatchDataset
+        from eye_contour.data.dataset import EyeContourPatchDataset
         rec = self._make_record(t=2.0)  # label 範囲外（-0.5〜1.5）
         dummy_image = np.zeros((100, 200, 3), dtype=np.uint8)
         with mock_patch("cv2.imread", return_value=dummy_image):
-            ds = EyelinerPatchDataset(
+            ds = EyeContourPatchDataset(
                 [rec],
                 preload_images=False,
                 patch_t_min=-1.0, patch_t_max=2.0,
@@ -317,11 +317,11 @@ class TestEyelinerPatchDatasetLabelRange:
 
     def test_label_range_normalizes_independently_of_crop(self):
         """crop 範囲が広くても label 範囲で正規化された値が返る。"""
-        from eyeliner.data.dataset import EyelinerPatchDataset
+        from eye_contour.data.dataset import EyeContourPatchDataset
         rec = self._make_record(t=0.5)
         dummy_image = np.zeros((100, 200, 3), dtype=np.uint8)
         with mock_patch("cv2.imread", return_value=dummy_image):
-            ds = EyelinerPatchDataset(
+            ds = EyeContourPatchDataset(
                 [rec],
                 preload_images=False,
                 patch_t_min=-1.0, patch_t_max=2.0,   # crop: -1〜2（range=3）
@@ -334,11 +334,11 @@ class TestEyelinerPatchDatasetLabelRange:
 
     def test_no_label_range_falls_back_to_crop_range(self):
         """label_t_min/max=None のとき crop 範囲と同じ動作（後方互換）。"""
-        from eyeliner.data.dataset import EyelinerPatchDataset
+        from eye_contour.data.dataset import EyeContourPatchDataset
         rec = self._make_record(t=0.5)
         dummy_image = np.zeros((100, 200, 3), dtype=np.uint8)
         with mock_patch("cv2.imread", return_value=dummy_image):
-            ds = EyelinerPatchDataset(
+            ds = EyeContourPatchDataset(
                 [rec],
                 preload_images=False,
                 patch_t_min=-0.5, patch_t_max=1.5,
@@ -351,13 +351,13 @@ class TestEyelinerPatchDatasetLabelRange:
 
 
 # ===========================================================
-# EyelinerCNN num_conv_layers
+# EyeContourCNN num_conv_layers
 # ===========================================================
 
 @pytest.mark.parametrize("n", [2, 3, 4])
-def test_eyeliner_cnn_num_conv_layers_output_shape(n):
+def test_eye_contour_cnn_num_conv_layers_output_shape(n):
     """num_conv_layers=2/3/4 で出力 shape が (B, 1) かつ NaN なし。"""
-    model = EyelinerCNN(num_conv_layers=n)
+    model = EyeContourCNN(num_conv_layers=n)
     model.eval()
     x = torch.randn(2, 3, 64, 128)
     is_upper = torch.zeros(2, 1)

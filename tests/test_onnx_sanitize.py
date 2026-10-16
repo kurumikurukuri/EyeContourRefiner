@@ -1,4 +1,4 @@
-"""eyeliner.models.onnx_sanitize のテスト。
+"""eye_contour.models.onnx_sanitize のテスト。
 
 torch.onnx（dynamo エクスポータ）はノード・グラフ・入出力に metadata_props として
 スタックトレース（エクスポート環境の絶対パスを含む）等のデバッグ情報を埋め込む。
@@ -11,7 +11,7 @@ import onnx
 import onnxruntime as ort
 from onnx import TensorProto, helper, numpy_helper
 
-from eyeliner.models.onnx_sanitize import find_debug_metadata, strip_debug_metadata
+from eye_contour.models.onnx_sanitize import find_debug_metadata, strip_debug_metadata
 
 LEAKED_PATH = r'File "F:\somewhere\project\.venv\Lib\site-packages\torch\nn\modules\linear.py"'
 

@@ -21,7 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from export_dual_onnx import finalize_onnx
 
-from eyeliner.models.onnx_sanitize import find_debug_metadata
+from eye_contour.models.onnx_sanitize import find_debug_metadata
 
 LEAKED_TRACE = r'File "F:\somewhere\project\.venv\Lib\site-packages\torch\nn\modules\linear.py", line 134'
 

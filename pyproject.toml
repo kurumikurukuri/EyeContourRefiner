@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eyeliner-detector"
+name = "eye-contour-refiner"
 version = "0.1.0"
 description = "アイライン輪郭検出 CNN — face_makeup 向け ONNX モデルと参考推論実装"
 readme = "README.md"
@@ -12,7 +12,7 @@ requires-python = ">=3.11"
 authors = [
     { name = "kurumikurukuri" },
 ]
-keywords = ["eyeliner", "makeup", "beauty-ai", "onnx", "cnn"]
+keywords = ["eye-contour", "eyeliner", "makeup", "beauty-ai", "onnx", "cnn"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -49,10 +49,10 @@ dev = [
 ]
 
 [project.urls]
-Repository = "https://github.com/kurumikurukuri/EyelinerDetector"
+Repository = "https://github.com/kurumikurukuri/EyeContourRefiner"
 
 [tool.setuptools.packages.find]
-include = ["eyeliner*"]
+include = ["eye_contour*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

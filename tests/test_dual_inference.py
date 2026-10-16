@@ -1,6 +1,6 @@
-"""eyeliner.training.dual_inference.infer_dual の単体テスト。
+"""eye_contour.training.dual_inference.infer_dual の単体テスト。
 
-旧 experiments/EXP020_dual_branch/scr/infer_exp020.py の infer_dual() を eyeliner/ に移したもの。
+旧 experiments/EXP020_dual_branch/scr/infer_exp020.py の infer_dual() を eye_contour/ に移したもの。
 EXP020/EXP021/EXP022/EXP024 が共有する推論実装として、manifest の各レコードに対し
 生 t 空間の予測を CSV に書き出すことを検証する。
 """
@@ -14,8 +14,8 @@ import cv2
 import numpy as np
 import pytest
 
-from eyeliner.models.dual_ensemble import get_dual_model, save_dual_model
-from eyeliner.training.dual_inference import infer_dual
+from eye_contour.models.dual_ensemble import get_dual_model, save_dual_model
+from eye_contour.training.dual_inference import infer_dual
 
 FIELDNAMES = ["idx", "image_path", "part_name", "sub_key", "point_index", "t_true", "t_pred"]
 MANIFEST_T = [0.2, 0.5, 0.9]
@@ -123,7 +123,7 @@ def test_t_pred_is_finite_and_independent_of_batch_size(inference_inputs, tmp_pa
 
 def test_reports_progress_through_logging(inference_inputs, caplog):
     manifest, model_dir, output = inference_inputs
-    with caplog.at_level(logging.INFO, logger="eyeliner.training.dual_inference"):
+    with caplog.at_level(logging.INFO, logger="eye_contour.training.dual_inference"):
         infer_dual(model_dir, manifest, output, fusion_mode="independent")
 
     assert "推論完了" in caplog.text

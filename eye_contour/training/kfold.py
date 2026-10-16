@@ -11,14 +11,14 @@ import numpy as np
 import torch
 from sklearn.model_selection import GroupKFold, GroupShuffleSplit
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from eyeliner.data.dataset import EyelinerPatchDataset, load_manifest
-from eyeliner.data.patch_utils import get_pq_prime_dist, invert_pq_rescale_t
-from eyeliner.data.weights import compute_eye_meta, compute_aux_face_shape_meta
-from eyeliner.models.ensemble import build_model, load_model, save_model
-from eyeliner.training.checkpoint import load_checkpoint, remove_checkpoint, save_checkpoint
-from eyeliner.training.oof import OofPrediction
-from eyeliner.training.scheduler import make_optimizer_and_scheduler
-from eyeliner.training.trainer import (
+from eye_contour.data.dataset import EyeContourPatchDataset, load_manifest
+from eye_contour.data.patch_utils import get_pq_prime_dist, invert_pq_rescale_t
+from eye_contour.data.weights import compute_eye_meta, compute_aux_face_shape_meta
+from eye_contour.models.ensemble import build_model, load_model, save_model
+from eye_contour.training.checkpoint import load_checkpoint, remove_checkpoint, save_checkpoint
+from eye_contour.training.oof import OofPrediction
+from eye_contour.training.scheduler import make_optimizer_and_scheduler
+from eye_contour.training.trainer import (
     TrainConfig,
     EpochResult,
     set_seed,
@@ -134,7 +134,7 @@ def _predict_records(
     augment_data=False・shuffle=False の専用推論パス。_train_single_fold の早期終了判定
     （別の検証セットを使う場合がある）とは独立しており、どの records 集合にも使える。
     """
-    ds = EyelinerPatchDataset(
+    ds = EyeContourPatchDataset(
         records, augment_data=False,
         t_quant_step=config.t_quant_step,
         norm_mean=config.norm_mean,
@@ -202,7 +202,7 @@ def _train_single_fold(
     そのエポックから学習を再開する（中断復旧用）。Fold が正常完了すると
     チェックポイントは削除される。
     """
-    train_ds = EyelinerPatchDataset(
+    train_ds = EyeContourPatchDataset(
         train_records, augment_data=True,
         aug_flags=config.aug_flags,
         t_quant_step=config.t_quant_step,
@@ -220,7 +220,7 @@ def _train_single_fold(
         pq_rescale_factor=config.pq_rescale_factor,
         endpoint_blend_range=config.endpoint_blend_range,
     )
-    val_ds = EyelinerPatchDataset(
+    val_ds = EyeContourPatchDataset(
         val_records, augment_data=False,
         t_quant_step=config.t_quant_step,
         norm_mean=config.norm_mean,
