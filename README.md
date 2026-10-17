@@ -6,7 +6,7 @@ ONNX モデルを生成する。
 
 **このブランチ（`exp_3`）は研究・実験・学習の全履歴を持つ本体です。** データ準備、
 アノテーションツール、k-fold 学習、augmentation、分析・統計検証などすべての実験
-（EXP001〜EXP032）がここにある。本番配信用に絞った軽量パッケージは
+（`experiments/EXP*`）がここにある。本番配信用に絞った軽量パッケージは
 [`main`](https://github.com/kurumikurukuri/EyelinerDetector/tree/main) ブランチを
 参照。
 
@@ -38,7 +38,7 @@ python tools/data_management/restore_dataset.py             # 画像取得 → s
 | `db` | manifest から `samples.db` を再構築（既存 DB は一致しない限り `--overwrite-db` なしでは触らない） |
 | `features` | MediaPipe FaceMesh を再実行して `face_yaw/pitch/roll`・`lap_var` を復元（画像同一性を検証） |
 
-`--steps db features` のように一部だけ実行でき、`--exp 32` で使う manifest の実験を指定できる。
+`--steps db features` のように一部だけ実行でき、`--exp {NNN}` で使う manifest の実験を指定できる。
 復元できないもの（未アノテーション行・`skip_flag=1`・`image_labels`）や環境上の注意（`features` は
 `mediapipe<0.10.30` が必要、`requirements.txt` の PyTorch は CPU 版）、Open Images の追加取得
 （`fetch_images.py`）の詳細は [`tools/data_management/README.md`](tools/data_management/README.md) を参照。
