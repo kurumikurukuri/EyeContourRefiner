@@ -7,7 +7,8 @@ optional-dependencies（analysis 等の extra）も含めた宣言と突き合�
 `analysis` extra に宣言されているため、base のみの `pip install .` では
 必要時に import エラーになる。Open Images の画像取得（tools/data_management/fetch_images.py）は
 fiftyone に依存せず、base の requests だけで動く。
-tests/ 自身の import は dev extra を含めた宣言と突き合わせる。
+tests/ 自身の import は dev extra を含めた宣言と突き合わせる（importorskip で任意に使う
+TEST_OPTIONAL_EXTRAS も含める）。
 """
 from __future__ import annotations
 
@@ -38,6 +39,10 @@ IMPORT_TO_DISTRIBUTION = {
 PROVIDED_BY = {
     "pydantic": "fastapi",
 }
+
+# dev とは分けた extra のうち、テストが importorskip で任意に使うもの
+# （exp037: git とネットワークが必要な face_makeup。未導入なら該当テストはスキップされる）
+TEST_OPTIONAL_EXTRAS = ("exp037",)
 
 
 def _first_party_module_names() -> set[str]:
@@ -94,6 +99,11 @@ def _pyproject_dev_dependencies() -> list[str]:
     return list(_pyproject()["project"]["optional-dependencies"]["dev"])
 
 
+def _pyproject_test_optional_dependencies() -> list[str]:
+    extras = _pyproject()["project"]["optional-dependencies"]
+    return [dep for name in TEST_OPTIONAL_EXTRAS for dep in extras[name]]
+
+
 def _pyproject_all_dependencies() -> list[str]:
     deps = list(_pyproject_dependencies())
     for extra in _pyproject()["project"].get("optional-dependencies", {}).values():
@@ -128,8 +138,11 @@ def test_all_third_party_imports_are_declared_in_pyproject():
 
 
 def test_all_third_party_imports_in_tests_are_declared():
-    """テスト自身が使う第三者パッケージが dependencies か dev extra に宣言されていること。"""
-    declared = {_requirement_key(r)[0] for r in _pyproject_dependencies() + _pyproject_dev_dependencies()}
+    """テスト自身が使う第三者パッケージが dependencies か dev extra（または TEST_OPTIONAL_EXTRAS）に宣言されていること。"""
+    declared = {
+        _requirement_key(r)[0]
+        for r in _pyproject_dependencies() + _pyproject_dev_dependencies() + _pyproject_test_optional_dependencies()
+    }
     ignored = set(sys.stdlib_module_names) | _first_party_module_names() | {"__future__"}
 
     missing: dict[str, list[str]] = {}
@@ -141,6 +154,20 @@ def test_all_third_party_imports_in_tests_are_declared():
 
     report = {dist: sorted(files)[:3] for dist, files in sorted(missing.items())}
     assert not missing, f"dependencies にも dev extra にも未宣言の import がある: {report}"
+
+
+def test_test_optional_extras_are_imported_only_via_importorskip():
+    """TEST_OPTIONAL_EXTRAS のパッケージは未導入でもテスト収集が失敗しないよう importorskip で読むこと。"""
+    optional = {_requirement_key(r)[0] for r in _pyproject_test_optional_dependencies()}
+    ignored = set(sys.stdlib_module_names) | _first_party_module_names() | {"__future__"}
+
+    unguarded = []
+    for path in sorted((ROOT / "tests").rglob("*.py")):
+        uses_optional = any(_distribution_for(name) in optional for name in _top_level_imports(path) - ignored)
+        if uses_optional and "pytest.importorskip(" not in path.read_text(encoding="utf-8"):
+            unguarded.append(path.relative_to(ROOT).as_posix())
+
+    assert not unguarded, f"importorskip せずに任意 extra を import しているテスト: {unguarded}"
 
 
 def test_mediapipe_is_capped_to_versions_with_legacy_solutions_api():

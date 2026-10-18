@@ -1,0 +1,65 @@
+{
+  "n_faces": 51,
+  "points_per_face": 28,
+  "warmup": 5,
+  "repeats": 20,
+  "breakdown": {
+    "rule_per_eye": "part1=preprocess×2, part2=find_edge×28（2 眼の合計）",
+    "rule": "part1=preprocess, part2=find_edge×28",
+    "ml": "part1=patch+feed, part2=session.run"
+  },
+  "session_load_ms": [
+    52.250000000640284,
+    38.879899999301415,
+    39.62109999702079
+  ],
+  "image_pixels_median": 699392.0,
+  "ml": {
+    "total_ms": {
+      "median": 34.69069999846397,
+      "p95": 35.3540999985853,
+      "mean": 34.74656078398374,
+      "min": 33.56019999773707,
+      "max": 35.79390000231797
+    },
+    "part1_ms_median": 4.178399998636451,
+    "part2_ms_median": 30.306849999760743
+  },
+  "rule": {
+    "total_ms": {
+      "median": 13.023050003539538,
+      "p95": 15.695875001256354,
+      "mean": 13.45558627444381,
+      "min": 12.289400001463946,
+      "max": 16.889999998966232
+    },
+    "part1_ms_median": 10.12194999930216,
+    "part2_ms_median": 2.5878500018734485
+  },
+  "rule_per_eye": {
+    "total_ms": {
+      "median": 23.551350001071114,
+      "p95": 29.250750001665438,
+      "mean": 24.556764705659017,
+      "min": 22.369999995135004,
+      "max": 32.0964000056847
+    },
+    "part1_ms_median": 20.399300003191456,
+    "part2_ms_median": 2.8155999971204437
+  },
+  "ml_over_rule_per_eye_ratio_median": 1.4729813788545556,
+  "ml_over_rule_ratio_median": 2.6637922751609935,
+  "environment": {
+    "cpu": "12th Gen Intel(R) Core(TM) i7-12700",
+    "logical_cores": 20,
+    "os": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9",
+    "numpy": "1.26.4",
+    "opencv": "4.11.0",
+    "onnxruntime": "1.31.0",
+    "face_makeup": "0.1.0",
+    "face_makeup_commit": "090342707bc5bcca3b8b5fadd39edc37081f3084",
+    "threads": "default",
+    "cv2_num_threads": 20
+  }
+}

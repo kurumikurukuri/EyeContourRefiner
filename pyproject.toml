@@ -49,6 +49,11 @@ dev = [
     "isort",
     "ruff",
 ]
+exp037 = [
+    # EXP037 のルールベース補正（experiments/EXP037_rule_vs_ml, tests/test_exp037_refiners.py）。
+    # 比較対象を固定するため commit を指定する。git とネットワークが必要なので dev とは分ける
+    "face_makeup @ git+https://github.com/kurumikurukuri/face_makeup@090342707bc5bcca3b8b5fadd39edc37081f3084",
+]
 analysis = [
     # 分析・可視化・エクスポート用。学習/推論だけなら不要。
     "tensorboard>=2.14",   # 学習ログ可視化（任意）
