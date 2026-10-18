@@ -1,4 +1,4 @@
-# EyelinerDetector
+# EyeContourRefiner
 
 CNN で目のパッチ画像から目のふち（eyeliner edge）位置を回帰するモデルの研究開発（R&D）
 パイプライン。[face_makeup](https://github.com/kurumikurukuri/face_makeup) 向けの
@@ -7,7 +7,7 @@ ONNX モデルを生成する。
 **このブランチ（`exp_3`）は研究・実験・学習の全履歴を持つ本体です。** データ準備、
 アノテーションツール、k-fold 学習、augmentation、分析・統計検証などすべての実験
 （`experiments/EXP*`）がここにある。本番配信用に絞った軽量パッケージは
-[`main`](https://github.com/kurumikurukuri/EyelinerDetector/tree/main) ブランチを
+[`main`](https://github.com/kurumikurukuri/EyeContourRefiner/tree/main) ブランチを
 参照。
 
 ## セットアップ

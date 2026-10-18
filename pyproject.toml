@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eyeliner-detector"
+name = "eye-contour-refiner"
 version = "0.1.0"
 description = "アイライン輪郭検出 CNN のモデル R&D パイプライン — face_makeup 向け ONNX モデル生成"
 readme = "README.md"
@@ -58,7 +58,7 @@ analysis = [
 ]
 
 [project.urls]
-Repository = "https://github.com/kurumikurukuri/EyelinerDetector"
+Repository = "https://github.com/kurumikurukuri/EyeContourRefiner"
 
 [tool.setuptools.packages.find]
 include = ["eyeliner*", "scripts*", "tools*", "annotator*", "analyses*"]

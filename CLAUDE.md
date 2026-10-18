@@ -1,4 +1,4 @@
-# EyelinerDetector — アイライン輪郭検出 CNN の R&D パイプライン
+# EyeContourRefiner — アイライン輪郭検出 CNN の R&D パイプライン
 
 CNN で目のパッチ画像から目のふち（eyeliner edge）を回帰し、[face_makeup](https://github.com/kurumikurukuri/face_makeup) 向けモデルを生成するプロジェクト。
 
